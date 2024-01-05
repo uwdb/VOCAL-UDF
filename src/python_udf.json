@@ -1,0 +1,10 @@
+[
+    {
+        "role": "user",
+        "content": "Near(o0, o1): Whether o0 is near o1."
+    },
+    {
+        "role": "assistant",
+        "content": "```sql\nCREATE OR REPLACE FUNCTION pynear (o1_x1 float, o1_y1 float, o1_x2 float, o1_y2 float, o2_x1 float, o2_y1 float, o2_x2 float, o2_y2 float)\n    RETURNS boolean\nAS $$\n    import math\n    # Calculate the center points of both objects\n    cx1 = (o1_x1 + o1_x2) / 2\n    cy1 = (o1_y1 + o1_y2) / 2\n    cx2 = (o2_x1 + o2_x2) / 2\n    cy2 = (o2_y1 + o2_y2) / 2\n\n    # Calculate the distance between the center points, normalized by the average width of the objects\n    distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)\n\n    # Define a threshold for being \"near\"\n    threshold = 1.0\n\n    # Return whether the objects are near each other\n    return distance < threshold\n$$ LANGUAGE plpython3u;\n```"
+    }
+]

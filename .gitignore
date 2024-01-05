@@ -1,0 +1,24 @@
+# Ignore the following
+*.mp4
+*.txt
+*.zip
+*.avi
+*.jpg
+*.png
+*.pkl
+__pycache__/
+*egg*
+*.pdf
+*.deb
+*.npz
+*.log
+inputs/*
+outputs/*
+*.ipynb_checkpoints/
+*.o
+*.so
+data/clevr/*
+*.pt
+
+# Un-ignore the following
+!LICENSE.txt
