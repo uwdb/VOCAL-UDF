@@ -17,8 +17,8 @@ class Program:
 
 
 class ProgramInterpreter:
-    def __init__(self,dataset='nlvr'):
-        self.step_interpreters = register_step_interpreters(dataset)
+    def __init__(self,dataset='nlvr', use_precomputed=False):
+        self.step_interpreters = register_step_interpreters(dataset, use_precomputed)
 
     def execute_step(self,prog_step,inspect):
         step_name = parse_step(prog_step.prog_str,partial=True)['step_name']
@@ -58,7 +58,6 @@ class ProgramGenerator():
 
     def compute_prob(self,response):
         eos = '<|endoftext|>'
-        print("response", response)
         for i,token in enumerate(response.choices[0].logprobs.tokens):
             if token==eos:
                 break

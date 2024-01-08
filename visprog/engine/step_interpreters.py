@@ -22,9 +22,10 @@ import torchvision
 from torchvision import transforms
 
 from .nms import nms
-from vis_utils import html_embed_image, html_embed_video, html_colored_span, vis_masks
+from visprog.vis_utils import html_embed_image, html_embed_video, html_colored_span, vis_masks
 from tqdm import tqdm
 from collections import defaultdict
+import duckdb
 
 def parse_step(step_str, partial=False):
     """
@@ -1382,8 +1383,9 @@ class ReplaceInterpreter():
 
 #### Clevr modules ####
 class LocClevrInterpreter(LocInterpreter):
-    def __init__(self,thresh=0.1,nms_thresh=0.5):
-        super().__init__(thresh,nms_thresh)
+    def __init__(self, use_precomputed, thresh=0.1, nms_thresh=0.5):
+        super().__init__(thresh, nms_thresh)
+        self.use_precomputed = use_precomputed
         self.clevrer_model = torch.load(os.path.join('/home/enhao/MaskRCNN_for_CLEVR_dataset/output/models', 'mask-rcnn-clevrer_epoch-7.pt'))
         self.clevrer_model.eval()
         self.clevrer_model.to(self.device)
@@ -1392,6 +1394,8 @@ class LocClevrInterpreter(LocInterpreter):
             vocab = json.load(f)
             obj2idx = vocab['object_name_to_idx']
         self.CLASS_NAMES = list(obj2idx.keys())
+        if self.use_precomputed:
+            self.conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb/annotations.duckdb', read_only=True)
 
     def predict(self,img,obj_name):
         encoding = self.processor(
@@ -1474,26 +1478,63 @@ class LocClevrInterpreter(LocInterpreter):
             ))
         return objs
 
+    def predict_clevrer_precomputed(self,fid,obj_classes=None):
+        # Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
+        self.conn.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,))
+        results = self.conn.fetchall()
+        objs = []
+        inst_id = 0
+        for result in results:
+            if obj_classes and set(obj_classes).issubset([result[3], result[4], result[2]]):
+                objs.append(dict(
+                    box=[result[5], result[6], result[7], result[8]],
+                    score=1,
+                    category=' '.join([result[3], result[4], result[2]]),
+                    inst_id=inst_id,
+                ))
+                inst_id += 1
+            else:
+                objs.append(dict(
+                    box=[result[5], result[6], result[7], result[8]],
+                    score=1,
+                    category=' '.join([result[3], result[4], result[2]]),
+                    inst_id=result[1],
+                ))
+        return objs
+
     def execute(self,prog_step,inspect=False):
         """
         Return bounding box
         """
         img_var,obj_name,output_var = self.parse(prog_step)
         img = prog_step.state[img_var]
-        if obj_name=='object':
-            # Run clevrer object detector to detect all objects
-            objs = self.predict_clevrer(img)
-        else:
-            obj_classes = self.extract_words(obj_name)
-            clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
-            if set(obj_classes).issubset(clevrer_attributes):
-                # Run clevrer object detector for specific object classes
-                objs = self.predict_clevrer(img, obj_classes)
+        if self.use_precomputed:
+            fid = prog_step.state['fid']
+            if obj_name=='object':
+                # Run clevrer object detector to detect all objects
+                objs = self.predict_clevrer_precomputed(fid)
             else:
-                # Run owlvit model
-                objs = self.predict(img, obj_name) # can be empty list
+                obj_classes = self.extract_words(obj_name)
+                clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
+                if set(obj_classes).issubset(clevrer_attributes):
+                    # Run clevrer object detector for specific object classes
+                    objs = self.predict_clevrer_precomputed(img, obj_classes)
+                else:
+                    raise NotImplementedError("Precomputed bounding box only supports clevrer attributes")
+        else:
+            if obj_name=='object':
+                # Run clevrer object detector to detect all objects
+                objs = self.predict_clevrer(img)
+            else:
+                obj_classes = self.extract_words(obj_name)
+                clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
+                if set(obj_classes).issubset(clevrer_attributes):
+                    # Run clevrer object detector for specific object classes
+                    objs = self.predict_clevrer(img, obj_classes)
+                else:
+                    # Run owlvit model
+                    objs = self.predict(img, obj_name) # can be empty list
         bboxes = [obj['box'] for obj in objs]
-        print(bboxes)
         box_img = self.box_image(img, bboxes)
         prog_step.state[output_var] = objs
         prog_step.state[output_var+'_IMAGE'] = box_img
@@ -1536,7 +1577,6 @@ class AttrClevrInterpreter():
         objs = prog_step.state[obj_var]
         output_objs = []
         for obj in objs:
-            print(obj)
             if self.step_name.lower() in obj['category'].split(' '):
                 output_objs.append(obj)
         img = prog_step.state['IMAGE']
@@ -2170,7 +2210,7 @@ class AfterVideoInterpreter():
 
         return step_output
 
-def register_step_interpreters(dataset='nlvr'):
+def register_step_interpreters(dataset='nlvr', use_precomputed=False):
     if dataset=='nlvr':
         return dict(
             VQA=VQAInterpreter(),
@@ -2216,7 +2256,7 @@ def register_step_interpreters(dataset='nlvr'):
         )
     elif dataset=='clevr':
         return dict(
-            LOC=LocClevrInterpreter(),
+            LOC=LocClevrInterpreter(use_precomputed),
             BIG=BigClevrInterpreter(),
             SMALL=SmallClevrInterpreter(),
             GRAY=GrayClevrInterpreter(),

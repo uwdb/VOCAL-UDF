@@ -22,3 +22,4 @@ data/clevr/*
 
 # Un-ignore the following
 !LICENSE.txt
+!data/clevr/vocab_clevrer.json
