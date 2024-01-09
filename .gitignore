@@ -19,7 +19,8 @@ outputs/*
 *.so
 data/clevr/*
 *.pt
-
+*.duckdb*
+duckdb_dir/*
 # Un-ignore the following
 !LICENSE.txt
 !data/clevr/vocab_clevrer.json

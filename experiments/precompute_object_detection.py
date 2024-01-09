@@ -22,7 +22,7 @@ def normalize_coord(bbox,img_size):
     return [x1,y1,x2,y2]
 
 if __name__ == "__main__":
-    conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb/annotations.duckdb', read_only=False)
+    conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb_dir/annotations.duckdb', read_only=False)
     conn.execute("DROP TABLE IF EXISTS Obj_clevr")
     conn.execute("CREATE TABLE Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)")
 
