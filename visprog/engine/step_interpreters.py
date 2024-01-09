@@ -1386,7 +1386,7 @@ class LocClevrInterpreter(LocInterpreter):
     def __init__(self, use_precomputed, thresh=0.1, nms_thresh=0.5):
         super().__init__(thresh, nms_thresh)
         self.use_precomputed = use_precomputed
-        self.clevrer_model = torch.load(os.path.join('/home/enhao/MaskRCNN_for_CLEVR_dataset/output/models', 'mask-rcnn-clevrer_epoch-7.pt'))
+        self.clevrer_model = torch.load(os.path.join('/home/enhao/MaskRCNN_for_CLEVR_dataset/output/models', 'mask-rcnn-clevrer_epoch-44.pt'))
         self.clevrer_model.eval()
         self.clevrer_model.to(self.device)
 
@@ -1395,7 +1395,7 @@ class LocClevrInterpreter(LocInterpreter):
             obj2idx = vocab['object_name_to_idx']
         self.CLASS_NAMES = list(obj2idx.keys())
         if self.use_precomputed:
-            self.conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb/annotations.duckdb', read_only=True)
+            self.conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb_dir/annotations.duckdb', read_only=True)
 
     def predict(self,img,obj_name):
         encoding = self.processor(
