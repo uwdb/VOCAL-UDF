@@ -1,25 +1,25 @@
 import random
 
 CLEVR_CURATED_EXAMPLES=[
-"""Question: a big object o1 is right of the brown cylinder o2 and left of the large brown sphere o3
+"""Question: a big object o1 is right of the gray cube o2 and left of the large gray sphere o3
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
 OBJ1=BIG(object=OBJ0)
-OBJ2=BROWN(object=OBJ0)
-OBJ3=CYLINDER(object=OBJ2)
+OBJ2=GRAY(object=OBJ0)
+OBJ3=CUBE(object=OBJ2)
 OBJ4=BIG(object=OBJ0)
-OBJ5=BROWN(object=OBJ4)
+OBJ5=GRAY(object=OBJ4)
 OBJ6=SPHERE(object=OBJ5)
-REL1=RIGHTOF(object1=OBJ1,object2=OBJ3)
+REL1=LEFTOF(object1=OBJ3,object2=OBJ1)
 REL2=LEFTOF(object1=OBJ1,object2=OBJ6)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ3}) and len({OBJ6}) and len({REL1}) and len({REL2}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: a brown shiny sphere
+"""Question: a gray rubber sphere
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=BROWN(object=OBJ0)
-OBJ2=METAL(object=OBJ1)
+OBJ1=GRAY(object=OBJ0)
+OBJ2=RUBBER(object=OBJ1)
 OBJ3=SPHERE(object=OBJ2)
 ANSWER0=EVAL(expr="'yes' if len({OBJ3}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
@@ -32,24 +32,24 @@ OBJ2=BLUE(object=OBJ1)
 OBJ3=CUBE(object=OBJ2)
 ANSWER0=EVAL(expr="'yes' if len({OBJ3}) else 'no'")
 """,
-"""Question: a red object right of the big brown object
+"""Question: a red object right of the big gray object
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
 OBJ1=RED(object=OBJ0)
 OBJ2=BIG(object=OBJ0)
-OBJ3=BROWN(object=OBJ2)
-REL1=RIGHTOF(object1=OBJ1,object2=OBJ3)
+OBJ3=GRAY(object=OBJ2)
+REL1=LEFTOF(object1=OBJ3,object2=OBJ1)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ3}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: a small matte sphere and a matte cylinder
+"""Question: a big matte sphere and a matte sphere
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=SMALL(object=OBJ0)
+OBJ1=BIG(object=OBJ0)
 OBJ2=RUBBER(object=OBJ1)
 OBJ3=SPHERE(object=OBJ2)
 OBJ4=RUBBER(object=OBJ0)
-OBJ5=CYLINDER(object=OBJ4)
+OBJ5=SPHERE(object=OBJ4)
 ANSWER0=EVAL(expr="'yes' if len({OBJ3}) and len({OBJ5}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
@@ -64,141 +64,141 @@ REL2=EQUALSIZE(object1=OBJ1,object2=OBJ3)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ3}) and len({REL1}) and len({REL2}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: a brown metallic sphere is in front of the tiny red rubber cylinder
+"""Question: a gray rubber sphere is in front of the huge red rubber cube
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=BROWN(object=OBJ0)
-OBJ2=METAL(object=OBJ1)
+OBJ1=GRAY(object=OBJ0)
+OBJ2=RUBBER(object=OBJ1)
 OBJ3=SPHERE(object=OBJ2)
-OBJ4=SMALL(object=OBJ0)
+OBJ4=BIG(object=OBJ0)
 OBJ5=RED(object=OBJ4)
 OBJ6=RUBBER(object=OBJ5)
-OBJ7=CYLINDER(object=OBJ6)
+OBJ7=CUBE(object=OBJ6)
 REL1=FRONTOF(object1=OBJ3,object2=OBJ7)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ7}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: The red cube and the large green cylinder are made of the same material.
+"""Question: The red cube and the large green sphere are made of the same material.
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
 OBJ1=RED(object=OBJ0)
 OBJ2=CUBE(object=OBJ1)
-OBJ3=LARGE(object=OBJ0)
+OBJ3=BIG(object=OBJ0)
 OBJ4=GREEN(object=OBJ3)
-OBJ5=CYLINDER(object=OBJ4)
+OBJ5=SPHERE(object=OBJ4)
 REL1=EQUALMATERIAL(object1=OBJ2,object2=OBJ5)
 ANSWER0=EVAL(expr="'yes' if len({OBJ2}) and len({OBJ5}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A cylinder is in front of the small rubber cylinder and on the left side of the tiny blue metal object.
+"""Question: A cube is in front of the big rubber sphere and on the left side of the big blue rubber object.
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=CYLINDER(object=OBJ0)
-OBJ2=SMALL(object=OBJ0)
+OBJ1=CUBE(object=OBJ0)
+OBJ2=BIG(object=OBJ0)
 OBJ3=RUBBER(object=OBJ2)
-OBJ4=CYLINDER(object=OBJ3)
+OBJ4=SPHERE(object=OBJ3)
 REL1=FRONTOF(object1=OBJ1,object2=OBJ4)
-OBJ5=SMALL(object=OBJ0)
+OBJ5=BIG(object=OBJ0)
 OBJ6=BLUE(object=OBJ5)
-OBJ7=METAL(object=OBJ6)
+OBJ7=RUBBER(object=OBJ6)
 REL2=LEFTOF(object1=OBJ1,object2=OBJ7)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ4}) and len({OBJ7}) and len({REL1}) and len({REL2}) else 'no'")
 """,
-"""Question: There is a small matte cylinder, which is the same color as the small rubber object in front of the cyan cylinder.
+"""Question: There is a big matte sphere, which is the same material as the big rubber object in front of the blue cube.
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=SMALL(object=OBJ0)
+OBJ1=BIG(object=OBJ0)
 OBJ2=RUBBER(object=OBJ1)
-OBJ3=CYLINDER(object=OBJ2)
-OBJ4=SMALL(object=OBJ0)
-OBJ5=MATTE(object=OBJ4)
-REL1=EQUALCOLOR(object1=OBJ3,object2=OBJ5)
-OBJ6=CYAN(object=OBJ0)
-OBJ7=CYLINDER(object=OBJ6)
+OBJ3=SPHERE(object=OBJ2)
+OBJ4=BIG(object=OBJ0)
+OBJ5=RUBBER(object=OBJ4)
+REL1=EQUALMATERIAL(object1=OBJ3,object2=OBJ5)
+OBJ6=BLUE(object=OBJ0)
+OBJ7=CUBE(object=OBJ6)
 REL2=FRONTOF(object1=OBJ5,object2=OBJ7)
 ANSWER0=EVAL(expr="'yes' if len({OBJ3}) and len({OBJ5}) and len({OBJ7}) and len({REL1}) and len({REL2}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A gray cylinder is the same size as a brown matte cylinder
+"""Question: A gray sphere is the same size as a gray matte sphere
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
 OBJ1=GRAY(object=OBJ0)
-OBJ2=CYLINDER(object=OBJ1)
-OBJ3=BROWN(object=OBJ0)
+OBJ2=SPHERE(object=OBJ1)
+OBJ3=GRAY(object=OBJ0)
 OBJ4=RUBBER(object=OBJ3)
-OBJ5=CYLINDER(object=OBJ4)
+OBJ5=SPHERE(object=OBJ4)
 REL1=EQUALSIZE(object1=OBJ2,object2=OBJ5)
 ANSWER0=EVAL(expr="'yes' if len({OBJ2}) and len({OBJ5}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A yellow shiny thing is the same size as a red cylinder
+"""Question: A green rubber thing is the same size as a red cube
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=YELLOW(object=OBJ0)
-OBJ2=METAL(object=OBJ1)
+OBJ1=GREEN(object=OBJ0)
+OBJ2=RUBBER(object=OBJ1)
 OBJ3=RED(object=OBJ0)
-OBJ4=CYLINDER(object=OBJ3)
+OBJ4=CUBE(object=OBJ3)
 REL1=EQUALSIZE(object1=OBJ2,object2=OBJ4)
 ANSWER0=EVAL(expr="'yes' if len({OBJ2}) and len({OBJ4}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A tiny brown thing is on the left side of the thing that is in front of the tiny brown ball behind the small gray shiny thing
+"""Question: A large gray thing is on the left side of the thing that is in front of the large gray ball behind the large gray matte thing
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=SMALL(object=OBJ0)
-OBJ2=BROWN(object=OBJ1)
-OBJ3=SMALL(object=OBJ0)
-OBJ4=BROWN(object=OBJ3)
+OBJ1=BIG(object=OBJ0)
+OBJ2=GRAY(object=OBJ1)
+OBJ3=BIG(object=OBJ0)
+OBJ4=GRAY(object=OBJ3)
 OBJ5=SPHERE(object=OBJ4)
-OBJ6=SMALL(object=OBJ0)
+OBJ6=BIG(object=OBJ0)
 OBJ7=GRAY(object=OBJ6)
-OBJ8=METAL(object=OBJ7)
+OBJ8=RUBBER(object=OBJ7)
 REL1=LEFTOF(object1=OBJ2,object2=OBJ0)
 REL2=FRONTOF(object1=OBJ0,object2=OBJ5)
-REL3=BEHIND(object1=OBJ5,object2=OBJ8)
+REL3=FRONTOF(object1=OBJ8,object2=OBJ5)
 ANSWER0=EVAL(expr="'yes' if len({OBJ2}) and len({OBJ5}) and len({OBJ8}) and len({REL1}) and len({REL2}) and len({REL3}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A tiny metal object is in front of a tiny cylinder on the right side of a tiny brown matte ball
+"""Question: A large matte object is in front of a large cube on the right side of a large gray matte ball
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=SMALL(object=OBJ0)
-OBJ2=METAL(object=OBJ1)
-OBJ3=SMALL(object=OBJ0)
-OBJ4=CYLINDER(object=OBJ3)
-OBJ5=SMALL(object=OBJ0)
-OBJ6=BROWN(object=OBJ5)
+OBJ1=BIG(object=OBJ0)
+OBJ2=RUBBER(object=OBJ1)
+OBJ3=BIG(object=OBJ0)
+OBJ4=CUBE(object=OBJ3)
+OBJ5=BIG(object=OBJ0)
+OBJ6=GRAY(object=OBJ5)
 OBJ7=RUBBER(object=OBJ6)
 OBJ8=SPHERE(object=OBJ7)
 REL1=FRONTOF(object1=OBJ2,object2=OBJ4)
-REL2=RIGHTOF(object1=OBJ4,object2=OBJ8)
+REL2=LEFTOF(object1=OBJ8,object2=OBJ4)
 ANSWER0=EVAL(expr="'yes' if len({OBJ2}) and len({OBJ4}) and len({OBJ8}) and len({REL1}) and len({REL2}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A cube is made of the same material as a gray cylinder
+"""Question: A cube is made of the same material as a gray sphere
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
 OBJ1=CUBE(object=OBJ0)
 OBJ2=GRAY(object=OBJ0)
-OBJ3=CYLINDER(object=OBJ2)
+OBJ3=SPHERE(object=OBJ2)
 REL1=EQUALMATERIAL(object1=OBJ1,object2=OBJ3)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ3}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: There is a object that is in front of a small brown thing
+"""Question: There is a object that is in front of a big green thing
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=SMALL(object=OBJ0)
-OBJ2=BROWN(object=OBJ1)
+OBJ1=BIG(object=OBJ0)
+OBJ2=GREEN(object=OBJ1)
 REL1=FRONTOF(object1=OBJ0,object2=OBJ2)
 ANSWER0=EVAL(expr="'yes' if len({OBJ0}) and len({OBJ2}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: There is an object that is the same shape as the cyan object
+"""Question: There is an object that is the same size as the blue object
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=CYAN(object=OBJ0)
-REL1=EQUALSHAPE(object1=OBJ0,object2=OBJ1)
+OBJ1=BLUE(object=OBJ0)
+REL1=EQUALSIZE(object1=OBJ0,object2=OBJ1)
 ANSWER0=EVAL(expr="'yes' if len({OBJ0}) and len({OBJ1}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
@@ -212,30 +212,30 @@ REL1=EQUALMATERIAL(object1=OBJ1,object2=OBJ3)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ3}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A tiny gray thing is to the right of the gray sphere that is in front of the metallic object in front of the large metal sphere
+"""Question: A large gray thing is to the right of the gray sphere that is in front of the rubber object in front of the large rubber sphere
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
-OBJ1=SMALL(object=OBJ0)
+OBJ1=BIG(object=OBJ0)
 OBJ2=GRAY(object=OBJ1)
 OBJ3=GRAY(object=OBJ0)
 OBJ4=SPHERE(object=OBJ3)
-OBJ5=METAL(object=OBJ0)
-OBJ6=LARGE(object=OBJ0)
-OBJ7=METAL(object=OBJ6)
+OBJ5=RUBBER(object=OBJ0)
+OBJ6=BIG(object=OBJ0)
+OBJ7=RUBBER(object=OBJ6)
 OBJ8=SPHERE(object=OBJ7)
-REL1=RIGHTOF(object1=OBJ2,object2=OBJ4)
+REL1=LEFTOF(object1=OBJ4,object2=OBJ2)
 REL2=FRONTOF(object1=OBJ4,object2=OBJ5)
 REL3=FRONTOF(object1=OBJ5,object2=OBJ8)
 ANSWER0=EVAL(expr="'yes' if len({OBJ2}) and len({OBJ4}) and len({OBJ5}) and len({OBJ8}) and len({REL1}) and len({REL2}) and len({REL3}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """,
-"""Question: A ball is the same color as a metallic sphere
+"""Question: A ball is the same material as a matte sphere
 Program:
 OBJ0=LOC(image=IMAGE,object='object')
 OBJ1=SPHERE(object=OBJ0)
-OBJ2=METAL(object=OBJ0)
+OBJ2=RUBBER(object=OBJ0)
 OBJ3=SPHERE(object=OBJ2)
-REL1=EQUALCOLOR(object1=OBJ1,object2=OBJ3)
+REL1=EQUALMATERIAL(object1=OBJ1,object2=OBJ3)
 ANSWER0=EVAL(expr="'yes' if len({OBJ1}) and len({OBJ3}) and len({REL1}) else 'no'")
 FINAL_RESULT=RESULT(var=ANSWER0)
 """
