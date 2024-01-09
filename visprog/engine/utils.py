@@ -73,7 +73,7 @@ class ProgramGenerator():
             response.choices[0].logprobs.token_logprobs[:i]))
 
     def generate(self,inputs):
-        response = client.completions.create(model="text-davinci-003",
+        response = client.completions.create(model="gpt-3.5-turbo-instruct",
         prompt=self.prompter(inputs),
         temperature=self.temperature,
         max_tokens=512,
