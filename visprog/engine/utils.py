@@ -17,8 +17,8 @@ class Program:
 
 
 class ProgramInterpreter:
-    def __init__(self,dataset='nlvr', use_precomputed=False):
-        self.step_interpreters = register_step_interpreters(dataset, use_precomputed)
+    def __init__(self,dataset='nlvr', use_precomputed=False, module_list=None):
+        self.step_interpreters = register_step_interpreters(dataset, use_precomputed, module_list)
 
     def execute_step(self,prog_step,inspect):
         step_name = parse_step(prog_step.prog_str,partial=True)['step_name']

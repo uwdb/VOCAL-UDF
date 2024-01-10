@@ -19,6 +19,7 @@ import argparse
 import duckdb
 from vocaludf.utils import duckdb_execute_cache_sequence
 from duckdb_dir.udf import register_udf
+import yaml
 
 random.seed(1234)
 # np.random.seed(10)
@@ -27,11 +28,12 @@ m = multiprocessing.Manager()
 lock = m.Lock()
 memo = [LRU(10000) for _ in range(72159)]
 
-def generate_clevr_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nvars, nunsupported_udfs, supported_list, unsupported_list, max_workers, dataset_name):
+def generate_clevr_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nvars, nunsupported_udfs, supported_list, unsupported_list, max_workers, dataset_name, config):
     """
     Generate (n_queries) queries with (npred) predicates and (nvars) variables. Each predicate is randomly chosen from (supported_list) and (nunsupported_udfs) unsupported UDFs from(unsupported_list), where each unsupported UDF must be used at least once.
     """
-    conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb_dir/annotations.duckdb', read_only=True)
+
+    conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
     register_udf(conn)
     queries = []
     while len(queries) < n_queries:
@@ -40,7 +42,7 @@ def generate_clevr_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npre
                 if res:
                     queries.append(res)
                     print("Generated {} queries".format(len(queries)))
-    file_path = "/home/enhao/VOCAL-UDF/data/clevr/{}_new_udfs_labels.json".format(nunsupported_udfs)
+    file_path = os.path.join(config['data_dir'], "clevr", "{}_new_udfs_labels.json".format(nunsupported_udfs))
     data = {"questions": queries}
     # if os.path.exists(file_path):
     #     with open(file_path, "r") as file:
@@ -149,6 +151,8 @@ if __name__ == '__main__':
     max_workers = args.max_workers
     dataset_name = args.dataset_name
 
+    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+
     supported_list = [
         {"predicate": "LeftOf", "parameter": None, "nargs": 2},
         {"predicate": "FrontOf", "parameter": None, "nargs": 2},
@@ -177,4 +181,4 @@ if __name__ == '__main__':
         {"predicate": "Material", "parameter": "metal", "nargs": 1},
     ]
 
-    generate_clevr_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nvars, nunsupported_udfs, supported_list, unsupported_list, max_workers, dataset_name)
+    generate_clevr_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nvars, nunsupported_udfs, supported_list, unsupported_list, max_workers, dataset_name, config)

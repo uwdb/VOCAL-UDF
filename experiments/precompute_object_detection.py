@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 from torchvision import transforms
 from tqdm import tqdm
+import yaml
 
 # For all images in the directory 'data/', run the object detection model and store the results in a database
 # Schema: Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
@@ -22,21 +23,22 @@ def normalize_coord(bbox,img_size):
     return [x1,y1,x2,y2]
 
 if __name__ == "__main__":
-    conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb_dir/annotations.duckdb', read_only=False)
+    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=False)
     conn.execute("DROP TABLE IF EXISTS Obj_clevr")
     conn.execute("CREATE TABLE Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)")
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    clevrer_model = torch.load(os.path.join("/home/enhao/VOCAL-UDF/data/models", "mask-rcnn-clevrer_epoch-44.pt"))
+    clevrer_model = torch.load(os.path.join(config['data_dir'], "models", "mask-rcnn-clevrer_epoch-44.pt"))
     clevrer_model.eval()
     clevrer_model.to(device)
 
-    with open("/home/enhao/VOCAL-UDF/data/clevr/vocab_clevrer.json" ,'r') as f:
+    with open(os.path.join(config['data_dir'], "clevr", "vocab_clevrer.json"), 'r') as f:
         vocab = json.load(f)
         obj2idx = vocab["object_name_to_idx"]
     CLASS_NAMES = list(obj2idx.keys())
 
-    img_dir = "/home/enhao/VOCAL-UDF/data/clevr/images/test"
+    img_dir = os.path.join(config['data_dir'], "clevr/images/test")
     # 15,000 images in test set
     for fid in tqdm(range(15000)):
         filename = f"CLEVR_test_{str(fid).zfill(6)}.png"
