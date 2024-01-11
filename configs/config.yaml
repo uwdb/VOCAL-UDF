@@ -2,6 +2,9 @@ db_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir
 data_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data
 output_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/outputs
 visprog:
+  program_generator:
+    temperature: 0.2
+    top_p: 0.5
   thumbnail_dir: /Users/zhangenhao/Desktop/vocalexplore-demo/ui_db_dir_224/thumbnails
   feature_names:
     - r3d_18_ap_mean_stride32_flatten

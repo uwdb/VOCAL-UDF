@@ -15,10 +15,12 @@ echo "--------------------"
 task_name=$1
 run=$2
 question_id=$3
+llm_model=$4
 
 echo "task_name: $task_name"
 echo "run: $run"
 echo "question_id: $question_id"
+echo "llm_model: $llm_model"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
@@ -29,3 +31,4 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --run_id $run \
         --question_id $question_id \
         --task_name "$task_name" \
+        --llm_model "$llm_model"

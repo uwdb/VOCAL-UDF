@@ -24,6 +24,7 @@ if __name__ == "__main__":
     parser.add_argument('--run_id', type=int, help='run id')
     parser.add_argument('--question_id', type=int, help='question id')
     parser.add_argument('--task_name', type=str, help='task name')
+    parser.add_argument('--llm_model', type=str, default="gpt-3.5-turbo-instruct", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-1106-preview'])
     args = parser.parse_args()
     use_precomputed = args.use_precomputed
     save_output = args.save_output
@@ -31,6 +32,7 @@ if __name__ == "__main__":
     run_id = args.run_id
     question_id = args.question_id
     task_name = args.task_name
+    llm_model = args.llm_model
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
@@ -45,11 +47,9 @@ if __name__ == "__main__":
     prompt_modules = f'You can only use modules below:\n{prompt_modules}'
 
     prompter = partial(create_prompt, method='random', num_prompts=18, seed=run_id, prompt_modules=prompt_modules)
-    print(prompter)
-    generator = ProgramGenerator(prompter=prompter)
+    generator = ProgramGenerator(prompter=prompter, temperature=config['visprog']['program_generator']['temperature'],top_p=config['visprog']['program_generator']['top_p'], llm_model=llm_model)
 
     # read json file
-
     with open(os.path.join(config['data_dir'], "clevr", "{}.json".format(task_name)), "r") as f:
         data = json.load(f)
     question = data['questions'][question_id]['question']
@@ -118,7 +118,11 @@ if __name__ == "__main__":
             "recall": recall,
             "failed": failed
         }
-        with open(os.path.join(output_dir, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
+        # create output directory if not exists
+        if not os.path.exists(os.path.join(output_dir, llm_model)):
+            os.makedirs(os.path.join(output_dir, llm_model))
+
+        with open(os.path.join(output_dir, llm_model, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
             json.dump(output, f)
 
 
