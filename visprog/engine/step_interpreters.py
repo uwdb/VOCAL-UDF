@@ -26,6 +26,9 @@ from visprog.vis_utils import html_embed_image, html_embed_video, html_colored_s
 from tqdm import tqdm
 from collections import defaultdict
 import duckdb
+import yaml
+
+config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
 def parse_step(step_str, partial=False):
     """
@@ -1386,16 +1389,16 @@ class LocClevrInterpreter(LocInterpreter):
     def __init__(self, use_precomputed, thresh=0.1, nms_thresh=0.5):
         super().__init__(thresh, nms_thresh)
         self.use_precomputed = use_precomputed
-        self.clevrer_model = torch.load(os.path.join('/home/enhao/MaskRCNN_for_CLEVR_dataset/output/models', 'mask-rcnn-clevrer_epoch-44.pt'))
+        self.clevrer_model = torch.load(os.path.join(config['data_dir'], 'models', 'mask-rcnn-clevrer_epoch-44.pt'), map_location=torch.device('cpu'))
         self.clevrer_model.eval()
         self.clevrer_model.to(self.device)
 
-        with open("/home/enhao/MaskRCNN_for_CLEVR_dataset/output/vocab_clevrer.json" ,'r') as f:
+        with open(os.path.join(config['data_dir'], 'clevr', 'vocab_clevrer.json'), 'r') as f:
             vocab = json.load(f)
             obj2idx = vocab['object_name_to_idx']
         self.CLASS_NAMES = list(obj2idx.keys())
         if self.use_precomputed:
-            self.conn = duckdb.connect(database='/home/enhao/VOCAL-UDF/duckdb_dir/annotations.duckdb', read_only=True)
+            self.conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
 
     def predict(self,img,obj_name):
         encoding = self.processor(
@@ -1771,11 +1774,11 @@ class EqualColorClevrInterpreter(RelClevrInterpreter):
 class LocVideoInterpreter(LocInterpreter):
     def __init__(self,thresh=0.1,nms_thresh=0.5):
         super().__init__(thresh,nms_thresh)
-        self.clevrer_model = torch.load(os.path.join('/home/enhao/MaskRCNN_for_CLEVR_dataset/output/models', 'mask-rcnn-clevrer_epoch-7.pt'))
+        self.clevrer_model = torch.load(os.path.join(config['data_dir'], 'models', 'mask-rcnn-clevrer_epoch-44.pt'), map_location=torch.device('cpu'))
         self.clevrer_model.eval()
         self.clevrer_model.to(self.device)
 
-        with open("/home/enhao/MaskRCNN_for_CLEVR_dataset/output/vocab_clevrer.json" ,'r') as f:
+        with open(os.path.join(config['data_dir'], "clevr", "vocab_clevrer.json"), 'r') as f:
             vocab = json.load(f)
             obj2idx = vocab['object_name_to_idx']
         self.CLASS_NAMES = list(obj2idx.keys())
@@ -2210,7 +2213,7 @@ class AfterVideoInterpreter():
 
         return step_output
 
-def register_step_interpreters(dataset='nlvr', use_precomputed=False):
+def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_list=None):
     if dataset=='nlvr':
         return dict(
             VQA=VQAInterpreter(),
@@ -2255,7 +2258,7 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False):
             AFTER=AfterVideoInterpreter(),
         )
     elif dataset=='clevr':
-        return dict(
+        all_modules = dict(
             LOC=LocClevrInterpreter(use_precomputed),
             BIG=BigClevrInterpreter(),
             SMALL=SmallClevrInterpreter(),
@@ -2283,6 +2286,11 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False):
             EVAL=EvalInterpreter(),
             RESULT=ResultInterpreter()
         )
+        if module_list is None:
+            return all_modules
+        else:
+            registered_modules = {key: all_modules[key] for key in module_list}
+            return registered_modules
     elif dataset=='imageEdit':
         return dict(
             FACEDET=FaceDetInterpreter(),

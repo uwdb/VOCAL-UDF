@@ -1,0 +1,35 @@
+db_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir
+data_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data
+output_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/outputs
+visprog:
+  program_generator:
+    temperature: 0.2
+    top_p: 0.5
+  thumbnail_dir: /Users/zhangenhao/Desktop/vocalexplore-demo/ui_db_dir_224/thumbnails
+  feature_names:
+    - r3d_18_ap_mean_stride32_flatten
+  ignore_labels:
+    - neutral
+    - lie down
+    - stand up
+  eager_feature_extraction_unlabeled: true
+  eager_feature_extraction_unlabeled_batch_size: 500
+  eager_feature_extraction_labeled: true
+  eager_model_training: true
+  cpus: 4
+  gpus: 0
+  suspend_lowp: true
+  min_labels: 15
+  mm_device: cpu
+  serial_kfold: true
+  explorer: randomifuniform
+  al_vids_x: 10
+  bandit_kfold_k: 3
+  bandit_eval_metric: ml_f1_score_macro
+  # Fraction of labeled data to hold out when tuning the F1 threshold.
+  fraction_f1_val: 0.2
+  bandit_type: exp
+  bandit_C: 5
+  bandit_T: 50
+  bandit_window: 5
+  async_bandit: true

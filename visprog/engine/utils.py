@@ -1,13 +1,17 @@
 import os
 from PIL import Image
 from openai import OpenAI
-
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 import numpy as np
 import copy
-
+import re
 from .step_interpreters import register_step_interpreters, parse_step
 
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_random_exponential,
+)  # for exponential backoff
 
 class Program:
     def __init__(self,prog_str,init_state=None):
@@ -17,8 +21,8 @@ class Program:
 
 
 class ProgramInterpreter:
-    def __init__(self,dataset='nlvr', use_precomputed=False):
-        self.step_interpreters = register_step_interpreters(dataset, use_precomputed)
+    def __init__(self,dataset='nlvr', use_precomputed=False, module_list=None):
+        self.step_interpreters = register_step_interpreters(dataset, use_precomputed, module_list)
 
     def execute_step(self,prog_step,inspect):
         step_name = parse_step(prog_step.prog_str,partial=True)['step_name']
@@ -50,11 +54,12 @@ class ProgramInterpreter:
 
 
 class ProgramGenerator():
-    def __init__(self,prompter,temperature=0.7,top_p=0.5,prob_agg='mean'):
+    def __init__(self,prompter,temperature=0.2,top_p=0.5,prob_agg='mean', llm_model="gpt-3.5-turbo-instruct"):
         self.prompter = prompter
         self.temperature = temperature
         self.top_p = top_p
         self.prob_agg = prob_agg
+        self.llm_model = llm_model
 
     def compute_prob(self,response):
         eos = '<|endoftext|>'
@@ -72,17 +77,41 @@ class ProgramGenerator():
         return np.exp(agg_fn(
             response.choices[0].logprobs.token_logprobs[:i]))
 
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
     def generate(self,inputs):
-        response = client.completions.create(model="gpt-3.5-turbo-instruct",
-        prompt=self.prompter(inputs),
-        temperature=self.temperature,
-        max_tokens=512,
-        top_p=self.top_p,
-        frequency_penalty=0,
-        presence_penalty=0,
-        n=1,
-        logprobs=1)
+        print(self.prompter(inputs))
+        if self.llm_model == "gpt-3.5-turbo-instruct":
+            print("Using gpt-3.5-turbo-instruct")
+            response = client.completions.create(
+                model=self.llm_model,
+                prompt=self.prompter(inputs),
+                temperature=self.temperature,
+                max_tokens=512,
+                top_p=self.top_p,
+                logprobs=1,
+                seed=42
+            )
 
-        prob = self.compute_prob(response)
-        prog = response.choices[0].text.lstrip('\n').rstrip('\n')
+            prob = self.compute_prob(response)
+            prog = response.choices[0].text.lstrip('\n').rstrip('\n')
+        elif self.llm_model in ["gpt-3.5-turbo-1106", "gpt-4-1106-preview"]:
+            print("Using ", self.llm_model)
+            system_prompt = "Generate a program based on the question, with no other comments, explanations, reasoning, or dialogue."
+            response = client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": self.prompter(inputs)},
+                ],
+                temperature=self.temperature,
+                top_p=self.top_p,
+                max_tokens=512,
+                seed=42
+            )
+
+            prob = None
+            prog = response.choices[0].message.content.lstrip('\n').rstrip('\n')
+            # remove duplicate newlines
+            prog = re.sub(r'\n+', '\n', prog)
+
         return prog, prob
