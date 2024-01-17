@@ -27,6 +27,7 @@ from tqdm import tqdm
 from collections import defaultdict
 import duckdb
 import yaml
+import pandas as pd
 
 config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
@@ -44,11 +45,35 @@ def parse_step(step_str, partial=False):
     if partial:
         return parsed_result
 
-    arg_tokens = [token for token in tokens[4:-3] if token.string not in [',','=']]
+    # Modified to allow arguments to be lists
+    # arg_tokens = [token for token in tokens[4:-3] if token.string not in [',','=']]
+    inside_arg_value = False
+    arg_tokens = []
+    arg_string = ''
+    for token in tokens[4:-3]:
+        if token.string == '[':
+            arg_string += token.string
+            inside_arg_value = True
+        elif token.string == ']':
+            arg_string += token.string
+            arg_tokens.append(arg_string)
+            arg_string = ''
+            inside_arg_value = False
+        elif token.string in [',', '=']:
+            if inside_arg_value:
+                arg_string += token.string
+            else:
+                continue
+        else:
+            if inside_arg_value:
+                arg_string += token.string
+            else:
+                arg_tokens.append(token.string)
+
     num_tokens = len(arg_tokens) // 2
     args = dict()
     for i in range(num_tokens):
-        args[arg_tokens[2*i].string] = arg_tokens[2*i+1].string
+        args[arg_tokens[2*i]] = arg_tokens[2*i+1]
     parsed_result['args'] = args
     return parsed_result
 
@@ -133,6 +158,8 @@ class EvalInterpreter():
                     prog_state[var_name] = var_value
                 else:
                     prog_state[var_name] = f"'{var_value}'"
+            elif isinstance(var_value, pd.DataFrame):
+                prog_state[var_name] = var_value.values.tolist()
             else:
                 prog_state[var_name] = var_value
 
@@ -1388,17 +1415,19 @@ class ReplaceInterpreter():
 class LocClevrInterpreter(LocInterpreter):
     def __init__(self, use_precomputed, thresh=0.1, nms_thresh=0.5):
         super().__init__(thresh, nms_thresh)
-        self.use_precomputed = use_precomputed
-        self.clevrer_model = torch.load(os.path.join(config['data_dir'], 'models', 'mask-rcnn-clevrer_epoch-44.pt'), map_location=torch.device('cpu'))
-        self.clevrer_model.eval()
-        self.clevrer_model.to(self.device)
-
         with open(os.path.join(config['data_dir'], 'clevr', 'vocab_clevrer.json'), 'r') as f:
             vocab = json.load(f)
             obj2idx = vocab['object_name_to_idx']
         self.CLASS_NAMES = list(obj2idx.keys())
+        self.use_precomputed = use_precomputed
         if self.use_precomputed:
             self.conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
+            # duckdb.execute("CREATE TABLE Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)")
+            # duckdb.execute("COPY Obj_clevr FROM '{}' (FORMAT 'csv', delimiter ',', header 0)".format(os.path.join(config["db_dir"], "obj_clevr.csv")))
+        else:
+            self.clevrer_model = torch.load(os.path.join(config['data_dir'], 'models', 'mask-rcnn-clevrer_epoch-44.pt'), map_location=torch.device('cpu'))
+            self.clevrer_model.eval()
+            self.clevrer_model.to(self.device)
 
     def predict(self,img,obj_name):
         encoding = self.processor(
@@ -1483,7 +1512,7 @@ class LocClevrInterpreter(LocInterpreter):
 
     def predict_clevrer_precomputed(self,fid,obj_classes=None):
         # Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
-        self.conn.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,))
+        duckdb.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,))
         results = self.conn.fetchall()
         objs = []
         inst_id = 0
@@ -1496,7 +1525,7 @@ class LocClevrInterpreter(LocInterpreter):
                     inst_id=inst_id,
                 ))
                 inst_id += 1
-            else:
+            elif not obj_classes:
                 objs.append(dict(
                     box=[result[5], result[6], result[7], result[8]],
                     score=1,
@@ -1521,7 +1550,7 @@ class LocClevrInterpreter(LocInterpreter):
                 clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
                 if set(obj_classes).issubset(clevrer_attributes):
                     # Run clevrer object detector for specific object classes
-                    objs = self.predict_clevrer_precomputed(img, obj_classes)
+                    objs = self.predict_clevrer_precomputed(fid, obj_classes)
                 else:
                     raise NotImplementedError("Precomputed bounding box only supports clevrer attributes")
         else:
@@ -1769,6 +1798,482 @@ class EqualColorClevrInterpreter(RelClevrInterpreter):
         if obj1['inst_id'] == obj2['inst_id']:
             return False
         return obj1['category'].split(' ')[0] == obj2['category'].split(' ')[0]
+
+#### Clevrer modules ####
+class LocClevrerInterpreter(LocInterpreter):
+    def __init__(self, use_precomputed):
+        print(f'Registering {self.step_name} step')
+        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        with open(os.path.join(config['data_dir'], 'clevr', 'vocab_clevrer.json'), 'r') as f:
+            vocab = json.load(f)
+            obj2idx = vocab['object_name_to_idx']
+        self.CLASS_NAMES = list(obj2idx.keys())
+        self.use_precomputed = use_precomputed
+        if self.use_precomputed:
+            self.conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
+            # duckdb.execute("CREATE TABLE Obj_clevrer (oid INT, vid INT, fid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)")
+            # duckdb.execute("COPY Obj_clevrer FROM '{}' (FORMAT 'csv', delimiter ',', header 0)".format(os.path.join(config["db_dir"], "obj_clevrer.csv")))
+            # Creating index seems to produce incorrect results
+            # duckdb.execute("CREATE INDEX IF NOT EXISTS idx_obj_clevrer ON Obj_clevrer (vid)")
+        else:
+            self.clevrer_model = torch.load(os.path.join(config['data_dir'], 'models', 'mask-rcnn-clevrer_epoch-44.pt'), map_location=torch.device('cpu'))
+            self.clevrer_model.eval()
+            self.clevrer_model.to(self.device)
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        video_var = parse_result['args']['video']
+        obj_name = eval(parse_result['args']['object'])
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return video_var,obj_name,output_var
+
+    def predict_clevrer(self,video,obj_classes=None):
+        objs = []
+        for fid, img in enumerate(video):
+            with torch.no_grad():
+                cv2_image = np.array(img)
+                cv2_image = cv2.cvtColor(cv2_image, cv2.COLOR_RGB2BGR)
+                transform = transforms.Compose([
+                    transforms.ToTensor(),
+                ])
+                x = transform(cv2_image).to(self.device)
+                pred = self.clevrer_model([x, ])[0]
+                indices = torchvision.ops.nms(pred["boxes"], pred["scores"], 0.3)
+            boxes = pred["boxes"][indices]
+            labels = pred["labels"][indices]
+            if obj_classes:
+                # detect specific objects
+                indices = []
+                for i, label in enumerate(labels):
+                    # print(self.CLASS_NAMES[label])
+                    if set(obj_classes).issubset(self.CLASS_NAMES[label].split(' ')):
+                        indices.append(i)
+                boxes = boxes[indices].cpu().detach().numpy().tolist()
+                labels = labels[indices].cpu().detach().numpy().tolist()
+            else:
+                boxes = boxes.cpu().detach().numpy().tolist()
+                labels = labels.cpu().detach().numpy().tolist()
+            boxes = [self.normalize_coord(box,img.size) for box in boxes]
+            for i, (box, label) in enumerate(zip(boxes, labels)):
+                color, material, shape = self.CLASS_NAMES[label].split(' ')
+                objs.append(dict(
+                    oid=i,
+                    fid=fid,
+                    x1=box[0],
+                    y1=box[1],
+                    x2=box[2],
+                    y2=box[3],
+                    shape=shape,
+                    color=color,
+                    material=material,
+                ))
+        return pd.DataFrame(objs)
+
+    def predict_clevrer_precomputed(self,vid,obj_classes=None):
+        # Obj_clevr (oid INT, vid INT, fid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
+        # obj_clevrer_df = self.conn.execute("SELECT * FROM Obj_clevrer WHERE vid = ?", (vid,)).df()
+        # print("obj_clevrer_df", obj_clevrer_df.loc[obj_clevrer_df['fid'] == 0])
+        df = self.conn.execute("SELECT * EXCLUDE (vid) FROM Obj_clevrer WHERE vid = ?", (vid,)).df()
+        if obj_classes:
+            raise NotImplementedError("only object='object' is supported for precomputed bounding box")
+        return df
+
+    def execute(self,prog_step,inspect=False):
+        video_var,obj_name,output_var = self.parse(prog_step)
+        video = prog_step.state[video_var]
+        if self.use_precomputed:
+            vid = prog_step.state['vid']
+            if obj_name=='object':
+                # Run clevrer object detector to detect all objects
+                df = self.predict_clevrer_precomputed(vid)
+            else:
+                obj_classes = self.extract_words(obj_name)
+                clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
+                if set(obj_classes).issubset(clevrer_attributes):
+                    # Run clevrer object detector for specific object classes
+                    df = self.predict_clevrer_precomputed(vid, obj_classes)
+                else:
+                    raise NotImplementedError("Precomputed bounding box only supports clevrer attributes")
+        else:
+            if obj_name=='object':
+                # Run clevrer object detector to detect all objects
+                df = self.predict_clevrer(video)
+            else:
+                obj_classes = self.extract_words(obj_name)
+                clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
+                if set(obj_classes).issubset(clevrer_attributes):
+                    # Run clevrer object detector for specific object classes
+                    df = self.predict_clevrer(video, obj_classes)
+                else:
+                    raise NotImplementedError("only supports clevrer attributes")
+
+        prog_step.state[output_var] = df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", df.loc[df['fid']==0])
+        return df
+
+class TrackClevrerInterpreter():
+    step_name = 'TRACK'
+
+    def __init__(self, use_precomputed):
+        print(f'Registering {self.step_name} step')
+        self.use_precomputed = use_precomputed
+        # if self.use_precomputed:
+        #     self.conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        obj_var = parse_result['args']['object']
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return obj_var,output_var
+
+    def execute(self,prog_step,inspect=False):
+        obj_var,output_var = self.parse(prog_step)
+        obj_df = prog_step.state[obj_var]
+        if self.use_precomputed:
+            df = obj_df
+        else:
+            # TODO: implement ByteTrack
+            raise NotImplementedError("only supports precomputed")
+
+        prog_step.state[output_var] = df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", df.loc[df['fid']==0])
+        return df
+
+class AttrClevrerInterpreter():
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        obj_var = parse_result['args']['object']
+        bind_variable = eval(parse_result['args']['var'])
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return obj_var, bind_variable, output_var
+
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        # obj_df: (oid, fid, shape, color, material, x1, y1, x2, y2)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute("""
+            SELECT oid as {}_oid, fid
+            FROM obj_df
+            WHERE {} = '{}'
+        """.format(bind_variable, self.col_name, self.step_name.lower())).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df.loc[output_df['fid'] == 0])
+        return output_df
+
+class LeftClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'LEFT'
+
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        # obj_df: (oid, fid, shape, color, material, x1, y1, x2, y2)
+        obj_df = prog_step.state[obj_var]
+        # print("obj_df", obj_df.loc[obj_df['oid'] == 6])
+        output_df = duckdb.execute("SELECT oid as {}_oid, fid FROM obj_df WHERE Left(x1, x2) = true".format(bind_variable)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # if bind_variable == 'o2':
+        #     print(f"{self.step_name} dataframe ", output_df.loc[output_df['o2_oid'] == 6])
+        return output_df
+
+class RightClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'RIGHT'
+
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        # obj_df: (oid, fid, shape, color, material, x1, y1, x2, y2)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute("SELECT oid as {}_oid, fid FROM obj_df WHERE Right(x1, x2) = true".format(bind_variable)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df.loc[output_df['o2_oid'] == 6])
+        return output_df
+
+class TopClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'TOP'
+
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        # obj_df: (oid, fid, shape, color, material, x1, y1, x2, y2)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute("SELECT oid as {}_oid, fid FROM obj_df WHERE Top(y1, y2) = true".format(bind_variable)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # if bind_variable == 'o2':
+        #     print(f"{self.step_name} dataframe ", output_df.loc[output_df['o2_oid'] == 6])
+        return output_df
+
+class BottomClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'BOTTOM'
+
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        # obj_df: (oid, fid, shape, color, material, x1, y1, x2, y2)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute("SELECT oid as {}_oid, fid FROM obj_df WHERE Bottom(y1, y2) = true".format(bind_variable)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class GrayClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'GRAY'
+    col_name = 'color'
+
+class RedClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'RED'
+    col_name = 'color'
+
+class BlueClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'BLUE'
+    col_name = 'color'
+
+class GreenClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'GREEN'
+    col_name = 'color'
+
+class BrownClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'BROWN'
+    col_name = 'color'
+
+class PurpleClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'PURPLE'
+    col_name = 'color'
+
+class CyanClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'CYAN'
+    col_name = 'color'
+
+class YellowClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'YELLOW'
+    col_name = 'color'
+
+class CubeClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'CUBE'
+    col_name = 'shape'
+
+class SphereClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'SPHERE'
+    col_name = 'shape'
+
+class CylinderClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'CYLINDER'
+    col_name = 'shape'
+
+class RubberClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'RUBBER'
+    col_name = 'material'
+
+class MetalClevrerInterpreter(AttrClevrerInterpreter):
+    step_name = 'METAL'
+    col_name = 'material'
+
+class RelClevrerInterpreter():
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        output_var = parse_result['output_var']
+        object1_var = parse_result['args']['object1']
+        object2_var = parse_result['args']['object2']
+        bind_variable1 = eval(parse_result['args']['var1'])
+        bind_variable2 = eval(parse_result['args']['var2'])
+        assert(step_name==self.step_name)
+        return object1_var, object2_var, bind_variable1, bind_variable2, output_var
+
+class LeftOfClevrerInterpreter(RelClevrerInterpreter):
+    step_name = 'LEFTOF'
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND LeftOf(obj1_df.x1, obj1_df.x2, obj2_df.x1, obj2_df.x2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class RightOfClevrerInterpreter(RelClevrerInterpreter):
+    step_name = 'RIGHTOF'
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND RightOf(obj1_df.x1, obj1_df.x2, obj2_df.x1, obj2_df.x2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class FrontOfClevrerInterpreter(RelClevrerInterpreter):
+    step_name = 'FRONTOF'
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND FrontOf(obj1_df.y1, obj1_df.y2, obj2_df.y1, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class BehindClevrerInterpreter(RelClevrerInterpreter):
+    step_name = 'BEHIND'
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND Behind(obj1_df.y1, obj1_df.y2, obj2_df.y1, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class EventClevrerInterpreter():
+    step_name = 'EVENT'
+
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        predicates_vars = parse_result['args']['predicates'][1:-1].split(',')
+        min_duration = eval(parse_result['args']['min_duration'])
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return predicates_vars, min_duration, output_var
+
+    def execute(self,prog_step,inspect=False):
+        predicates_vars, min_duration, output_var = self.parse(prog_step)
+        # List of dataframes for each predicate
+        predicate_dfs = [prog_step.state[predicates_var] for predicates_var in predicates_vars]
+        # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
+        predicate_df_names = [f"pred{i}_df" for i in range(len(predicate_dfs))]
+        for predicate_df, predicate_df_name in zip(predicate_dfs, predicate_df_names):
+            # print(f"{predicate_df_name} dataframe ", predicate_df.to_string())
+            exec(f"{predicate_df_name} = predicate_df")
+        # Compute natural join of dataframes. It's guaranteed that there are common columns for each pair of dataframes, as each dataframe has fid column.
+        from_join_clause = " natural join ".join(predicate_df_names)
+        graph_df = duckdb.execute(f"SELECT * FROM {from_join_clause}").df()
+        # print("from_join_clause", from_join_clause)
+        # if 'o2_oid' in graph_df.columns:
+            # print("graph_df", graph_df.loc[graph_df['o2_oid'] == 6])
+
+        # Filter events that last for at least min_duration frames. As an optimization, only events with exactly min_duration frames are retained.
+        oid_cols = [col_name for col_name in graph_df.columns if col_name.endswith('_oid')]
+        oid_cols = ", ".join(oid_cols)
+        output_df = duckdb.execute(f"""
+            SELECT {oid_cols}, fid AS start_fid, fid_offset AS end_fid
+            FROM (
+                SELECT {oid_cols},
+                    fid,
+                    lead(fid, {min_duration} - 1, 0) OVER (PARTITION BY {oid_cols} ORDER BY fid) as fid_offset
+                FROM graph_df
+            ) t
+            WHERE fid_offset = fid + ({min_duration} - 1)
+        """).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class BeforeClevrerInterpreter():
+    step_name = 'BEFORE'
+
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        event1_var = parse_result['args']['event1']
+        event2_var = parse_result['args']['event2']
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return event1_var, event2_var, output_var
+
+    def execute(self,prog_step,inspect=False):
+        event1_var, event2_var, output_var = self.parse(prog_step)
+        event1_df = prog_step.state[event1_var]
+        event2_df = prog_step.state[event2_var]
+        # print("event1_df", event1_df.columns)
+        # print("event2_df", event2_df.columns)
+        event1_obj_cols = [col_name for col_name in event1_df.columns if col_name.endswith('_oid')]
+        event2_obj_cols = [col_name for col_name in event2_df.columns if col_name.endswith('_oid')]
+        obj_intersection_fields = []
+        obj_union_fields = []
+        for v in event1_obj_cols:
+            obj_union_fields.append(f"t1.{v}")
+        for v in event2_obj_cols:
+            if v in event1_obj_cols:
+                obj_intersection_fields.append(f"t1.{v} = t2.{v}")
+            else:
+                for u in event1_obj_cols:
+                    obj_intersection_fields.append(f"t1.{u} <> t2.{v}")
+                obj_union_fields.append(f"t2.{v}")
+        obj_intersection_fields = " AND ".join(obj_intersection_fields)
+        obj_union_fields = ", ".join(obj_union_fields)
+        # As an optimization, only the earliest matching event is retained for each group of objects.
+        output_df = duckdb.execute(f"""
+            SELECT {obj_union_fields},
+                min(t1.start_fid) AS start_fid,
+                min(t2.end_fid) AS end_fid
+            FROM event1_df t1, event2_df t2
+            WHERE {obj_intersection_fields}
+                AND t1.end_fid < t2.start_fid
+            GROUP BY {obj_union_fields}
+        """).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
 
 #### Video counterparts ####
 class LocVideoInterpreter(LocInterpreter):
@@ -2213,6 +2718,44 @@ class AfterVideoInterpreter():
 
         return step_output
 
+#### User-defined functions ####
+# TODO: take a look at PyArrow UDFs
+def left(o1_x1: float, o1_x2: float) -> bool:
+    cx1 = (o1_x1 + o1_x2) / 2
+    return cx1 >= 0 and cx1 < 240
+
+def right(o1_x1: float, o1_x2: float) -> bool:
+    cx1 = (o1_x1 + o1_x2) / 2
+    return cx1 >= 240 and cx1 <= 480
+
+def top(o1_y1: float, o1_y2: float) -> bool:
+    cy1 = (o1_y1 + o1_y2) / 2
+    return cy1 >= 0 and cy1 < 160
+
+def bottom(o1_y1: float, o1_y2: float) -> bool:
+    cy1 = (o1_y1 + o1_y2) / 2
+    return cy1 >= 160 and cy1 <= 320
+
+def right_of(o1_x1: float, o1_x2: float, o2_x1: float, o2_x2: float) -> bool:
+    cx1 = (o1_x1 + o1_x2) / 2
+    cx2 = (o2_x1 + o2_x2) / 2
+    return cx1 > cx2
+
+def left_of(o1_x1: float, o1_x2: float, o2_x1: float, o2_x2: float) -> bool:
+    cx1 = (o1_x1 + o1_x2) / 2
+    cx2 = (o2_x1 + o2_x2) / 2
+    return cx1 < cx2
+
+def front_of(o1_y1: float, o1_y2: float, o2_y1: float, o2_y2: float) -> bool:
+    cy1 = (o1_y1 + o1_y2) / 2
+    cy2 = (o2_y1 + o2_y2) / 2
+    return cy1 > cy2
+
+def behind(o1_y1: float, o1_y2: float, o2_y1: float, o2_y2: float) -> bool:
+    cy1 = (o1_y1 + o1_y2) / 2
+    cy2 = (o2_y1 + o2_y2) / 2
+    return cy1 < cy2
+
 def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_list=None):
     if dataset=='nlvr':
         return dict(
@@ -2286,6 +2829,50 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
             EVAL=EvalInterpreter(),
             RESULT=ResultInterpreter()
         )
+        if module_list is None:
+            return all_modules
+        else:
+            registered_modules = {key: all_modules[key] for key in module_list}
+            return registered_modules
+    elif dataset=='clevrer':
+        all_modules = dict(
+            LOC=LocClevrerInterpreter(use_precomputed),
+            TRACK=TrackClevrerInterpreter(use_precomputed),
+            LEFT=LeftClevrerInterpreter(),
+            RIGHT=RightClevrerInterpreter(),
+            TOP=TopClevrerInterpreter(),
+            BOTTOM=BottomClevrerInterpreter(),
+            GRAY=GrayClevrerInterpreter(),
+            RED=RedClevrerInterpreter(),
+            BLUE=BlueClevrerInterpreter(),
+            GREEN=GreenClevrerInterpreter(),
+            BROWN=BrownClevrerInterpreter(),
+            PURPLE=PurpleClevrerInterpreter(),
+            CYAN=CyanClevrerInterpreter(),
+            YELLOW=YellowClevrerInterpreter(),
+            CUBE=CubeClevrerInterpreter(),
+            SPHERE=SphereClevrerInterpreter(),
+            CYLINDER=CylinderClevrerInterpreter(),
+            RUBBER=RubberClevrerInterpreter(),
+            METAL=MetalClevrerInterpreter(),
+            LEFTOF=LeftOfClevrerInterpreter(),
+            RIGHTOF=RightOfClevrerInterpreter(),
+            FRONTOF=FrontOfClevrerInterpreter(),
+            BEHIND=BehindClevrerInterpreter(),
+            EVENT=EventClevrerInterpreter(),
+            BEFORE=BeforeClevrerInterpreter(),
+            EVAL=EvalInterpreter(),
+            RESULT=ResultInterpreter()
+            # TODO: Add NEAR and FAR?
+        )
+        duckdb.create_function("Left", left)
+        duckdb.create_function("Right", right)
+        duckdb.create_function("Top", top)
+        duckdb.create_function("Bottom", bottom)
+        duckdb.create_function("LeftOf", left_of)
+        duckdb.create_function("RightOf", right_of)
+        duckdb.create_function("FrontOf", front_of)
+        duckdb.create_function("Behind", behind)
         if module_list is None:
             return all_modules
         else:
