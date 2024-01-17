@@ -4,6 +4,10 @@ import duckdb
 import cv2
 import argparse
 import numpy as np
+import yaml
+import os
+
+config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--track_thresh", type=float, default=0.5, help="tracking confidence threshold")
@@ -15,30 +19,29 @@ parser.add_argument(
 )
 parser.add_argument('--min_box_area', type=float, default=0, help='filter out tiny boxes')
 parser.add_argument("--mot20", dest="mot20", default=False, action="store_true", help="test mot20.")
+parser.add_argument('--vid', type=int, default=0)
 
 args = parser.parse_args()
 
+vid = args.vid
+
 conn = duckdb.connect()
 conn.execute("CREATE TABLE Obj_clevrer (oid INT, vid INT, fid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float);")
-conn.execute("COPY Obj_clevrer FROM '/home/enhao/EQUI-VOCAL/postgres/obj_clevrer.csv' (FORMAT 'csv', delimiter ',', header 0);")
+conn.execute("COPY Obj_clevrer FROM '{}' (FORMAT 'csv', delimiter ',', header 0);".format(os.path.join(config['db_dir'], 'obj_clevrer.csv')))
 conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_clevrer ON Obj_clevrer (vid);")
-df = conn.execute("SELECT fid, oid, x1, x2, y1, y2, 1 AS score FROM Obj_clevrer WHERE vid = 0").df()
+df = conn.execute("SELECT fid, oid, x1, x2, y1, y2, 1 AS score FROM Obj_clevrer WHERE vid = {}".format(vid)).df()
 
 img_height = 320
 img_width = 480
 aspect_ratio_thresh = 1.6
 min_box_area = 10
-cap = cv2.VideoCapture("/home/enhao/VOCAL-UDF/visprog/assets/clevrer1.mp4")
+cap = cv2.VideoCapture(os.path.join(config['data_dir'], 'clevrer', f'video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}', f"video_{str(vid).zfill(5)}.mp4"))
 width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)  # float
 height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)  # float
 fps = cap.get(cv2.CAP_PROP_FPS)
 
-vid_writer = cv2.VideoWriter(
-    "/home/enhao/VOCAL-UDF/tests/object_track.mp4", cv2.VideoWriter_fourcc(*"mp4v"), fps, (int(width), int(height))
-)
-vid_detection_writer = cv2.VideoWriter(
-    "/home/enhao/VOCAL-UDF/tests/object_detection.mp4", cv2.VideoWriter_fourcc(*"mp4v"), fps, (int(width), int(height))
-)
+vid_writer = cv2.VideoWriter(os.path.join(config['data_dir'], 'object_track.mp4'), cv2.VideoWriter_fourcc(*"mp4v"), fps, (int(width), int(height)))
+vid_detection_writer = cv2.VideoWriter(os.path.join(config['data_dir'], 'object_detection.mp4'), cv2.VideoWriter_fourcc(*"mp4v"), fps, (int(width), int(height)))
 tracker = BYTETracker(args)
 
 # for image in images:
