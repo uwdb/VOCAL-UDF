@@ -28,6 +28,9 @@ from collections import defaultdict
 import duckdb
 import yaml
 import pandas as pd
+from yolox.tracker.byte_tracker import BYTETracker
+from yolox.utils.visualize import plot_tracking, vis
+from argparse import Namespace
 
 config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
@@ -1921,8 +1924,17 @@ class TrackClevrerInterpreter():
     def __init__(self, use_precomputed):
         print(f'Registering {self.step_name} step')
         self.use_precomputed = use_precomputed
-        # if self.use_precomputed:
-        #     self.conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
+        if not self.use_precomputed:
+            self.args = Namespace(
+                img_info=[320, 480],
+                track_thresh=0.5,
+                track_buffer=30,
+                match_thresh=0.8,
+                min_box_area=0,
+                aspect_ratio_thresh=1000,
+                mot20=False
+            )
+            self.tracker = BYTETracker(self.args)
 
     def parse(self,prog_step):
         parse_result = parse_step(prog_step.prog_str)
@@ -1936,16 +1948,33 @@ class TrackClevrerInterpreter():
         obj_var,output_var = self.parse(prog_step)
         obj_df = prog_step.state[obj_var]
         if self.use_precomputed:
-            df = obj_df
+            output_df = obj_df
         else:
-            # TODO: implement ByteTrack
-            raise NotImplementedError("only supports precomputed")
-
-        prog_step.state[output_var] = df
+            # object tracking with ByteTrack
+            output = []
+            obj_df['score'] = 1
+            for fid, df_fid in obj_df.groupby('fid'):
+                dets = df_fid[['x1', 'y1', 'x2', 'y2', 'score', 'color', 'material', 'shape']].values
+                if dets is not None:
+                    online_targets = self.tracker.update(
+                        dets,
+                        self.args.img_info,
+                        self.args.img_info
+                    )
+                    for t in online_targets:
+                        tlwh = t._original_tlwh
+                        tid = t.track_id
+                        attrs = t.attrs
+                        vertical = tlwh[2] / tlwh[3] > self.args.aspect_ratio_thresh
+                        if tlwh[2] * tlwh[3] > self.args.min_box_area and not vertical:
+                            output.append([fid, tid, tlwh[0], tlwh[1], tlwh[0] + tlwh[2], tlwh[1] + tlwh[3], *attrs])
+            output_df = pd.DataFrame(output, columns=['fid', 'oid', 'x1', 'y1', 'x2', 'y2', 'color', 'material', 'shape'])
+            # TODO: Store output to database
+        prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
         # print(f"{self.step_name} dataframe ", df.loc[df['fid']==0])
-        return df
+        return output_df
 
 class AttrClevrerInterpreter():
     def __init__(self):

@@ -29,12 +29,10 @@ conn = duckdb.connect()
 conn.execute("CREATE TABLE Obj_clevrer (oid INT, vid INT, fid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float);")
 conn.execute("COPY Obj_clevrer FROM '{}' (FORMAT 'csv', delimiter ',', header 0);".format(os.path.join(config['db_dir'], 'obj_clevrer.csv')))
 conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_clevrer ON Obj_clevrer (vid);")
-df = conn.execute("SELECT fid, oid, x1, x2, y1, y2, 1 AS score FROM Obj_clevrer WHERE vid = {}".format(vid)).df()
+df = conn.execute("SELECT fid, oid, x1, x2, y1, y2, 1 AS score, color, material, shape FROM Obj_clevrer WHERE vid = {}".format(vid)).df()
 
 img_height = 320
 img_width = 480
-aspect_ratio_thresh = 1.6
-min_box_area = 10
 cap = cv2.VideoCapture(os.path.join(config['data_dir'], 'clevrer', f'video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}', f"video_{str(vid).zfill(5)}.mp4"))
 width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)  # float
 height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)  # float
@@ -54,7 +52,7 @@ while True:
     ret_val, frame = cap.read()
     if ret_val:
         # outputs, img_info = predictor.inference(frame, timer)
-        dets = df[df['fid'] == frame_id][['x1', 'y1', 'x2', 'y2', 'score']].values
+        dets = df[df['fid'] == frame_id][['x1', 'y1', 'x2', 'y2', 'score', 'color', 'material', 'shape']].values
         boxes = dets[:, :4]
         scores = dets[:, 4]
         cls_ids = np.zeros_like(scores)
@@ -62,18 +60,18 @@ while True:
             online_targets = tracker.update(dets, [img_height, img_width], [img_height, img_width])
             online_tlwhs = []
             online_ids = []
-            online_scores = []
+            online_attrs = []
             for t in online_targets:
-                # tlwh = t.tlwh
                 tlwh = t._original_tlwh
                 tid = t.track_id
+                attrs = t.attrs
                 vertical = tlwh[2] / tlwh[3] > args.aspect_ratio_thresh
                 if tlwh[2] * tlwh[3] > args.min_box_area and not vertical:
                     online_tlwhs.append(tlwh)
                     online_ids.append(tid)
-                    online_scores.append(t.score)
+                    online_attrs.append(attrs)
                     results.append(
-                        f"{frame_id},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},{t.score:.2f},-1,-1,-1\n"
+                        f"{tid},{vid},{frame_id},{attrs[2]},{attrs[0]},{attrs[1]},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[0]+tlwh[2]:.2f},{tlwh[1]+tlwh[3]:.2f},{t.score:.2f}\n"
                     )
             online_im = plot_tracking(
                 frame, online_tlwhs, online_ids, frame_id=frame_id + 1
@@ -90,3 +88,7 @@ while True:
 cap.release()
 vid_writer.release()
 vid_detection_writer.release()
+
+# Write to csv
+# with open(os.path.join(config['data_dir'], 'object_track.csv'), 'w') as f:
+#     f.writelines(results)
