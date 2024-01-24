@@ -44,7 +44,7 @@ if __name__ == "__main__":
     interpreter = ProgramInterpreter(dataset='clevr', use_precomputed=use_precomputed, module_list=module_list)
 
     prompt_modules = '\n'.join(module_list)
-    prompt_modules = f'You can only use modules below:\n{prompt_modules}'
+    prompt_modules = f'You can only use modules below to generate the program:\n{prompt_modules}'
 
     prompter = partial(create_prompt, method='random', num_prompts=18, seed=run_id, prompt_modules=prompt_modules)
     generator = ProgramGenerator(prompter=prompter, temperature=config['visprog']['program_generator']['temperature'],top_p=config['visprog']['program_generator']['top_p'], llm_model=llm_model)
@@ -63,30 +63,32 @@ if __name__ == "__main__":
         else:
             gt_labels.append(0)
 
-    prog,_ = generator.generate(dict(question=question))
-    print(prog)
+    for retry in range(1):
+        prog,_ = generator.generate(dict(question=question),retry)
+        print(prog)
 
-    pred_positive_images = []
-    img_dir = os.path.join(config['data_dir'], "clevr/images/test")
-    failed = 0
-    for fid in tqdm(range(15000)):
-        filename = f"CLEVR_test_{str(fid).zfill(6)}.png"
-        filepath = os.path.join(img_dir, filename)
-        image = Image.open(filepath)
-        image.thumbnail((640,640),Image.Resampling.LANCZOS)
-        init_state = dict(
-            IMAGE=image.convert('RGB')
-        )
-        if use_precomputed:
-            init_state['fid'] = fid
+        pred_positive_images = []
+        img_dir = os.path.join(config['data_dir'], "clevr/images/test")
+        failed = 0
         try:
-            result, prog_state = interpreter.execute(prog,init_state,inspect=False)
-        except:
+            for fid in tqdm(range(15000)):
+                filename = f"CLEVR_test_{str(fid).zfill(6)}.png"
+                filepath = os.path.join(img_dir, filename)
+                image = Image.open(filepath)
+                image.thumbnail((640,640),Image.Resampling.LANCZOS)
+                init_state = dict(
+                    IMAGE=image.convert('RGB')
+                )
+                if use_precomputed:
+                    init_state['fid'] = fid
+                result, prog_state = interpreter.execute(prog,init_state,inspect=False)
+                if result == "yes":
+                    pred_positive_images.append(fid)
+            print(pred_positive_images)
+            break
+        except Exception as e:
+            print(e)
             failed += 1
-            continue
-        if result == "yes":
-            pred_positive_images.append(fid)
-    print(pred_positive_images)
 
     pred_labels = []
     for fid in range(15000):

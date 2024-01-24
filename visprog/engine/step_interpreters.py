@@ -1515,7 +1515,7 @@ class LocClevrInterpreter(LocInterpreter):
 
     def predict_clevrer_precomputed(self,fid,obj_classes=None):
         # Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
-        duckdb.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,))
+        self.conn.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,))
         results = self.conn.fetchall()
         objs = []
         inst_id = 0

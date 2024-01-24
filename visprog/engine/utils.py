@@ -78,7 +78,7 @@ class ProgramGenerator():
             response.choices[0].logprobs.token_logprobs[:i]))
 
     @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
-    def generate(self,inputs):
+    def generate(self,inputs,retry=0):
         print(self.prompter(inputs))
         if self.llm_model == "gpt-3.5-turbo-instruct":
             print("Using gpt-3.5-turbo-instruct")
@@ -89,14 +89,14 @@ class ProgramGenerator():
                 max_tokens=512,
                 top_p=self.top_p,
                 logprobs=1,
-                seed=42
+                seed=42+retry
             )
 
             prob = self.compute_prob(response)
             prog = response.choices[0].text.lstrip('\n').rstrip('\n')
         elif self.llm_model in ["gpt-3.5-turbo-1106", "gpt-4-1106-preview"]:
             print("Using ", self.llm_model)
-            system_prompt = "Generate a program based on the question, with no other comments, explanations, reasoning, or dialogue."
+            system_prompt = "Generate a program based on the question, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue."
             response = client.chat.completions.create(
                 model=self.llm_model,
                 messages=[
@@ -106,7 +106,7 @@ class ProgramGenerator():
                 temperature=self.temperature,
                 top_p=self.top_p,
                 max_tokens=512,
-                seed=42
+                seed=42+retry
             )
 
             prob = None

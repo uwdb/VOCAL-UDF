@@ -8,7 +8,7 @@ import imageio
 
 def image_formatter(img_path,size=224,vertical_align='middle'):
     img = Image.open(img_path)
-    img.thumbnail((size,size), Image.ANTIALIAS)
+    img.thumbnail((size,size), Image.LANCZOS)
     with BytesIO() as buffer:
         img.save(buffer, 'jpeg')
         base64_img = base64.b64encode(buffer.getvalue()).decode()
@@ -17,7 +17,7 @@ def image_formatter(img_path,size=224,vertical_align='middle'):
 
 def html_embed_image(img,size=100):
     img =  img.copy()
-    img.thumbnail((size,size), Image.ANTIALIAS)
+    img.thumbnail((size,size), Image.LANCZOS)
     with BytesIO() as buffer:
         img.save(buffer, 'jpeg')
         base64_img = base64.b64encode(buffer.getvalue()).decode()
@@ -27,7 +27,7 @@ def html_embed_video(video,size=100):
     pil_images = []
     for fid, img in sorted(video.items()):
         img =  img.copy()
-        img.thumbnail((size,size), Image.ANTIALIAS)
+        img.thumbnail((size,size), Image.LANCZOS)
         pil_images.append(img)
     fps = 24
     # print("#images=",len(pil_images))
