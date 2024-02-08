@@ -27,7 +27,7 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/visprog_clevrer.py \
         --use_precomputed \
         --save_output \
-        --output_dir "/gscratch/balazinska/enhaoz/VOCAL-UDF/outputs/clevrer" \
+        --output_dir "/gscratch/balazinska/enhaoz/VOCAL-UDF/outputs" \
         --run_id $run \
         --question_id $question_id \
         --task_name "$task_name" \

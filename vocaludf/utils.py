@@ -148,7 +148,7 @@ def duckdb_execute_clevrer_dataframe(conn, current_query, memo, inputs_table_nam
                     cached_output_vids.append(vid)
 
         # select input videos
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_{t} ON {t} (fid);".format(t=inputs_table_name))
+        # cur.execute("CREATE INDEX IF NOT EXISTS idx_{t} ON {t} (fid);".format(t=inputs_table_name))
         parameters = ','.join('?' for _ in filtered_vids)
         # cur.execute("CREATE TEMPORARY VIEW Obj_filtered AS SELECT * FROM {inputs_table_name} WHERE vid < {input_vids};".format(inputs_table_name=inputs_table_name, input_vids=input_vids))
         Obj_filtered = cur.execute("SELECT * FROM {inputs_table_name} WHERE vid = ANY([{parameters}]);".format(inputs_table_name=inputs_table_name, parameters=parameters), filtered_vids).fetchdf()
@@ -253,6 +253,7 @@ def duckdb_execute_clevrer_dataframe(conn, current_query, memo, inputs_table_nam
             """.format(graph_idx=graph_idx, obj_union_fields=obj_union_fields, duration_constraint=duration_constraint)
             # print(sql_string)
             graph_contiguous = cur.execute(sql_string).fetchdf()
+            print(graph_contiguous)
             print("here5")
             print("here6")
             cur.execute("SELECT DISTINCT vid FROM graph_contiguous".format(graph_idx))

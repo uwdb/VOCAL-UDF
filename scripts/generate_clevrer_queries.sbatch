@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name=generate_clevrer_queries
 #SBATCH --partition=gpu-a40
-#SBATCH --account=balazinska
+#SBATCH --account=krishna
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=50G

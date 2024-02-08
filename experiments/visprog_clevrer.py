@@ -16,6 +16,7 @@ import json
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import yaml
 import cv2
+import random
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -40,8 +41,27 @@ if __name__ == "__main__":
 
     config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
-    module_list = ["LOC", "TRACK", "GRAY", "RED", "BLUE", "GREEN", "CUBE", "SPHERE", "RUBBER", "LEFTOF", "FRONTOF", "LEFT", "TOP", "EVENT", "BEFORE", "EVAL", "RESULT"]
+    # read json file
+    with open(os.path.join(config['data_dir'], "clevrer", "3_new_udfs_labels.json"), "r") as f:
+        data = json.load(f)
+    question = data['questions'][question_id]['question']
+    gt_positive_videos = data['questions'][question_id]['positive_videos']
+    new_modules = data['questions'][question_id]['new_modules']
+    print(question)
+    print(new_modules)
 
+    # Base modules
+    module_list = ["LOC", "TRACK", "GRAY", "RED", "BLUE", "GREEN", "CUBE", "SPHERE", "RUBBER", "LEFTOF", "FRONTOF", "LEFT", "TOP", "EVENT", "BEFORE", "EVAL", "RESULT"]
+    random.seed(run_id)
+    if "0" in task_name: # VisProg has access to all UDFs
+        module_list = module_list + new_modules
+    elif "1" in task_name: # VisProg doesn't have access to 1 UDF
+        module_list = module_list + random.sample(new_modules, 2)
+    elif "2" in task_name: # VisProg doesn't have access to 2 UDFs
+        module_list = module_list + random.sample(new_modules, 1)
+    elif "3" in task_name: # VisProg doesn't have access to 3 UDFs
+        module_list = module_list
+    print("module_list", module_list)
     interpreter = ProgramInterpreter(dataset='clevrer', use_precomputed=use_precomputed, module_list=module_list)
 
     prompt_modules = '\n'.join(module_list)
@@ -49,13 +69,6 @@ if __name__ == "__main__":
 
     prompter = partial(create_prompt, method='random', num_prompts=8, seed=run_id, prompt_modules=prompt_modules)
     generator = ProgramGenerator(prompter=prompter, temperature=config['visprog']['program_generator']['temperature'],top_p=config['visprog']['program_generator']['top_p'], llm_model=llm_model)
-
-    # read json file
-    with open(os.path.join(config['data_dir'], "clevrer", "{}.json".format(task_name)), "r") as f:
-        data = json.load(f)
-    question = data['questions'][question_id]['question']
-    gt_positive_videos = data['questions'][question_id]['positive_videos']
-    print(question)
 
     gt_labels = []
     for vid in range(10000):
@@ -139,8 +152,8 @@ if __name__ == "__main__":
             "failed": failed
         }
         # create output directory if not exists
-        if not os.path.exists(os.path.join(output_dir, llm_model)):
-            os.makedirs(os.path.join(output_dir, llm_model))
+        if not os.path.exists(os.path.join(output_dir, 'clevrer', llm_model)):
+            os.makedirs(os.path.join(output_dir, 'clevrer', llm_model))
 
-        with open(os.path.join(output_dir, llm_model, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
+        with open(os.path.join(output_dir, 'clevrer', llm_model, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
             json.dump(output, f)

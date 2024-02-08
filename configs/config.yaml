@@ -1,6 +1,7 @@
 db_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir
 data_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data
 output_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/outputs
+llava_path: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models/llava-1.5-7b-hf
 visprog:
   program_generator:
     temperature: 0.2

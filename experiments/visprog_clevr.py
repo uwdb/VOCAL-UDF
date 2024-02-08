@@ -15,6 +15,7 @@ from tqdm import tqdm
 import json
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import yaml
+import random
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -39,22 +40,35 @@ if __name__ == "__main__":
 
     config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
-    module_list = ["LOC", "BIG", "GRAY", "RED", "BLUE", "GREEN", "CUBE", "SPHERE", "RUBBER", "LEFTOF", "FRONTOF", "EQUALSIZE", "EQUALMATERIAL", "EVAL", "RESULT"]
+    # read json file
+    # Fix the test queries, only vary the number of available UDFs
+    with open(os.path.join(config['data_dir'], "clevr", "3_new_udfs_labels.json"), "r") as f:
+        data = json.load(f)
+    question = data['questions'][question_id]['question']
+    gt_positive_images = data['questions'][question_id]['positive_images']
+    new_modules = data['questions'][question_id]['new_modules']
+    print(question)
+    print(new_modules)
 
+    # Base modules
+    module_list = ["LOC", "BIG", "GRAY", "RED", "BLUE", "GREEN", "CUBE", "SPHERE", "RUBBER", "LEFTOF", "FRONTOF", "EQUALSIZE", "EQUALMATERIAL", "EVAL", "RESULT", "EVENT"]
+    random.seed(run_id)
+    if "0" in task_name: # VisProg has access to all UDFs
+        module_list = module_list + new_modules
+    elif "1" in task_name: # VisProg doesn't have access to 1 UDF
+        module_list = module_list + random.sample(new_modules, 2)
+    elif "2" in task_name: # VisProg doesn't have access to 2 UDFs
+        module_list = module_list + random.sample(new_modules, 1)
+    elif "3" in task_name: # VisProg doesn't have access to 3 UDFs
+        module_list = module_list
+    print("module_list", module_list)
     interpreter = ProgramInterpreter(dataset='clevr', use_precomputed=use_precomputed, module_list=module_list)
 
     prompt_modules = '\n'.join(module_list)
     prompt_modules = f'You can only use modules below to generate the program:\n{prompt_modules}'
 
-    prompter = partial(create_prompt, method='random', num_prompts=18, seed=run_id, prompt_modules=prompt_modules)
+    prompter = partial(create_prompt, method='random', num_prompts=15, seed=run_id, prompt_modules=prompt_modules)
     generator = ProgramGenerator(prompter=prompter, temperature=config['visprog']['program_generator']['temperature'],top_p=config['visprog']['program_generator']['top_p'], llm_model=llm_model)
-
-    # read json file
-    with open(os.path.join(config['data_dir'], "clevr", "{}.json".format(task_name)), "r") as f:
-        data = json.load(f)
-    question = data['questions'][question_id]['question']
-    gt_positive_images = data['questions'][question_id]['positive_images']
-    print(question)
 
     gt_labels = []
     for fid in range(15000):
@@ -72,15 +86,17 @@ if __name__ == "__main__":
         failed = 0
         try:
             for fid in tqdm(range(15000)):
-                filename = f"CLEVR_test_{str(fid).zfill(6)}.png"
-                filepath = os.path.join(img_dir, filename)
-                image = Image.open(filepath)
-                image.thumbnail((640,640),Image.Resampling.LANCZOS)
+                image = []
+                if not use_precomputed:
+                    filename = f"CLEVR_test_{str(fid).zfill(6)}.png"
+                    filepath = os.path.join(img_dir, filename)
+                    image = Image.open(filepath)
+                    image.thumbnail((640,640),Image.Resampling.LANCZOS)
+                    image = image.convert('RGB')
                 init_state = dict(
-                    IMAGE=image.convert('RGB')
+                    IMAGE=image,
+                    fid=fid
                 )
-                if use_precomputed:
-                    init_state['fid'] = fid
                 result, prog_state = interpreter.execute(prog,init_state,inspect=False)
                 if result == "yes":
                     pred_positive_images.append(fid)
@@ -121,10 +137,10 @@ if __name__ == "__main__":
             "failed": failed
         }
         # create output directory if not exists
-        if not os.path.exists(os.path.join(output_dir, llm_model)):
-            os.makedirs(os.path.join(output_dir, llm_model))
+        if not os.path.exists(os.path.join(output_dir, 'clevr', llm_model)):
+            os.makedirs(os.path.join(output_dir, 'clevr', llm_model))
 
-        with open(os.path.join(output_dir, llm_model, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
+        with open(os.path.join(output_dir, 'clevr', llm_model, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
             json.dump(output, f)
 
 

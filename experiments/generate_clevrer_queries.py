@@ -66,7 +66,7 @@ def generate_one_query(conn, ratio_lower_bound, ratio_upper_bound, npred, nattr_
     nsupported_attr_pred = nattr_pred - nunsupported_attr_pred
     assert nunsupported_pred >= 0 and nunsupported_attr_pred >= 0 and nsupported_pred >= 0 and nsupported_attr_pred >= 0
 
-    unsupported_predicates = random.sample(unsupported_list, nunsupported_udfs) + random.sample(unsupported_attr_list, nunsupported_attr_pred)
+    unsupported_predicates = random.sample(unsupported_list, nunsupported_pred) + random.sample(unsupported_attr_list, nunsupported_attr_pred)
     for pred in unsupported_predicates:
         pred["variables"] = ["o_{}".format(i) for i in random.sample(list(range(nvars)), pred["nargs"])]
     candidate_predicate_list = []
@@ -162,7 +162,7 @@ def generate_gt_labels_given_target_query(conn, query_str, ratio_lower_bound, ra
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument("--n_queries", type=int, default=10, help="number of queries to generate")
-    ap.add_argument("--ratio_lower_bound", type=float, default=0.1, help="minimum ratio of positive examples to negative examples")
+    ap.add_argument("--ratio_lower_bound", type=float, default=0.05, help="minimum ratio of positive examples to negative examples")
     ap.add_argument("--ratio_upper_bound", type=float, default=0.9, help="maximum ratio of positive examples to negative examples")
     ap.add_argument("--npred", type=int, default=5, help="number of predicates in each query")
     ap.add_argument("--nattr_pred", type=int, default=2, help="number of attribute predicates in each query")
