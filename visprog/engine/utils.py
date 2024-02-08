@@ -17,7 +17,20 @@ class Program:
     def __init__(self,prog_str,init_state=None):
         self.prog_str = prog_str
         self.state = init_state if init_state is not None else dict()
-        self.instructions = self.prog_str.split('\n')
+        instructions = self.prog_str.split('\n')
+        # Remove comments, empty lines, and leading/trailing spaces
+        cleaned_instructions = []
+        for instruction in instructions:
+            if instruction.startswith('#'):
+                continue
+            comment_idx = instruction.find('#')
+            if comment_idx!=-1:
+                instruction = instruction[:comment_idx]
+            instruction = instruction.strip()
+            if instruction=='':
+                continue
+            cleaned_instructions.append(instruction)
+        self.instructions = cleaned_instructions
 
 
 class ProgramInterpreter:
