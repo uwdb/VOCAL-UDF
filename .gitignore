@@ -18,11 +18,15 @@ outputs/*
 *.o
 *.so
 data/clevr/*
+data/models/*
 *.pt
 *.duckdb*
 duckdb_dir/*
 */build/*
 *.out
+LLaVA/
+*/.cache/*
+vocaludf/OAI_CONFIG_LIST
 # Un-ignore the following
 !LICENSE.txt
 !data/clevr/vocab_clevrer.json
