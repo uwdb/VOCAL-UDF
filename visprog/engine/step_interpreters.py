@@ -31,6 +31,7 @@ import pandas as pd
 from yolox.tracker.byte_tracker import BYTETracker
 from yolox.utils.visualize import plot_tracking, vis
 from argparse import Namespace
+import itertools
 
 config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
@@ -117,6 +118,9 @@ def html_output_as_table(content):
         content += '</table>'
         output = html_colored_span(content, 'green')
         return f'<b>{output}</b>'
+
+def html_dataframe(df):
+    return df.style.to_html(table_attributes='style="display:inline-table;"')
 
 def html_var_name(content):
     var_name = html_colored_span(content, 'blue')
@@ -1496,46 +1500,33 @@ class LocClevrInterpreter(LocInterpreter):
             boxes = boxes[indices].cpu().detach().numpy().tolist()
             scores = scores[indices].cpu().detach().numpy().tolist()
             labels = labels[indices].cpu().detach().numpy().tolist()
-            if len(boxes)==0:
-                return []
         else:
             boxes = boxes.cpu().detach().numpy().tolist()
             scores = scores.cpu().detach().numpy().tolist()
             labels = labels.cpu().detach().numpy().tolist()
         boxes = [self.normalize_coord(box,img.size) for box in boxes]
         objs = []
-        for i, (box, score, label) in enumerate(zip(boxes, scores, labels)):
+        for i, (box, label) in enumerate(zip(boxes, labels)):
+            color, material, shape = self.CLASS_NAMES[label].split(' ')
             objs.append(dict(
-                box=box,
-                score=score,
-                category=self.CLASS_NAMES[label],
-                inst_id=i,
-            ))
-        return objs
+                    oid=i,
+                    fid=0, # dummy
+                    x1=box[0],
+                    y1=box[1],
+                    x2=box[2],
+                    y2=box[3],
+                    shape=shape,
+                    color=color,
+                    material=material,
+                ))
+        return pd.DataFrame(objs)
 
     def predict_clevrer_precomputed(self,fid,obj_classes=None):
         # Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
-        self.conn.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,))
-        results = self.conn.fetchall()
-        objs = []
-        inst_id = 0
-        for result in results:
-            if obj_classes and set(obj_classes).issubset([result[3], result[4], result[2]]):
-                objs.append(dict(
-                    box=[result[5], result[6], result[7], result[8]],
-                    score=1,
-                    category=' '.join([result[3], result[4], result[2]]),
-                    inst_id=inst_id,
-                ))
-                inst_id += 1
-            elif not obj_classes:
-                objs.append(dict(
-                    box=[result[5], result[6], result[7], result[8]],
-                    score=1,
-                    category=' '.join([result[3], result[4], result[2]]),
-                    inst_id=result[1],
-                ))
-        return objs
+        df = self.conn.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,)).df()
+        if obj_classes:
+            raise NotImplementedError("only object='object' is supported for precomputed bounding box")
+        return df
 
     def execute(self,prog_step,inspect=False):
         """
@@ -1547,37 +1538,38 @@ class LocClevrInterpreter(LocInterpreter):
             fid = prog_step.state['fid']
             if obj_name=='object':
                 # Run clevrer object detector to detect all objects
-                objs = self.predict_clevrer_precomputed(fid)
+                df = self.predict_clevrer_precomputed(fid)
             else:
                 obj_classes = self.extract_words(obj_name)
                 clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
                 if set(obj_classes).issubset(clevrer_attributes):
                     # Run clevrer object detector for specific object classes
-                    objs = self.predict_clevrer_precomputed(fid, obj_classes)
+                    df = self.predict_clevrer_precomputed(fid, obj_classes)
                 else:
                     raise NotImplementedError("Precomputed bounding box only supports clevrer attributes")
         else:
             if obj_name=='object':
                 # Run clevrer object detector to detect all objects
-                objs = self.predict_clevrer(img)
+                df = self.predict_clevrer(img)
             else:
                 obj_classes = self.extract_words(obj_name)
                 clevrer_attributes = ['cube', 'sphere', 'cylinder', 'metal', 'rubber', 'red', 'blue', 'green', 'yellow', 'purple', 'gray', 'brown', 'cyan']
                 if set(obj_classes).issubset(clevrer_attributes):
                     # Run clevrer object detector for specific object classes
-                    objs = self.predict_clevrer(img, obj_classes)
+                    df = self.predict_clevrer(img, obj_classes)
                 else:
+                    raise NotImplementedError("only supports clevrer attributes")
                     # Run owlvit model
-                    objs = self.predict(img, obj_name) # can be empty list
-        bboxes = [obj['box'] for obj in objs]
-        box_img = self.box_image(img, bboxes)
-        prog_step.state[output_var] = objs
-        prog_step.state[output_var+'_IMAGE'] = box_img
+                    # objs = self.predict(img, obj_name) # can be empty list
+        bboxes = df[['x1', 'y1', 'x2', 'y2']].values.tolist()
+        prog_step.state[output_var] = df
         if inspect:
+            box_img = self.box_image(img, bboxes)
+            prog_step.state[output_var+'_IMAGE'] = box_img
             html_str = self.html(img, box_img, output_var, obj_name)
-            return objs, html_str
+            return df, html_str
 
-        return objs
+        return df
 
 class AttrClevrInterpreter():
     def __init__(self):
@@ -1587,17 +1579,18 @@ class AttrClevrInterpreter():
         parse_result = parse_step(prog_step.prog_str)
         step_name = parse_result['step_name']
         obj_var = parse_result['args']['object']
+        bind_variable = eval(parse_result['args']['var'])
         output_var = parse_result['output_var']
         assert(step_name==self.step_name)
-        return obj_var,output_var
+        return obj_var, bind_variable, output_var
 
-    def html(self, input_img, output_img, output_var):
+    def html(self, obj_df, output_df, output_var):
         step_name = html_step_name(self.step_name)
         output_var = html_var_name(output_var)
         obj_arg = html_arg_name('object')
-        obj_img = html_embed_image(input_img)
-        output_img = html_embed_image(output_img)
-        return f"""<div>{output_var}={step_name}({obj_arg}={obj_img})={output_img}</div>"""
+        obj_table = html_dataframe(obj_df)
+        output_table = html_dataframe(output_df)
+        return f"""<div>{output_var}={step_name}({obj_arg}={obj_table})={output_table}</div>"""
 
     def box_image(self,img,boxes):
         img1 = img.copy()
@@ -1608,105 +1601,100 @@ class AttrClevrInterpreter():
         return img1
 
     def execute(self,prog_step,inspect=False):
-        obj_var,output_var = self.parse(prog_step)
-        objs = prog_step.state[obj_var]
-        output_objs = []
-        for obj in objs:
-            if self.step_name.lower() in obj['category'].split(' '):
-                output_objs.append(obj)
-        img = prog_step.state['IMAGE']
-        output_img = self.box_image(img, [obj['box'] for obj in output_objs])
-        prog_step.state[output_var] = output_objs
-        prog_step.state[output_var+'_IMAGE'] = output_img
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        # obj_df: (oid, fid, shape, color, material, x1, y1, x2, y2)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute(f"""
+            SELECT oid as {bind_variable}_oid, fid
+            FROM obj_df
+            WHERE {self.col_name} = '{self.step_name.lower()}'
+        """).df()
+        prog_step.state[output_var] = output_df
         if inspect:
-            input_img = prog_step.state[obj_var+'_IMAGE']
-            html_str = self.html(input_img, output_img, output_var)
-            return output_objs, html_str
+            html_str = self.html(obj_df, output_df, output_var)
+            return output_df, html_str
 
-        return output_objs
+        return output_df
 
 class BigClevrInterpreter(AttrClevrInterpreter):
     step_name = 'BIG'
 
     def execute(self,prog_step,inspect=False):
-        obj_var,output_var = self.parse(prog_step)
-        objs = prog_step.state[obj_var]
-        output_objs = []
-        for obj in objs:
-            area = (obj['box'][2]-obj['box'][0])*(obj['box'][3]-obj['box'][1])
-            if area > 2400:
-                output_objs.append(obj)
-        img = prog_step.state['IMAGE']
-        output_img = self.box_image(img, [obj['box'] for obj in output_objs])
-        prog_step.state[output_var] = output_objs
-        prog_step.state[output_var+'_IMAGE'] = output_img
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute("SELECT oid as {}_oid, fid FROM obj_df WHERE (x2 - x1) * (y2 - y1) > 2400".format(bind_variable)).df()
+        prog_step.state[output_var] = output_df
         if inspect:
-            input_img = prog_step.state[obj_var+'_IMAGE']
-            html_str = self.html(input_img, output_img, output_var)
-            return output_objs, html_str
+            html_str = self.html(obj_df, output_df, output_var)
+            return output_df, html_str
 
-        return output_objs
+        return output_df
 
 class SmallClevrInterpreter(AttrClevrInterpreter):
     step_name = 'SMALL'
 
     def execute(self,prog_step,inspect=False):
-        obj_var,output_var = self.parse(prog_step)
-        objs = prog_step.state[obj_var]
-        output_objs = []
-        for obj in objs:
-            area = (obj['box'][2]-obj['box'][0])*(obj['box'][3]-obj['box'][1])
-            if area <= 2400:
-                output_objs.append(obj)
-        img = prog_step.state['IMAGE']
-        output_img = self.box_image(img, [obj['box'] for obj in output_objs])
-        prog_step.state[output_var] = output_objs
-        prog_step.state[output_var+'_IMAGE'] = output_img
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        obj_df = prog_step.state[obj_var]
+        output_df = duckdb.execute("SELECT oid as {}_oid, fid FROM obj_df WHERE (x2 - x1) * (y2 - y1) <= 2400".format(bind_variable)).df()
+        prog_step.state[output_var] = output_df
         if inspect:
-            input_img = prog_step.state[obj_var+'_IMAGE']
-            html_str = self.html(input_img, output_img, output_var)
-            return output_objs, html_str
+            html_str = self.html(obj_df, output_df, output_var)
+            return output_df, html_str
 
-        return output_objs
+        return output_df
 
 class GrayClevrInterpreter(AttrClevrInterpreter):
     step_name = 'GRAY'
+    col_name = 'color'
 
 class RedClevrInterpreter(AttrClevrInterpreter):
     step_name = 'RED'
+    col_name = 'color'
 
 class BlueClevrInterpreter(AttrClevrInterpreter):
     step_name = 'BLUE'
+    col_name = 'color'
 
 class GreenClevrInterpreter(AttrClevrInterpreter):
     step_name = 'GREEN'
+    col_name = 'color'
 
 class BrownClevrInterpreter(AttrClevrInterpreter):
     step_name = 'BROWN'
+    col_name = 'color'
 
 class PurpleClevrInterpreter(AttrClevrInterpreter):
     step_name = 'PURPLE'
+    col_name = 'color'
 
 class CyanClevrInterpreter(AttrClevrInterpreter):
     step_name = 'CYAN'
+    col_name = 'color'
 
 class YellowClevrInterpreter(AttrClevrInterpreter):
     step_name = 'YELLOW'
+    col_name = 'color'
 
 class CubeClevrInterpreter(AttrClevrInterpreter):
     step_name = 'CUBE'
+    col_name = 'shape'
 
 class SphereClevrInterpreter(AttrClevrInterpreter):
     step_name = 'SPHERE'
+    col_name = 'shape'
 
 class CylinderClevrInterpreter(AttrClevrInterpreter):
     step_name = 'CYLINDER'
+    col_name = 'shape'
 
 class RubberClevrInterpreter(AttrClevrInterpreter):
     step_name = 'RUBBER'
+    col_name = 'material'
 
 class MetalClevrInterpreter(AttrClevrInterpreter):
     step_name = 'METAL'
+    col_name = 'material'
 
 class RelClevrInterpreter():
     def __init__(self):
@@ -1718,89 +1706,221 @@ class RelClevrInterpreter():
         output_var = parse_result['output_var']
         object1_var = parse_result['args']['object1']
         object2_var = parse_result['args']['object2']
+        bind_variable1 = eval(parse_result['args']['var1'])
+        bind_variable2 = eval(parse_result['args']['var2'])
         assert(step_name==self.step_name)
-        return object1_var, object2_var, output_var
+        return object1_var, object2_var, bind_variable1, bind_variable2, output_var
 
-    def html(self, object1_img, object2_img, output_var, rels):
+    def html(self, obj1_df, obj2_df, output_df, output_var):
         step_name = html_step_name(self.step_name)
         object1_arg=html_arg_name('object1')
         object2_arg=html_arg_name('object2')
         output_var = html_var_name(output_var)
-        object1_img = html_embed_image(object1_img)
-        object2_img = html_embed_image(object2_img)
-        output = html_output_as_table(rels)
-        return f"""<div>{output_var}={step_name}({object1_arg}={object1_img}, {object2_arg}={object2_img})={output}</div>"""
-
-    def execute(self,prog_step,inspect=False):
-        object1_var, object2_var, output_var = self.parse(prog_step)
-        object1 = prog_step.state[object1_var]
-        object2 = prog_step.state[object2_var]
-        rels = []
-        for obj1 in object1:
-            for obj2 in object2:
-                if self.eval_rel(obj1, obj2):
-                    rels.append(dict(
-                        object1=obj1,
-                        object2=obj2,
-                        relation=self.step_name.lower()
-                    ))
-        prog_step.state[output_var] = rels
-        if inspect:
-            object1_img = prog_step.state[object1_var+'_IMAGE']
-            object2_img = prog_step.state[object2_var+'_IMAGE']
-            html_str = self.html(object1_img, object2_img, output_var, rels)
-            return rels, html_str
-        return rels
+        obj1_table = html_dataframe(obj1_df)
+        obj2_table = html_dataframe(obj2_df)
+        output_table = html_dataframe(output_df)
+        return f"""<div>{output_var}={step_name}({object1_arg}={obj1_table}, {object2_arg}={obj2_table})={output_table}</div>"""
 
 class LeftOfClevrInterpreter(RelClevrInterpreter):
     step_name = 'LEFTOF'
-    def eval_rel(self, obj1, obj2):
-        return obj1['inst_id'] != obj2['inst_id'] and obj1['box'][0] + obj1['box'][2] < obj2['box'][0] + obj2['box'][2]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND LeftOf(obj1_df.x1, obj1_df.x2, obj2_df.x1, obj2_df.x2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class RightOfClevrInterpreter(RelClevrInterpreter):
     step_name = 'RIGHTOF'
-    def eval_rel(self, obj1, obj2):
-        return obj1['inst_id'] != obj2['inst_id'] and obj1['box'][0] + obj1['box'][2] > obj2['box'][0] + obj2['box'][2]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND RightOf(obj1_df.x1, obj1_df.x2, obj2_df.x1, obj2_df.x2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class FrontOfClevrInterpreter(RelClevrInterpreter):
     step_name = 'FRONTOF'
-    def eval_rel(self, obj1, obj2):
-        return obj1['inst_id'] != obj2['inst_id'] and obj1['box'][1] + obj1['box'][3] > obj2['box'][1] + obj2['box'][3]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND FrontOf(obj1_df.y1, obj1_df.y2, obj2_df.y1, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class BehindClevrInterpreter(RelClevrInterpreter):
     step_name = 'BEHIND'
-    def eval_rel(self, obj1, obj2):
-        return obj1['inst_id'] != obj2['inst_id'] and obj1['box'][1] + obj1['box'][3] < obj2['box'][1] + obj2['box'][3]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND Behind(obj1_df.y1, obj1_df.y2, obj2_df.y1, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class EqualSizeClevrInterpreter(RelClevrInterpreter):
     step_name = 'EQUALSIZE'
-    def eval_rel(self, obj1, obj2):
-        if obj1['inst_id'] == obj2['inst_id']:
-            return False
-        area1 = (obj1['box'][2]-obj1['box'][0])*(obj1['box'][3]-obj1['box'][1])
-        area2 = (obj2['box'][2]-obj2['box'][0])*(obj2['box'][3]-obj2['box'][1])
-        return (area1 > 2400 and area2 > 2400) or (area1 <= 2400 and area2 <= 2400)
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND EqualSize(obj1_df.x1, obj1_df.y1, obj1_df.x2, obj1_df.y2, obj2_df.x1, obj2_df.y1, obj2_df.x2, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class EqualMaterialClevrInterpreter(RelClevrInterpreter):
     step_name = 'EQUALMATERIAL'
-    def eval_rel(self, obj1, obj2):
-        if obj1['inst_id'] == obj2['inst_id']:
-            return False
-        return obj1['category'].split(' ')[1] == obj2['category'].split(' ')[1]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND obj1_df.material = obj2_df.material
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class EqualShapeClevrInterpreter(RelClevrInterpreter):
     step_name = 'EQUALSHAPE'
-    def eval_rel(self, obj1, obj2):
-        if obj1['inst_id'] == obj2['inst_id']:
-            return False
-        return obj1['category'].split(' ')[2] == obj2['category'].split(' ')[2]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND obj1_df.shape = obj2_df.shape
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
 
 class EqualColorClevrInterpreter(RelClevrInterpreter):
     step_name = 'EQUALCOLOR'
-    def eval_rel(self, obj1, obj2):
-        if obj1['inst_id'] == obj2['inst_id']:
-            return False
-        return obj1['category'].split(' ')[0] == obj2['category'].split(' ')[0]
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND obj1_df.color = obj2_df.color
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(obj1_df, obj2_df, output_df, output_var)
+            return output_df, html_str
+        return output_df
+
+class EventClevrInterpreter():
+    step_name = 'EVENT'
+
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        predicates_vars = parse_result['args']['predicates'][1:-1].split(',')
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return predicates_vars, output_var
+
+    def html(self, predicate_dfs, output_df, output_var):
+        step_name = html_step_name(self.step_name)
+        predicates_arg = html_arg_name('predicates')
+        output_var = html_var_name(output_var)
+        predicate_tables = []
+        for predicate_df in predicate_dfs:
+            predicate_tables.append(html_dataframe(predicate_df))
+        predicate_tables = ", ".join(predicate_tables)
+        output_table = html_dataframe(output_df)
+        return f"""<div>{output_var}={step_name}({predicates_arg}={predicate_tables})={output_table}</div>"""
+
+    def execute(self,prog_step,inspect=False):
+        predicates_vars, output_var = self.parse(prog_step)
+        variable_names = set()
+        # List of dataframes for each predicate
+        predicate_dfs = [prog_step.state[predicates_var] for predicates_var in predicates_vars]
+        # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
+        predicate_df_names = [f"pred{i}_df" for i in range(len(predicate_dfs))]
+        for predicate_df, predicate_df_name in zip(predicate_dfs, predicate_df_names):
+            # print(f"{predicate_df_name} dataframe ", predicate_df.to_string())
+            exec(f"{predicate_df_name} = predicate_df")
+            for col in predicate_df.columns:
+                if col.endswith('_oid'):
+                    variable_names.add(col)
+        # Compute natural join of dataframes. It's guaranteed that there are common columns for each pair of dataframes, as each dataframe has fid column.
+        from_join_clause = " natural join ".join(predicate_df_names)
+        where_clauses = []
+        for var_pair in itertools.combinations(variable_names, 2):
+                where_clauses.append(f"{var_pair[0]} <> {var_pair[1]}")
+        where_clauses = " and ".join(where_clauses)
+        if where_clauses:
+            output_df = duckdb.execute(f"SELECT * FROM {from_join_clause} WHERE {where_clauses}").df()
+        else:
+            output_df = duckdb.execute(f"SELECT * FROM {from_join_clause}").df()
+        # print("from_join_clause", from_join_clause)
+
+        prog_step.state[output_var] = output_df
+        if inspect:
+            html_str = self.html(predicate_dfs, output_df, output_var)
+            return output_df, html_str
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
 
 #### Clevrer modules ####
 class LocClevrerInterpreter(LocInterpreter):
@@ -2145,7 +2265,7 @@ class LeftOfClevrerInterpreter(RelClevrerInterpreter):
         prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
-        # print(f"{self.step_name} dataframe ", output_df)
+        # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
 class RightOfClevrerInterpreter(RelClevrerInterpreter):
@@ -2163,7 +2283,7 @@ class RightOfClevrerInterpreter(RelClevrerInterpreter):
         prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
-        # print(f"{self.step_name} dataframe ", output_df)
+        # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
 class FrontOfClevrerInterpreter(RelClevrerInterpreter):
@@ -2181,7 +2301,7 @@ class FrontOfClevrerInterpreter(RelClevrerInterpreter):
         prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
-        # print(f"{self.step_name} dataframe ", output_df)
+        # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
 class BehindClevrerInterpreter(RelClevrerInterpreter):
@@ -2195,6 +2315,42 @@ class BehindClevrerInterpreter(RelClevrerInterpreter):
             FROM obj1_df, obj2_df
             WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
                 AND Behind(obj1_df.y1, obj1_df.y2, obj2_df.y1, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class NearClevrerInterpreter(RelClevrerInterpreter):
+    step_name = 'NEAR'
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND Near(1.0, obj1_df.x1, obj1_df.y1, obj1_df.x2, obj1_df.y2, obj2_df.x1, obj2_df.y1, obj2_df.x2, obj2_df.y2) = true
+        """.format(bind_variable1, bind_variable2)).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
+class FarClevrerInterpreter(RelClevrerInterpreter):
+    step_name = 'FAR'
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_df = prog_step.state[object1_var]
+        obj2_df = prog_step.state[object2_var]
+        output_df = duckdb.execute("""
+            SELECT obj1_df.oid AS {}_oid, obj2_df.oid AS {}_oid, obj1_df.fid AS fid
+            FROM obj1_df, obj2_df
+            WHERE obj1_df.fid = obj2_df.fid AND obj1_df.oid <> obj2_df.oid
+                AND Far(3.0, obj1_df.x1, obj1_df.y1, obj1_df.x2, obj1_df.y2, obj2_df.x1, obj2_df.y1, obj2_df.x2, obj2_df.y2) = true
         """.format(bind_variable1, bind_variable2)).df()
         prog_step.state[output_var] = output_df
         if inspect:
@@ -2219,6 +2375,7 @@ class EventClevrerInterpreter():
 
     def execute(self,prog_step,inspect=False):
         predicates_vars, min_duration, output_var = self.parse(prog_step)
+        variable_names = set()
         # List of dataframes for each predicate
         predicate_dfs = [prog_step.state[predicates_var] for predicates_var in predicates_vars]
         # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
@@ -2226,9 +2383,22 @@ class EventClevrerInterpreter():
         for predicate_df, predicate_df_name in zip(predicate_dfs, predicate_df_names):
             # print(f"{predicate_df_name} dataframe ", predicate_df.to_string())
             exec(f"{predicate_df_name} = predicate_df")
+            for col in predicate_df.columns:
+                if col.endswith('_oid'):
+                    variable_names.add(col)
         # Compute natural join of dataframes. It's guaranteed that there are common columns for each pair of dataframes, as each dataframe has fid column.
         from_join_clause = " natural join ".join(predicate_df_names)
-        graph_df = duckdb.execute(f"SELECT * FROM {from_join_clause}").df()
+        where_clauses = []
+        for var_pair in itertools.combinations(variable_names, 2):
+                where_clauses.append(f"{var_pair[0]} <> {var_pair[1]}")
+        where_clauses = " and ".join(where_clauses)
+        if where_clauses:
+            # print(f"SELECT * FROM {from_join_clause} WHERE {where_clauses}")
+            graph_df = duckdb.execute(f"SELECT DISTINCT * FROM {from_join_clause} WHERE {where_clauses}").df()
+        else:
+            # print(f"SELECT * FROM {from_join_clause}")
+            graph_df = duckdb.execute(f"SELECT DISTINCT * FROM {from_join_clause}").df()
+        # print(f"{self.step_name} graph_df ", graph_df.to_string())
         # print("from_join_clause", from_join_clause)
         # if 'o2_oid' in graph_df.columns:
             # print("graph_df", graph_df.loc[graph_df['o2_oid'] == 6])
@@ -2249,7 +2419,7 @@ class EventClevrerInterpreter():
         prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
-        # print(f"{self.step_name} dataframe ", output_df)
+        # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
 class BeforeClevrerInterpreter():
@@ -2301,7 +2471,7 @@ class BeforeClevrerInterpreter():
         prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
-        # print(f"{self.step_name} dataframe ", output_df)
+        # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
 #### Video counterparts ####
@@ -2785,6 +2955,33 @@ def behind(o1_y1: float, o1_y2: float, o2_y1: float, o2_y2: float) -> bool:
     cy2 = (o2_y1 + o2_y2) / 2
     return cy1 < cy2
 
+def equal_size(o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:
+    area1 = (o1_x2 - o1_x1) * (o1_y2 - o1_y1)
+    area2 = (o2_x2 - o2_x1) * (o2_y2 - o2_y1)
+    return (area1 > 2400 and area2 > 2400) or (area1 <= 2400 and area2 <= 2400)
+
+def far(theta: float, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:
+    import math
+    cx1 = (o1_x1 + o1_x2) / 2
+    cy1 = (o1_y1 + o1_y2) / 2
+    cx2 = (o2_x1 + o2_x2) / 2
+    cy2 = (o2_y1 + o2_y2) / 2
+
+    distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)
+
+    return distance > theta
+
+def near(theta: float, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:
+    import math
+    cx1 = (o1_x1 + o1_x2) / 2
+    cy1 = (o1_y1 + o1_y2) / 2
+    cx2 = (o2_x1 + o2_x2) / 2
+    cy2 = (o2_y1 + o2_y2) / 2
+
+    distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)
+
+    return distance < theta
+
 def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_list=None):
     if dataset=='nlvr':
         return dict(
@@ -2855,9 +3052,15 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
             EQUALMATERIAL=EqualMaterialClevrInterpreter(),
             EQUALSHAPE=EqualShapeClevrInterpreter(),
             EQUALCOLOR=EqualColorClevrInterpreter(),
+            EVENT=EventClevrInterpreter(),
             EVAL=EvalInterpreter(),
             RESULT=ResultInterpreter()
         )
+        duckdb.create_function("LeftOf", left_of)
+        duckdb.create_function("RightOf", right_of)
+        duckdb.create_function("FrontOf", front_of)
+        duckdb.create_function("Behind", behind)
+        duckdb.create_function("EqualSize", equal_size)
         if module_list is None:
             return all_modules
         else:
@@ -2888,11 +3091,12 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
             RIGHTOF=RightOfClevrerInterpreter(),
             FRONTOF=FrontOfClevrerInterpreter(),
             BEHIND=BehindClevrerInterpreter(),
+            NEAR=NearClevrerInterpreter(),
+            FAR=FarClevrerInterpreter(),
             EVENT=EventClevrerInterpreter(),
             BEFORE=BeforeClevrerInterpreter(),
             EVAL=EvalInterpreter(),
             RESULT=ResultInterpreter()
-            # TODO: Add NEAR and FAR?
         )
         duckdb.create_function("Left", left)
         duckdb.create_function("Right", right)
@@ -2902,6 +3106,8 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
         duckdb.create_function("RightOf", right_of)
         duckdb.create_function("FrontOf", front_of)
         duckdb.create_function("Behind", behind)
+        duckdb.create_function("Far", far)
+        duckdb.create_function("Near", near)
         if module_list is None:
             return all_modules
         else:
