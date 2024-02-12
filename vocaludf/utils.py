@@ -175,7 +175,7 @@ def duckdb_execute_clevrer_dataframe(conn, current_query, memo, inputs_table_nam
                 where_clauses.append("{v1}.vid = {v2}.vid and {v1}.fid = {v2}.fid".format(v1=encountered_variables_current_graph[i], v2=encountered_variables_current_graph[i+1])) # join variables
             for p in scene_graph:
                 predicate = p["predicate"]
-                parameter = p["parameter"]
+                parameter = p.get("parameter", None)
                 variables = p["variables"]
                 args = []
                 for v in variables:
@@ -347,7 +347,7 @@ def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_tabl
                 where_clauses.append("{v1}.vid = {v2}.vid and {v1}.fid = {v2}.fid".format(v1=encountered_variables_current_graph[i], v2=encountered_variables_current_graph[i+1])) # join variables
             for p in scene_graph:
                 predicate = p["predicate"]
-                parameter = p["parameter"]
+                parameter = p.get("parameter", None)
                 variables = p["variables"]
                 args = []
                 for v in variables:

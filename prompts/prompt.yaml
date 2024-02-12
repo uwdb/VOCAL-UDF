@@ -20,7 +20,7 @@ system_prompt:
     The predicates MUST be selected from the provided functions. Think step by step about all the region graphs, predicates, and duration constraints needed to resolve the user's request. Parse out as few region graphs, predicates, and duration constraints as possible while ensuring that the user's intent can be precisely captured. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list or new enum options that are not in the current enum list, you need to reply an empty string and nothing else.
 
   parse_query: >
-    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done.
+    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL, or NO if parsing the user input requires new predicates that are not listed in the current functions list.
     Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Remember to always add parentheses around comma-connected predicates. Assume the video segments capture 25 frames per second.
     A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
     - object predicate: objectName(o0). For example, Car(o0) checks whether o0 is a car.
@@ -28,7 +28,7 @@ system_prompt:
     - attribute predicate: key_value(o0). For example, Color_Red(o0) checks whether the color of o0 is red.
     You have access to the following functions:
     {{functions}}
-    The predicates MUST be selected from the provided functions. Think step by step about all the region graphs, predicates, and duration constraints needed to resolve the user's request. Parse out as few region graphs, predicates, and duration constraints as possible while ensuring that the user's intent can be precisely captured. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list, you must simply reply: Input query can't be parsed using the existing functions.
+    The predicates MUST be selected from the provided functions. Think step by step about all the region graphs, predicates, and duration constraints needed to resolve the user's request. Parse out as few region graphs, predicates, and duration constraints as possible while ensuring that the user's intent can be precisely captured. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list, you must simply reply: NO.
 
   verify_udfs: >
     You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
