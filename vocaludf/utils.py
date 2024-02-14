@@ -278,7 +278,7 @@ def duckdb_execute_clevrer_dataframe(conn, current_query, memo, inputs_table_nam
         # print(output_vids)
     return output_vids, new_memo
 
-def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_table_name, input_vids):
+def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_table_name, input_vids, table_as_input_to_udf=False):
     """
     This method uses temp views and only caches binary query predictions.
     input_vids: list of video segment ids. For image datasets, this is actually fids.
@@ -349,13 +349,16 @@ def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_tabl
                 predicate = p["predicate"]
                 parameter = p.get("parameter", None)
                 variables = p["variables"]
-                args = []
-                for v in variables:
-                    if is_traffic:
-                        args.append("{v}.x1, {v}.y1, {v}.x2, {v}.y2, {v}.vx, {v}.vy, {v}.ax, {v}.ay".format(v=v))
-                    else:
-                        args.append("{v}.shape, {v}.color, {v}.material, {v}.x1, {v}.y1, {v}.x2, {v}.y2".format(v=v))
-                args = ", ".join(args)
+                if table_as_input_to_udf:
+                    args = ", ".join([v for v in variables])
+                else:
+                    args = []
+                    for v in variables:
+                        if is_traffic:
+                            args.append("{v}.x1, {v}.y1, {v}.x2, {v}.y2, {v}.vx, {v}.vy, {v}.ax, {v}.ay".format(v=v))
+                        else:
+                            args.append("{v}.shape, {v}.color, {v}.material, {v}.x1, {v}.y1, {v}.x2, {v}.y2".format(v=v))
+                    args = ", ".join(args)
                 if parameter:
                     if isinstance(parameter, str):
                         args = "'{}', {}".format(parameter, args)

@@ -28,174 +28,174 @@
         {
             "signature": "LeftOf(o0, o1)",
             "description": "Whether o0 is on the left of o1.",
-            "python_function": "def left_of(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  cx1 = (o1_x1 + o1_x2) / 2\n  cx2 = (o2_x1 + o2_x2) / 2\n  return cx1 < cx2"
+            "python_function": "def left_of(o1, o2):\n    cx1 = (o1['x1'] + o1['x2']) / 2\n    cx2 = (o2['x1'] + o2['x2']) / 2\n    return cx1 < cx2"
         },
         {
             "signature": "FrontOf(o0, o1)",
             "description": "Whether o0 is in front of o1.",
-            "python_function": "def front_of(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  cy1 = (o1_y1 + o1_y2) / 2\n  cy2 = (o2_y1 + o2_y2) / 2\n  return cy1 > cy2"
+            "python_function": "def front_of(o1, o2):\n    cy1 = (o1['y1'] + o1['y2']) / 2\n    cy2 = (o2['y1'] + o2['y2']) / 2\n    return cy1 > cy2"
         },
         {
             "signature": "Location_Left(o0)",
             "description": "Whether o0 is on the left of the frame.",
-            "python_function": "def left(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  cx1 = (o1_x1 + o1_x2) / 2\n  return cx1 >= 0 and cx1 < 240"
+            "python_function": "def left(o1):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  return cx1 >= 0 and cx1 < 240"
         },
         {
             "signature": "Location_Top(o0)",
             "description": "Whether o0 is at the top of the frame.",
-            "python_function": "def top(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 0 and cy1 < 160"
+            "python_function": "def top(o1):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  return cy1 >= 0 and cy1 < 160"
         },
         {
             "signature": "Color_Gray(o0)",
             "description": "Whether the color of o0 is gray.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'gray'"
+            "python_function": "def color_gray(o1):\n  return o1['color'] == 'gray'"
         },
         {
             "signature": "Color_Red(o0)",
             "description": "Whether the color of o0 is red.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'red'"
+            "python_function": "def color_red(o1):\n  return o1['color'] == 'red'"
         },
         {
             "signature": "Color_Blue(o0)",
             "description": "Whether the color of o0 is blue.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'blue'"
+            "python_function": "def color_blue(o1):\n  return o1['color'] == 'blue'"
         },
         {
             "signature": "Color_Green(o0)",
             "description": "Whether the color of o0 is green.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'green'"
+            "python_function": "def color_green(o1):\n  return o1['color'] == 'green'"
         },
         {
             "signature": "Shape_Cube(o0)",
             "description": "Whether the shape of o0 is cube.",
-            "python_function": "def shape(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_shape == 'cube'"
+            "python_function": "def shape_cube(o1):\n  return o1['shape'] == 'cube'"
         },
         {
             "signature": "Shape_Sphere(o0)",
             "description": "Whether the shape of o0 is sphere.",
-            "python_function": "def shape(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_shape == 'sphere'"
+            "python_function": "def shape_shpere(o1):\n  return o1['shape'] == 'sphere'"
         },
         {
             "signature": "Material_Rubber(o0)",
             "description": "Whether the material of o0 is rubber.",
-            "python_function": "def material(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_material == 'rubber'"
+            "python_function": "def material_rubber(o1):\n  return o1['material'] == 'rubber'"
         }
     ],
     "clevrer": [
         {
             "signature": "Near(o0, o1)",
             "description": "Whether o0 is near o1.",
-            "python_function": "def near(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  import math\n  cx1 = (o1_x1 + o1_x2) / 2\n  cy1 = (o1_y1 + o1_y2) / 2\n  cx2 = (o2_x1 + o2_x2) / 2\n  cy2 = (o2_y1 + o2_y2) / 2\n  distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)\n  return distance < 1.0"
+            "python_function": "def near(o1, o2):\n  import math\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n  distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1['x2'] - o1['x1'] + o2['x2'] - o2['x1']) / 2)\n  return distance < 1.0"
         },
         {
             "signature": "Far(o0, o1)",
             "description": "Whether o0 is far away from o1.",
-            "python_function": "def far(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  import math\n  cx1 = (o1_x1 + o1_x2) / 2\n  cy1 = (o1_y1 + o1_y2) / 2\n  cx2 = (o2_x1 + o2_x2) / 2\n  cy2 = (o2_y1 + o2_y2) / 2\n\n  distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)\n  return distance > 3.0"
+            "python_function": "def far(o1, o2):\n  import math\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n\n  distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1['x2'] - o1['x1'] + o2['x2'] - o2['x1']) / 2)\n  return distance > 3.0"
         },
         {
             "signature": "LeftOf(o0, o1)",
             "description": "Whether o0 is on the left of o1.",
-            "python_function": "def left_of(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  cx1 = (o1_x1 + o1_x2) / 2\n  cx2 = (o2_x1 + o2_x2) / 2\n  return cx1 < cx2"
+            "python_function": "def left_of(o1, o2):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  return cx1 < cx2"
         },
         {
             "signature": "RightOf(o0, o1)",
             "description": "Whether o0 is on the right of o1.",
-            "python_function": "def right_of(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  cx1 = (o1_x1 + o1_x2) / 2\n  cx2 = (o2_x1 + o2_x2) / 2\n  return cx1 > cx2"
+            "python_function": "def right_of(o1, o2):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  return cx1 > cx2"
         },
         {
             "signature": "Behind(o0, o1)",
             "description": "Whether o0 is behind o1.",
-            "python_function": "def behind(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  cy1 = (o1_y1 + o1_y2) / 2\n  cy2 = (o2_y1 + o2_y2) / 2\n  return cy1 < cy2"
+            "python_function": "def behind(o1, o2):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n  return cy1 < cy2"
         },
         {
             "signature": "FrontOf(o0, o1)",
             "description": "Whether o0 is in front of o1.",
-            "python_function": "def front_of(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float, o2_shape: str, o2_color: str, o2_material: str, o2_x1: float, o2_y1: float, o2_x2: float, o2_y2: float) -> bool:\n  cy1 = (o1_y1 + o1_y2) / 2\n  cy2 = (o2_y1 + o2_y2) / 2\n  return cy1 > cy2"
+            "python_function": "def front_of(o1, o2):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n  return cy1 > cy2"
         },
         {
             "signature": "Location_Left(o0)",
             "description": "Whether o0 is on the left of the frame.",
-            "python_function": "def left(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  cx1 = (o1_x1 + o1_x2) / 2\n  return cx1 >= 0 and cx1 < 240"
+            "python_function": "def left(o1):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  return cx1 >= 0 and cx1 < 240"
         },
         {
             "signature": "Location_Right(o0)",
             "description": "Whether o0 is on the right of the frame.",
-            "python_function": "def right(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  cx1 = (o1_x1 + o1_x2) / 2\n  return cx1 >= 240 and cx1 <= 480"
+            "python_function": "def right(o1):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  return cx1 >= 240 and cx1 <= 480"
         },
         {
             "signature": "Location_Top(o0)",
             "description": "Whether o0 is at the top of the frame.",
-            "python_function": "def top(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 0 and cy1 < 160"
+            "python_function": "def top(o1):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  return cy1 >= 0 and cy1 < 160"
         },
         {
             "signature": "Location_Bottom(o0)",
             "description": "Whether o0 is at the bottom of the frame.",
-            "python_function": "def bottom(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 160 and cy1 <= 320"
+            "python_function": "def bottom(o1):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  return cy1 >= 160 and cy1 <= 320"
         },
         {
             "signature": "Color_Gray(o0)",
             "description": "Whether the color of o0 is gray.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'gray'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'gray'"
         },
         {
             "signature": "Color_Red(o0)",
             "description": "Whether the color of o0 is red.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'red'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'red'"
         },
         {
             "signature": "Color_Blue(o0)",
             "description": "Whether the color of o0 is blue.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'blue'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'blue'"
         },
         {
             "signature": "Color_Green(o0)",
             "description": "Whether the color of o0 is green.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'green'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'green'"
         },
         {
             "signature": "Color_Brown(o0)",
             "description": "Whether the color of o0 is brown.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'brown'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'brown'"
         },
         {
             "signature": "Color_Cyan(o0)",
             "description": "Whether the color of o0 is cyan.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'cyan'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'cyan'"
         },
         {
             "signature": "Color_Purple(o0)",
             "description": "Whether the color of o0 is purple.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'purple'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'purple'"
         },
         {
             "signature": "Color_Yellow(o0)",
             "description": "Whether the color of o0 is yellow.",
-            "python_function": "def color(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_color == 'yellow'"
+            "python_function": "def color(o1):\n  return o1['color'] == 'yellow'"
         },
         {
             "signature": "Shape_Cube(o0)",
             "description": "Whether the shape of o0 is cube.",
-            "python_function": "def shape(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_shape == 'cube'"
+            "python_function": "def shape(o1):\n  return o1['shape'] == 'cube'"
         },
         {
             "signature": "Shape_Sphere(o0)",
             "description": "Whether the shape of o0 is sphere.",
-            "python_function": "def shape(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_shape == 'sphere'"
+            "python_function": "def shape(o1):\n  return o1['shape'] == 'sphere'"
         },
         {
             "signature": "Shape_Cylinder(o0)",
             "description": "Whether the shape of o0 is cylinder.",
-            "python_function": "def shape(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_shape == 'cylinder'"
+            "python_function": "def shape(o1):\n  return o1['shape'] == 'cylinder'"
         },
         {
             "signature": "Material_Rubber(o0)",
             "description": "Whether the material of o0 is rubber.",
-            "python_function": "def material(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_material == 'rubber'"
+            "python_function": "def material(o1):\n  return o1['material'] == 'rubber'"
         },
         {
             "signature": "Material_Metal(o0)",
             "description": "Whether the material of o0 is metal.",
-            "python_function": "def material(o1_shape: str, o1_color: str, o1_material: str, o1_x1: float, o1_y1: float, o1_x2: float, o1_y2: float) -> bool:\n  return o1_material == 'metal'"
+            "python_function": "def material(o1):\n  return o1['material'] == 'metal'"
         }
     ]
 }
