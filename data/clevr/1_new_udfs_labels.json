@@ -3,7 +3,7 @@
         {
             "question": "A gray object is in front of a rubber object, and a cube is in front of, to the left of, and has same shape as the rubber object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'gray'), EqualShape(o1, o2), FrontOf(o1, o2), FrontOf(o0, o2), LeftOf(o1, o2), Material(o2, 'rubber'), Shape(o1, 'cube'))",
+            "dsl": "(Color_gray(o0), EqualShape(o1, o2), FrontOf(o0, o2), FrontOf(o1, o2), LeftOf(o1, o2), Material_rubber(o2), Shape_cube(o1))",
             "positive_images": [
                 23,
                 26,
@@ -1740,7 +1740,7 @@
         {
             "question": "A big blue object is to the left of another object of the same material, which is behind the big blue object, and there is also a big sphere.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o1, 'blue'), EqualMaterial(o0, o1), LeftOf(o1, o0), Shape(o2, 'sphere'), Size(o2, 'big'), Size(o1, 'big'))",
+            "dsl": "(Behind(o0, o1), Color_blue(o1), EqualMaterial(o0, o1), LeftOf(o1, o0), Shape_sphere(o2), Size_big(o1), Size_big(o2))",
             "positive_images": [
                 4,
                 6,
@@ -3445,7 +3445,7 @@
         {
             "question": "A gray object is behind and to the left of a cube, and in front of a big object, which is of equal size to the cube.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o0, 'gray'), EqualSize(o1, o2), FrontOf(o0, o2), LeftOf(o0, o1), Shape(o1, 'cube'), Size(o2, 'big'))",
+            "dsl": "(Behind(o0, o1), Color_gray(o0), EqualSize(o1, o2), FrontOf(o0, o2), LeftOf(o0, o1), Shape_cube(o1), Size_big(o2))",
             "positive_images": [
                 16,
                 21,
@@ -5307,7 +5307,7 @@
         {
             "question": "A rubber cube is in front of a matte object and also in front of another object of the same shape, which is to the left of the matte object.",
             "visprog_program": "",
-            "dsl": "(EqualShape(o0, o1), FrontOf(o0, o2), FrontOf(o0, o1), LeftOf(o1, o2), Material(o2, 'rubber'), Material(o0, 'rubber'), Shape(o0, 'cube'))",
+            "dsl": "(EqualShape(o0, o1), FrontOf(o0, o1), FrontOf(o0, o2), LeftOf(o1, o2), Material_rubber(o0), Material_rubber(o2), Shape_cube(o0))",
             "positive_images": [
                 2,
                 6,
@@ -9537,7 +9537,7 @@
         {
             "question": "A blue object o1 is in front of an object o2, which is to the left of both o1 and another sphere o3. Moreover, o1 and o3 are made of the same material, and o3 and o2 have the same shape.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'blue'), EqualMaterial(o0, o1), EqualShape(o1, o2), FrontOf(o0, o2), LeftOf(o2, o0), LeftOf(o2, o1), Shape(o1, 'sphere'))",
+            "dsl": "(Color_blue(o0), EqualMaterial(o0, o1), EqualShape(o1, o2), FrontOf(o0, o2), LeftOf(o2, o0), LeftOf(o2, o1), Shape_sphere(o1))",
             "positive_images": [
                 4,
                 12,
@@ -11477,7 +11477,7 @@
         {
             "question": "A red rubber object is in front of a small sphere, and another object of equal size to the same red rubber object is to the left of the small sphere.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'red'), EqualSize(o1, o0), FrontOf(o0, o2), LeftOf(o1, o2), Material(o0, 'rubber'), Shape(o2, 'sphere'), Size(o2, 'small'))",
+            "dsl": "(Color_red(o0), EqualSize(o1, o0), FrontOf(o0, o2), LeftOf(o1, o2), Material_rubber(o0), Shape_sphere(o2), Size_small(o2))",
             "positive_images": [
                 4,
                 9,
@@ -13045,7 +13045,7 @@
         {
             "question": "A big sphere is in front of and to the left of another object, and there is also a small rubber sphere.",
             "visprog_program": "",
-            "dsl": "(FrontOf(o0, o1), LeftOf(o0, o1), Material(o2, 'rubber'), Shape(o0, 'sphere'), Shape(o2, 'sphere'), Size(o0, 'big'), Size(o2, 'small'))",
+            "dsl": "(FrontOf(o0, o1), LeftOf(o0, o1), Material_rubber(o2), Shape_sphere(o0), Shape_sphere(o2), Size_big(o0), Size_small(o2))",
             "positive_images": [
                 7,
                 9,
@@ -15972,7 +15972,7 @@
         {
             "question": "A big cube is to the left of a big object, and there is also a big metal object of the same size as the big cube.",
             "visprog_program": "",
-            "dsl": "(EqualSize(o0, o1), LeftOf(o0, o2), Material(o1, 'metal'), Shape(o0, 'cube'), Size(o0, 'big'), Size(o2, 'big'), Size(o1, 'big'))",
+            "dsl": "(EqualSize(o0, o1), LeftOf(o0, o2), Material_metal(o1), Shape_cube(o0), Size_big(o0), Size_big(o1), Size_big(o2))",
             "positive_images": [
                 2,
                 6,
@@ -22725,7 +22725,7 @@
         {
             "question": "A big cyan object o1 is the same size as another object o2, which is to the left of and has the same size as a rubber object o3, and o3 is made of the same material as o1.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), EqualMaterial(o1, o0), EqualSize(o2, o1), EqualSize(o2, o0), LeftOf(o2, o1), Material(o1, 'rubber'), Size(o0, 'big'))",
+            "dsl": "(Color_cyan(o0), EqualMaterial(o1, o0), EqualSize(o2, o0), EqualSize(o2, o1), LeftOf(o2, o1), Material_rubber(o1), Size_big(o0))",
             "positive_images": [
                 6,
                 17,
@@ -24621,7 +24621,7 @@
         {
             "question": "An object o1 is in front of another object o2, which is to the left of o1 and in front of a rubber object o3, with both objects o1 and o2 sharing the same size, color, and material.",
             "visprog_program": "",
-            "dsl": "(EqualColor(o0, o1), EqualMaterial(o1, o0), EqualSize(o1, o0), FrontOf(o1, o2), FrontOf(o0, o1), LeftOf(o1, o0), Material(o2, 'rubber'))",
+            "dsl": "(EqualColor(o0, o1), EqualMaterial(o1, o0), EqualSize(o1, o0), FrontOf(o0, o1), FrontOf(o1, o2), LeftOf(o1, o0), Material_rubber(o2))",
             "positive_images": [
                 2,
                 10,

@@ -41,4 +41,4 @@ def key_value_attr_to_aname(dir_name):
                 json.dump(data, f, indent=4)
 
 if __name__ == "__main__":
-    key_value_attr_to_aname("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer")
+    key_value_attr_to_aname("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevr")

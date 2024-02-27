@@ -3,7 +3,7 @@
         {
             "question": "A yellow object is in front of two other objects, one of which is the same shape and size as the yellow object. The yellow object is also on the left side of one object, which in turn is on the left side of the other object that is the same shape and size as the yellow object.",
             "visprog_program": "",
-            "dsl": "(Color_yellow(o0), EqualShape(o1, o0), EqualSize(o1, o0), FrontOf(o0, o2), FrontOf(o0, o1), LeftOf(o2, o1), LeftOf(o0, o2))",
+            "dsl": "(Color_yellow(o0), EqualShape(o1, o0), EqualSize(o1, o0), FrontOf(o0, o1), FrontOf(o0, o2), LeftOf(o0, o2), LeftOf(o2, o1))",
             "new_modules": [],
             "positive_images": [
                 15,
@@ -11611,7 +11611,7 @@
         {
             "question": "A big sphere is behind an object of the same shape, and it is also the same size and shape as another object that is to its left.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), EqualShape(o0, o2), EqualShape(o0, o1), EqualSize(o0, o2), LeftOf(o2, o0), Shape_sphere(o0), Size_big(o1))",
+            "dsl": "(Behind(o0, o1), EqualShape(o0, o1), EqualShape(o0, o2), EqualSize(o0, o2), LeftOf(o2, o0), Shape_sphere(o0), Size_big(o1))",
             "new_modules": [],
             "positive_images": [
                 4,
@@ -20909,7 +20909,7 @@
         {
             "question": "It appears there is a slight inconsistency in the final query provided. The functions are not formatted according to the DSL definition given at the beginning. However, I will attempt to translate the intended query by inferring the proper function names:\n\nAssuming the intended functions are:\n- Color(o0, 'yellow') instead of Color_yellow(o0)\n- Shape(o2, 'cube') instead of Shape_cube(o2)\n\nThe translation in natural language for the corrected query could be:\nA yellow object has the same shape as another object which is in front of and to the left of a third object, while the yellow object is also to the right of the second object, and the third object is a cube.",
             "visprog_program": "",
-            "dsl": "(Color_yellow(o0), EqualShape(o1, o0), FrontOf(o1, o2), LeftOf(o1, o2), LeftOf(o1, o0), RightOf(o0, o1), Shape_cube(o2))",
+            "dsl": "(Color_yellow(o0), EqualShape(o1, o0), FrontOf(o1, o2), LeftOf(o1, o0), LeftOf(o1, o2), RightOf(o0, o1), Shape_cube(o2))",
             "new_modules": [],
             "positive_images": [
                 22,

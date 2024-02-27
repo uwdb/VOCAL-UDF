@@ -3,7 +3,7 @@
         {
             "question": "A sphere is behind a small cube, which is to the left of another object, which is in front of and has the same size as the sphere.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), EqualSize(o2, o0), FrontOf(o2, o0), LeftOf(o1, o2), Shape(o1, 'cube'), Shape(o0, 'sphere'), Size(o1, 'small'))",
+            "dsl": "(Behind(o0, o1), EqualSize(o2, o0), FrontOf(o2, o0), LeftOf(o1, o2), Shape_cube(o1), Shape_sphere(o0), Size_small(o1))",
             "positive_images": [
                 26,
                 39,
@@ -6354,7 +6354,7 @@
         {
             "question": "A rubber object is behind a small sphere, which is to the left of another rubber sphere.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), LeftOf(o1, o2), Material(o2, 'rubber'), Material(o0, 'rubber'), Shape(o2, 'sphere'), Shape(o1, 'sphere'), Size(o1, 'small'))",
+            "dsl": "(Behind(o0, o1), LeftOf(o1, o2), Material_rubber(o0), Material_rubber(o2), Shape_sphere(o1), Shape_sphere(o2), Size_small(o1))",
             "positive_images": [
                 2,
                 4,
@@ -9875,7 +9875,7 @@
         {
             "question": "A small rubber object is behind a cube, and there is also a big gray rubber object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o2, 'gray'), Material(o0, 'rubber'), Material(o2, 'rubber'), Shape(o1, 'cube'), Size(o0, 'small'), Size(o2, 'big'))",
+            "dsl": "(Behind(o0, o1), Color_gray(o2), Material_rubber(o0), Material_rubber(o2), Shape_cube(o1), Size_big(o2), Size_small(o0))",
             "positive_images": [
                 2,
                 9,
@@ -11392,7 +11392,7 @@
         {
             "question": "A brown object is in front of a big object, and in turn, a big object of the same shape and material as the first big object is in front of the brown object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'brown'), EqualMaterial(o1, o2), EqualShape(o1, o2), FrontOf(o2, o0), FrontOf(o0, o1), Size(o1, 'big'), Size(o2, 'big'))",
+            "dsl": "(Color_brown(o0), EqualMaterial(o1, o2), EqualShape(o1, o2), FrontOf(o0, o1), FrontOf(o2, o0), Size_big(o1), Size_big(o2))",
             "positive_images": [
                 7,
                 19,
@@ -13732,7 +13732,7 @@
         {
             "question": "A big rubber object is of equal size to another object, which is to the right of and of equal color to a rubber cube.",
             "visprog_program": "",
-            "dsl": "(EqualColor(o0, o1), EqualSize(o2, o1), Material(o2, 'rubber'), Material(o0, 'rubber'), RightOf(o1, o0), Shape(o0, 'cube'), Size(o2, 'big'))",
+            "dsl": "(EqualColor(o0, o1), EqualSize(o2, o1), Material_rubber(o0), Material_rubber(o2), RightOf(o1, o0), Shape_cube(o0), Size_big(o2))",
             "positive_images": [
                 21,
                 22,
@@ -15839,7 +15839,7 @@
         {
             "question": "An object o1 is behind a matte object o2 and in front of an object o3, with o2 being in front of and to the right of o3. Moreover, o2 is made of the same material as o1, and o3 and o1 are of the same size.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), EqualMaterial(o1, o0), EqualSize(o2, o0), FrontOf(o1, o2), FrontOf(o0, o2), Material(o1, 'rubber'), RightOf(o1, o2))",
+            "dsl": "(Behind(o0, o1), EqualMaterial(o1, o0), EqualSize(o2, o0), FrontOf(o0, o2), FrontOf(o1, o2), Material_rubber(o1), RightOf(o1, o2))",
             "positive_images": [
                 2,
                 4,
@@ -24053,7 +24053,7 @@
         {
             "question": "A brown metal object is to the right of an object, which is in front of and to the right of another object of equal size and material.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'brown'), EqualMaterial(o0, o1), EqualSize(o0, o2), FrontOf(o1, o2), LeftOf(o1, o0), LeftOf(o2, o1), Material(o0, 'metal'))",
+            "dsl": "(Color_brown(o0), EqualMaterial(o0, o1), EqualSize(o0, o2), FrontOf(o1, o2), LeftOf(o1, o0), LeftOf(o2, o1), Material_metal(o0))",
             "positive_images": [
                 2,
                 22,
@@ -25839,7 +25839,7 @@
         {
             "question": "A small metal cube o1 is to the left of another object o2, which is in front of o1, and a cube o3 is to the left of o1.",
             "visprog_program": "",
-            "dsl": "(FrontOf(o0, o1), LeftOf(o2, o1), LeftOf(o1, o0), Material(o1, 'metal'), Shape(o2, 'cube'), Shape(o1, 'cube'), Size(o1, 'small'))",
+            "dsl": "(FrontOf(o0, o1), LeftOf(o1, o0), LeftOf(o2, o1), Material_metal(o1), Shape_cube(o1), Shape_cube(o2), Size_small(o1))",
             "positive_images": [
                 3,
                 17,
@@ -28013,7 +28013,7 @@
         {
             "question": "A metal object is in front of a rubber sphere, which is to the left of both the metal object and another small object.",
             "visprog_program": "",
-            "dsl": "(FrontOf(o0, o1), LeftOf(o1, o2), LeftOf(o1, o0), Material(o1, 'rubber'), Material(o0, 'metal'), Shape(o1, 'sphere'), Size(o2, 'small'))",
+            "dsl": "(FrontOf(o0, o1), LeftOf(o1, o0), LeftOf(o1, o2), Material_metal(o0), Material_rubber(o1), Shape_sphere(o1), Size_small(o2))",
             "positive_images": [
                 2,
                 4,

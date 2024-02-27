@@ -6167,7 +6167,7 @@
         {
             "question": "The query in DSL describes a scene where there is a blue metallic object (o0) behind another object (o1), and that other object (o1) is a metal cylinder. Both the blue object (o0) and the metal cylinder (o1) are to the right of a sphere (o2).\n\nTranslated into natural language, the query could be described as follows:\n\"There is a blue metal object behind a metal cylinder, and both the blue object and the cylinder are to the right of a sphere.\"",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color_blue(o0), Material_metal(o1), RightOf(o1, o2), RightOf(o0, o2), Shape_cylinder(o1), Shape_sphere(o2))",
+            "dsl": "(Behind(o0, o1), Color_blue(o0), Material_metal(o1), RightOf(o0, o2), RightOf(o1, o2), Shape_cylinder(o1), Shape_sphere(o2))",
             "new_modules": [],
             "positive_images": [
                 4,
@@ -7939,7 +7939,7 @@
         {
             "question": "The query appears to be in an incorrect or incomplete DSL format, as it mixes underscore-separated keywords with the format described earlier. However, I will attempt to translate the intended meaning based on the provided functions and format:\n\nNL: A small green metal object is in front of two other objects, with one to its left and another to its right.",
             "visprog_program": "",
-            "dsl": "(Color_green(o0), FrontOf(o0, o1), FrontOf(o0, o2), Material_metal(o0), RightOf(o1, o0), RightOf(o0, o2), Size_small(o2))",
+            "dsl": "(Color_green(o0), FrontOf(o0, o1), FrontOf(o0, o2), Material_metal(o0), RightOf(o0, o2), RightOf(o1, o0), Size_small(o2))",
             "new_modules": [],
             "positive_images": [
                 19,
@@ -25035,7 +25035,7 @@
         {
             "question": "It appears there is a slight discrepancy in the function formatting in the last query compared to the provided DSL definition. The functions in the query seem to be written with underscores and without variable placeholders like the rest of the examples. Assuming the intended functions should follow the same format as the DSL definition, the query could be interpreted as:\n\nNL: A yellow object is the same shape as another object that is in front of and to the left of a third object, which is a cube. This second object is also to the left of the yellow object, while the yellow object is to the right of the second object.",
             "visprog_program": "",
-            "dsl": "(Color_yellow(o0), EqualShape(o1, o0), FrontOf(o1, o2), LeftOf(o1, o2), LeftOf(o1, o0), RightOf(o0, o1), Shape_cube(o2))",
+            "dsl": "(Color_yellow(o0), EqualShape(o1, o0), FrontOf(o1, o2), LeftOf(o1, o0), LeftOf(o1, o2), RightOf(o0, o1), Shape_cube(o2))",
             "new_modules": [],
             "positive_images": [
                 22,

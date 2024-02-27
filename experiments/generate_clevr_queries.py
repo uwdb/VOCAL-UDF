@@ -114,17 +114,17 @@ def generate_one_query(conn, ratio_lower_bound, ratio_upper_bound, npred, nvars,
     Generate one query with (npred) predicates and (nvars) variables.
     """
     def check_udf_must_include(udf_must_include, predicate_list):
-        if '_' in udf_must_include:
-            predicate, parameter = udf_must_include.split('_')
-            for pred in predicate_list:
-                if pred["predicate"] == predicate and pred["parameter"] == parameter:
-                    return True
-            return False
-        else:
-            for pred in predicate_list:
-                if pred["predicate"] == udf_must_include:
-                    return True
-            return False
+        # if '_' in udf_must_include:
+        #     predicate, parameter = udf_must_include.split('_')
+        #     for pred in predicate_list:
+        #         if pred["predicate"] == predicate and pred["parameter"] == parameter:
+        #             return True
+        #     return False
+        # else:
+        for pred in predicate_list:
+            if pred["predicate"] == udf_must_include:
+                return True
+        return False
 
     predicate_list = []
     while not check_udf_must_include(udf_must_include, predicate_list):
@@ -281,7 +281,7 @@ def generate_clevr_queries_udf_exclusion():
     ap.add_argument("--ratio_upper_bound", type=float, default=0.9, help="maximum ratio of positive examples to negative examples")
     ap.add_argument("--npred", type=int, default=7, help="number of predicates in each query")
     ap.add_argument("--nvars", type=int, default=3, help="number of variables in each query")
-    ap.add_argument("--max_workers", type=int, default=10, help="number of workers")
+    ap.add_argument("--max_workers", type=int, default=1, help="number of workers")
     ap.add_argument("--dataset_name", type=str, default="clevr", help="dataset name")
     ap.add_argument("--udf", type=str, help="UDF name that must be used in each query")
 

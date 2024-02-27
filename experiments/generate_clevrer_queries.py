@@ -144,17 +144,17 @@ def generate_one_query(conn, ratio_lower_bound, ratio_upper_bound, npred, nattr_
     Generate one query with (npred) predicates and (nvars) variables.
     """
     def check_udf_must_include(udf_must_include, selected_predicates):
-        if '_' in udf_must_include:
-            predicate, parameter = udf_must_include.split('_')
-            for pred in selected_predicates:
-                if pred["predicate"] == predicate and pred["parameter"] == parameter:
-                    return True
-            return False
-        else:
-            for pred in selected_predicates:
-                if pred["predicate"] == udf_must_include:
-                    return True
-            return False
+        # if '_' in udf_must_include:
+        #     predicate, parameter = udf_must_include.split('_')
+        #     for pred in selected_predicates:
+        #         if pred["predicate"] == predicate and pred["parameter"] == parameter:
+        #             return True
+        #     return False
+        # else:
+        for pred in selected_predicates:
+            if pred["predicate"] == udf_must_include:
+                return True
+        return False
 
     selected_predicates = []
     while not check_udf_must_include(udf_must_include, selected_predicates):

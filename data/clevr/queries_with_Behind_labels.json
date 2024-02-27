@@ -2960,7 +2960,7 @@
         {
             "question": "A cyan object of the same size as a metal object is behind the big rubber object and to the left of the metal object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color_cyan(o0), EqualSize(o0, o2), LeftOf(o0, o2), Material_rubber(o1), Material_metal(o2), Size_big(o1))",
+            "dsl": "(Behind(o0, o1), Color_cyan(o0), EqualSize(o0, o2), LeftOf(o0, o2), Material_metal(o2), Material_rubber(o1), Size_big(o1))",
             "new_modules": [],
             "positive_images": [
                 2,
@@ -5755,7 +5755,7 @@
         {
             "question": "A metal object is behind a small object of the same size, and there is another metal object with the same color and to the left of the first metal object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), EqualColor(o2, o0), EqualSize(o1, o0), LeftOf(o2, o0), Material_metal(o2), Material_metal(o0), Size_small(o1))",
+            "dsl": "(Behind(o0, o1), EqualColor(o2, o0), EqualSize(o1, o0), LeftOf(o2, o0), Material_metal(o0), Material_metal(o2), Size_small(o1))",
             "new_modules": [],
             "positive_images": [
                 4,
@@ -10138,7 +10138,7 @@
         {
             "question": "A blue object is behind a metal cylinder, and both are to the right of a sphere.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color_blue(o0), Material_metal(o1), RightOf(o1, o2), RightOf(o0, o2), Shape_sphere(o2), Shape_cylinder(o1))",
+            "dsl": "(Behind(o0, o1), Color_blue(o0), Material_metal(o1), RightOf(o0, o2), RightOf(o1, o2), Shape_cylinder(o1), Shape_sphere(o2))",
             "new_modules": [],
             "positive_images": [
                 4,
@@ -13604,7 +13604,7 @@
         {
             "question": "A sphere is behind a big object with the same shape, and the sphere is the same shape and size as another object to its left.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), EqualShape(o0, o2), EqualShape(o0, o1), EqualSize(o0, o2), LeftOf(o2, o0), Shape_sphere(o0), Size_big(o1))",
+            "dsl": "(Behind(o0, o1), EqualShape(o0, o1), EqualShape(o0, o2), EqualSize(o0, o2), LeftOf(o2, o0), Shape_sphere(o0), Size_big(o1))",
             "new_modules": [],
             "positive_images": [
                 4,
@@ -18693,7 +18693,7 @@
         {
             "question": "A metallic object is the same color and size as another object, which is behind and to the left of a different object. All three objects are made of the same material.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), EqualColor(o2, o0), EqualMaterial(o2, o1), EqualMaterial(o0, o1), EqualSize(o2, o0), LeftOf(o0, o1), Material_metal(o2))",
+            "dsl": "(Behind(o0, o1), EqualColor(o2, o0), EqualMaterial(o0, o1), EqualMaterial(o2, o1), EqualSize(o2, o0), LeftOf(o0, o1), Material_metal(o2))",
             "new_modules": [],
             "positive_images": [
                 4,

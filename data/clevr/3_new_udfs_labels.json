@@ -3,8 +3,12 @@
         {
             "question": "A yellow object o1 is to the right of and of equal size to an object o2, which is to the left of and of equal shape to a rubber object o3; Object o3 is in front of o2.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'yellow'), EqualShape(o1, o2), EqualSize(o0, o1), FrontOf(o2, o1), LeftOf(o1, o2), Material(o2, 'rubber'), RightOf(o0, o1))",
-            "new_modules": ["RIGHTOF", "EQUALSHAPE", "YELLOW"],
+            "dsl": "(Color_yellow(o0), EqualShape(o1, o2), EqualSize(o0, o1), FrontOf(o2, o1), LeftOf(o1, o2), Material_rubber(o2), RightOf(o0, o1))",
+            "new_modules": [
+                "RIGHTOF",
+                "EQUALSHAPE",
+                "YELLOW"
+            ],
             "positive_images": [
                 2,
                 4,
@@ -3209,8 +3213,12 @@
         {
             "question": "A cylinder is in front of a small metal object and of the same size and material as a rubber object.",
             "visprog_program": "",
-            "dsl": "(EqualMaterial(o0, o1), EqualSize(o0, o1), FrontOf(o1, o2), Material(o0, 'rubber'), Material(o2, 'metal'), Shape(o1, 'cylinder'), Size(o2, 'small'))",
-            "new_modules": ["METAL", "CYLINDER", "SMALL"],
+            "dsl": "(EqualMaterial(o0, o1), EqualSize(o0, o1), FrontOf(o1, o2), Material_metal(o2), Material_rubber(o0), Shape_cylinder(o1), Size_small(o2))",
+            "new_modules": [
+                "METAL",
+                "CYLINDER",
+                "SMALL"
+            ],
             "positive_images": [
                 2,
                 4,
@@ -7674,8 +7682,12 @@
         {
             "question": "A brown rubber object is behind a small object and a big rubber object is to the left of the same small object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o0, 'brown'), LeftOf(o2, o1), Material(o2, 'rubber'), Material(o0, 'rubber'), Size(o1, 'small'), Size(o2, 'big'))",
-            "new_modules": ["BEHIND", "BROWN", "SMALL"],
+            "dsl": "(Behind(o0, o1), Color_brown(o0), LeftOf(o2, o1), Material_rubber(o0), Material_rubber(o2), Size_big(o2), Size_small(o1))",
+            "new_modules": [
+                "BEHIND",
+                "BROWN",
+                "SMALL"
+            ],
             "positive_images": [
                 1,
                 2,
@@ -9758,8 +9770,12 @@
         {
             "question": "A big purple rubber object is in front of a cylinder, which is behind another object, which in turn is to the left of the same cylinder.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o2, 'purple'), FrontOf(o2, o0), LeftOf(o1, o0), Material(o2, 'rubber'), Shape(o0, 'cylinder'), Size(o2, 'big'))",
-            "new_modules": ["BEHIND", "PURPLE", "CYLINDER"],
+            "dsl": "(Behind(o0, o1), Color_purple(o2), FrontOf(o2, o0), LeftOf(o1, o0), Material_rubber(o2), Shape_cylinder(o0), Size_big(o2))",
+            "new_modules": [
+                "BEHIND",
+                "PURPLE",
+                "CYLINDER"
+            ],
             "positive_images": [
                 21,
                 22,
@@ -11335,8 +11351,12 @@
         {
             "question": "A metal object is behind a purple object of the same material, and another object is to the left of the same purple object. All three objects are the same size.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o1, 'purple'), EqualMaterial(o1, o0), EqualSize(o2, o1), EqualSize(o2, o0), LeftOf(o2, o1), Material(o0, 'metal'))",
-            "new_modules": ["BEHIND", "PURPLE", "METAL"],
+            "dsl": "(Behind(o0, o1), Color_purple(o1), EqualMaterial(o1, o0), EqualSize(o2, o0), EqualSize(o2, o1), LeftOf(o2, o1), Material_metal(o0))",
+            "new_modules": [
+                "BEHIND",
+                "PURPLE",
+                "METAL"
+            ],
             "positive_images": [
                 6,
                 13,
@@ -13269,8 +13289,12 @@
         {
             "question": "A metal object is to the right of a small object of equal size and to the left of a matte cube.",
             "visprog_program": "",
-            "dsl": "(EqualSize(o0, o1), LeftOf(o0, o2), Material(o0, 'metal'), Material(o2, 'rubber'), RightOf(o0, o1), Shape(o2, 'cube'), Size(o1, 'small'))",
-            "new_modules": ["METAL", "RIGHTOF", "SMALL"],
+            "dsl": "(EqualSize(o0, o1), LeftOf(o0, o2), Material_metal(o0), Material_rubber(o2), RightOf(o0, o1), Shape_cube(o2), Size_small(o1))",
+            "new_modules": [
+                "METAL",
+                "RIGHTOF",
+                "SMALL"
+            ],
             "positive_images": [
                 2,
                 4,
@@ -16570,8 +16594,12 @@
         {
             "question": "A purple object is in front of another object, both of equal size and material, and there is also a metal object of the same size and shape as the second object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'purple'), EqualMaterial(o0, o1), EqualShape(o2, o1), EqualSize(o0, o1), EqualSize(o2, o1), FrontOf(o0, o1), Material(o2, 'metal'))",
-            "new_modules": ["PURPLE", "EQUALSHAPE", "METAL"],
+            "dsl": "(Color_purple(o0), EqualMaterial(o0, o1), EqualShape(o2, o1), EqualSize(o0, o1), EqualSize(o2, o1), FrontOf(o0, o1), Material_metal(o2))",
+            "new_modules": [
+                "PURPLE",
+                "EQUALSHAPE",
+                "METAL"
+            ],
             "positive_images": [
                 2,
                 6,
@@ -18953,8 +18981,12 @@
         {
             "question": "A big metal object is behind a red object, and there is also a small cube made of the same material as the big metal object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o1, 'red'), EqualMaterial(o0, o2), Material(o0, 'metal'), Shape(o2, 'cube'), Size(o0, 'big'), Size(o2, 'small'))",
-            "new_modules": ["BEHIND", "METAL", "SMALL"],
+            "dsl": "(Behind(o0, o1), Color_red(o1), EqualMaterial(o0, o2), Material_metal(o0), Shape_cube(o2), Size_big(o0), Size_small(o2))",
+            "new_modules": [
+                "BEHIND",
+                "METAL",
+                "SMALL"
+            ],
             "positive_images": [
                 21,
                 27,
@@ -20553,8 +20585,12 @@
         {
             "question": "A big metal object is to the left of a cube and behind a yellow object, which is in front of the same cube.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o1, 'yellow'), FrontOf(o1, o2), LeftOf(o0, o2), Material(o0, 'metal'), Shape(o2, 'cube'), Size(o0, 'big'))",
-            "new_modules": ["BEHIND", "YELLOW", "METAL"],
+            "dsl": "(Behind(o0, o1), Color_yellow(o1), FrontOf(o1, o2), LeftOf(o0, o2), Material_metal(o0), Shape_cube(o2), Size_big(o0))",
+            "new_modules": [
+                "BEHIND",
+                "YELLOW",
+                "METAL"
+            ],
             "positive_images": [
                 2,
                 22,
@@ -23000,8 +23036,12 @@
         {
             "question": "A small object is in front of a big cyan metal object and also in front of another big object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), FrontOf(o1, o2), FrontOf(o1, o0), Material(o0, 'metal'), Size(o2, 'big'), Size(o0, 'big'), Size(o1, 'small'))",
-            "new_modules": ["CYAN", "METAL", "SMALL"],
+            "dsl": "(Color_cyan(o0), FrontOf(o1, o0), FrontOf(o1, o2), Material_metal(o0), Size_big(o0), Size_big(o2), Size_small(o1))",
+            "new_modules": [
+                "CYAN",
+                "METAL",
+                "SMALL"
+            ],
             "positive_images": [
                 12,
                 22,

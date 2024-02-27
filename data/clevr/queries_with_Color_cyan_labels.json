@@ -3,7 +3,7 @@
         {
             "question": "A cyan object of the same size as a metal object is behind a big rubber thing and to the left of the metal object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o0, 'cyan'), EqualSize(o0, o2), LeftOf(o0, o2), Material(o1, 'rubber'), Material(o2, 'metal'), Size(o1, 'big'))",
+            "dsl": "(Behind(o0, o1), Color_cyan(o0), EqualSize(o0, o2), LeftOf(o0, o2), Material_metal(o2), Material_rubber(o1), Size_big(o1))",
             "new_modules": [],
             "positive_images": [
                 2,
@@ -2798,7 +2798,7 @@
         {
             "question": "A cyan rubber object is on the left side of a big rubber object, which is on the right side of a sphere.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), LeftOf(o0, o1), Material(o0, 'rubber'), Material(o1, 'rubber'), RightOf(o1, o2), Shape(o2, 'sphere'), Size(o1, 'big'))",
+            "dsl": "(Color_cyan(o0), LeftOf(o0, o1), Material_rubber(o0), Material_rubber(o1), RightOf(o1, o2), Shape_sphere(o2), Size_big(o1))",
             "new_modules": [],
             "positive_images": [
                 6,
@@ -4922,7 +4922,7 @@
         {
             "question": "A rubber object is in front of a cyan object of equal size and to the right of a sphere of equal material.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), EqualMaterial(o1, o2), EqualSize(o0, o2), FrontOf(o2, o0), Material(o2, 'rubber'), RightOf(o2, o1), Shape(o1, 'sphere'))",
+            "dsl": "(Color_cyan(o0), EqualMaterial(o1, o2), EqualSize(o0, o2), FrontOf(o2, o0), Material_rubber(o2), RightOf(o2, o1), Shape_sphere(o1))",
             "new_modules": [],
             "positive_images": [
                 2,
@@ -7144,7 +7144,7 @@
         {
             "question": "A small object is behind a cyan object, and behind and to the left of another object, which is in front of the cyan object. The cyan object is also in front of the small object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Behind(o0, o2), Color(o1, 'cyan'), FrontOf(o1, o0), FrontOf(o2, o1), LeftOf(o0, o2), Size(o0, 'small'))",
+            "dsl": "(Behind(o0, o1), Behind(o0, o2), Color_cyan(o1), FrontOf(o1, o0), FrontOf(o2, o1), LeftOf(o0, o2), Size_small(o0))",
             "new_modules": [],
             "positive_images": [
                 2,
@@ -11552,7 +11552,7 @@
         {
             "question": "A cyan object is to the left of a rubber object of the same shape and behind another object of the same size, which is to the left of the rubber object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o0, 'cyan'), EqualShape(o0, o2), EqualSize(o0, o1), LeftOf(o0, o2), Material(o2, 'rubber'), LeftOf(o1, o2))",
+            "dsl": "(Behind(o0, o1), Color_cyan(o0), EqualShape(o0, o2), EqualSize(o0, o1), LeftOf(o0, o2), LeftOf(o1, o2), Material_rubber(o2))",
             "new_modules": [],
             "positive_images": [
                 2,
@@ -13982,7 +13982,7 @@
         {
             "question": "A cyan object is behind and to the left of two objects, and these two objects are in turn in front of the cyan object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Behind(o0, o2), Color(o0, 'cyan'), FrontOf(o1, o0), FrontOf(o2, o0), LeftOf(o0, o2), LeftOf(o0, o1))",
+            "dsl": "(Behind(o0, o1), Behind(o0, o2), Color_cyan(o0), FrontOf(o1, o0), FrontOf(o2, o0), LeftOf(o0, o1), LeftOf(o0, o2))",
             "new_modules": [],
             "positive_images": [
                 2,
@@ -18331,7 +18331,7 @@
         {
             "question": "A cyan rubber object is to the right of a big object and behind a third object, which is in front of and to the right of the big object.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Color(o0, 'cyan'), FrontOf(o1, o2), RightOf(o0, o2), Material(o0, 'rubber'), RightOf(o1, o2), Size(o2, 'big'))",
+            "dsl": "(Behind(o0, o1), Color_cyan(o0), FrontOf(o1, o2), Material_rubber(o0), RightOf(o0, o2), RightOf(o1, o2), Size_big(o2))",
             "new_modules": [],
             "positive_images": [
                 6,
@@ -21262,7 +21262,7 @@
         {
             "question": "A small cyan object is to the right of an object of the same material and in front of and to the right of a metal object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), EqualMaterial(o1, o0), FrontOf(o0, o2), RightOf(o0, o2), Material(o2, 'metal'), RightOf(o0, o1), Size(o0, 'small'))",
+            "dsl": "(Color_cyan(o0), EqualMaterial(o1, o0), FrontOf(o0, o2), Material_metal(o2), RightOf(o0, o1), RightOf(o0, o2), Size_small(o0))",
             "new_modules": [],
             "positive_images": [
                 12,
@@ -23037,7 +23037,7 @@
         {
             "question": "A cyan rubber object is on the right side of a cube, which is on the left side of an object that has the same shape and size as the cube.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), EqualShape(o1, o2), EqualSize(o1, o2), LeftOf(o2, o1), Material(o0, 'rubber'), RightOf(o0, o2), Shape(o2, 'cube'))",
+            "dsl": "(Color_cyan(o0), EqualShape(o1, o2), EqualSize(o1, o2), LeftOf(o2, o1), Material_rubber(o0), RightOf(o0, o2), Shape_cube(o2))",
             "new_modules": [],
             "positive_images": [
                 8,
@@ -24931,7 +24931,7 @@
         {
             "question": "A cube is in front of a cyan object and in front of an object of the same shape and size, which is to the left of the cyan object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'cyan'), EqualShape(o1, o2), EqualSize(o1, o2), FrontOf(o2, o0), FrontOf(o2, o1), LeftOf(o1, o0), Shape(o2, 'cube'))",
+            "dsl": "(Color_cyan(o0), EqualShape(o1, o2), EqualSize(o1, o2), FrontOf(o2, o0), FrontOf(o2, o1), LeftOf(o1, o0), Shape_cube(o2))",
             "new_modules": [],
             "positive_images": [
                 8,

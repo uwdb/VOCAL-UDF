@@ -3,7 +3,7 @@
         {
             "question": "A large gray object is in front of a rubber object, and a cube-shaped object is also in front of and to the left of the same rubber object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'gray'), FrontOf(o1, o2), FrontOf(o0, o2), LeftOf(o1, o2), Material(o2, 'rubber'), Shape(o1, 'cube'), Size(o0, 'big'))",
+            "dsl": "(Color_gray(o0), FrontOf(o0, o2), FrontOf(o1, o2), LeftOf(o1, o2), Material_rubber(o2), Shape_cube(o1), Size_big(o0))",
             "positive_images": [
                 2,
                 16,
@@ -2310,7 +2310,7 @@
         {
             "question": "A rubber cube is in front of a big object, which in turn is in front of and to the left of another rubber object.",
             "visprog_program": "",
-            "dsl": "(FrontOf(o0, o1), FrontOf(o1, o2), LeftOf(o1, o2), Material(o2, 'rubber'), Material(o0, 'rubber'), Shape(o0, 'cube'), Size(o1, 'big'))",
+            "dsl": "(FrontOf(o0, o1), FrontOf(o1, o2), LeftOf(o1, o2), Material_rubber(o0), Material_rubber(o2), Shape_cube(o0), Size_big(o1))",
             "positive_images": [
                 2,
                 4,
@@ -6197,7 +6197,7 @@
         {
             "question": "A green object is to the left of and same size of a sphere, and there is a cube made of the same material as the green object and is the same size as the sphere.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'green'), EqualMaterial(o1, o0), EqualSize(o2, o1), EqualSize(o2, o0), LeftOf(o0, o2), Shape(o2, 'sphere'), Shape(o1, 'cube'))",
+            "dsl": "(Color_green(o0), EqualMaterial(o1, o0), EqualSize(o2, o0), EqualSize(o2, o1), LeftOf(o0, o2), Shape_cube(o1), Shape_sphere(o2))",
             "positive_images": [
                 22,
                 25,
@@ -7858,7 +7858,7 @@
         {
             "question": "A cube is made of the same material as a rubber sphere, and the cube is in front of and made of the same material as a another cube.",
             "visprog_program": "",
-            "dsl": "(EqualMaterial(o0, o1), EqualMaterial(o0, o2), FrontOf(o0, o2), Material(o1, 'rubber'), Shape(o0, 'cube'), Shape(o1, 'sphere'), Shape(o2, 'cube'))",
+            "dsl": "(EqualMaterial(o0, o1), EqualMaterial(o0, o2), FrontOf(o0, o2), Material_rubber(o1), Shape_cube(o0), Shape_cube(o2), Shape_sphere(o1))",
             "positive_images": [
                 22,
                 24,
@@ -10631,7 +10631,7 @@
         {
             "question": "An object o1 is made of the same material as and on the left of a big object o2, which is in front of o1. The object o1 is the same size as and in front of an object o3, which is on the left of o1.",
             "visprog_program": "",
-            "dsl": "(EqualMaterial(o0, o1), EqualSize(o0, o2), FrontOf(o0, o2), FrontOf(o1, o0), LeftOf(o0, o1), LeftOf(o2, o0), Size(o1, 'big'))",
+            "dsl": "(EqualMaterial(o0, o1), EqualSize(o0, o2), FrontOf(o0, o2), FrontOf(o1, o0), LeftOf(o0, o1), LeftOf(o2, o0), Size_big(o1))",
             "positive_images": [
                 6,
                 9,
@@ -15511,7 +15511,7 @@
         {
             "question": "A blue object is in front of a big object, and there is a rubber sphere of the same size and material as the blue object.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'blue'), EqualMaterial(o1, o0), EqualSize(o1, o0), FrontOf(o0, o2), Material(o1, 'rubber'), Shape(o1, 'sphere'), Size(o2, 'big'))",
+            "dsl": "(Color_blue(o0), EqualMaterial(o1, o0), EqualSize(o1, o0), FrontOf(o0, o2), Material_rubber(o1), Shape_sphere(o1), Size_big(o2))",
             "positive_images": [
                 16,
                 24,
@@ -17111,7 +17111,7 @@
         {
             "question": "A big object is in front of and made of the same material as a big sphere, which is made of the same material as a green object",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'green'), EqualMaterial(o1, o0), EqualMaterial(o1, o2), FrontOf(o2, o1), Shape(o1, 'sphere'), Size(o1, 'big'), Size(o2, 'big'))",
+            "dsl": "(Color_green(o0), EqualMaterial(o1, o0), EqualMaterial(o1, o2), FrontOf(o2, o1), Shape_sphere(o1), Size_big(o1), Size_big(o2))",
             "positive_images": [
                 7,
                 9,
@@ -19362,7 +19362,7 @@
         {
             "question": "A blue object is in front of a cube, which is to the left of another object; all objects are made of the same material and the blue object and the cube are of equal size.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'blue'), EqualMaterial(o1, o0), EqualMaterial(o0, o2), EqualSize(o0, o2), FrontOf(o0, o2), LeftOf(o2, o1), Shape(o2, 'cube'))",
+            "dsl": "(Color_blue(o0), EqualMaterial(o0, o2), EqualMaterial(o1, o0), EqualSize(o0, o2), FrontOf(o0, o2), LeftOf(o2, o1), Shape_cube(o2))",
             "positive_images": [
                 12,
                 19,
@@ -21065,7 +21065,7 @@
         {
             "question": "A green object is to the left of a rubber object of equal size, which is in front of the green object, and there is also a big sphere.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'green'), EqualSize(o0, o1), FrontOf(o1, o0), LeftOf(o0, o1), Material(o1, 'rubber'), Shape(o2, 'sphere'), Size(o2, 'big'))",
+            "dsl": "(Color_green(o0), EqualSize(o0, o1), FrontOf(o1, o0), LeftOf(o0, o1), Material_rubber(o1), Shape_sphere(o2), Size_big(o2))",
             "positive_images": [
                 6,
                 22,
@@ -23057,7 +23057,7 @@
         {
             "question": "A big cube is to the left of a big object, and there is also a big rubber object of the same size as the cube.",
             "visprog_program": "",
-            "dsl": "(EqualSize(o0, o1), LeftOf(o0, o2), Material(o1, 'rubber'), Shape(o0, 'cube'), Size(o0, 'big'), Size(o2, 'big'), Size(o1, 'big'))",
+            "dsl": "(EqualSize(o0, o1), LeftOf(o0, o2), Material_rubber(o1), Shape_cube(o0), Size_big(o0), Size_big(o1), Size_big(o2))",
             "positive_images": [
                 2,
                 3,

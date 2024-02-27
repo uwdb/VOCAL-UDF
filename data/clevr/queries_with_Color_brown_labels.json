@@ -3929,7 +3929,7 @@
         {
             "question": "A brown sphere is on the right side of both a big metal object and another object, and the big metal object is also on the right side of the other object.",
             "visprog_program": "",
-            "dsl": "(Color_brown(o0), Material_metal(o1), RightOf(o0, o2), RightOf(o0, o1), RightOf(o1, o2), Shape_sphere(o0), Size_big(o1))",
+            "dsl": "(Color_brown(o0), Material_metal(o1), RightOf(o0, o1), RightOf(o0, o2), RightOf(o1, o2), Shape_sphere(o0), Size_big(o1))",
             "new_modules": [],
             "positive_images": [
                 2,
