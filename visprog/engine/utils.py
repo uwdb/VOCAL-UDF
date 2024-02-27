@@ -102,7 +102,7 @@ class ProgramGenerator():
                 max_tokens=512,
                 top_p=self.top_p,
                 logprobs=1,
-                seed=42+retry
+                seed=retry
             )
 
             prob = self.compute_prob(response)
@@ -119,7 +119,7 @@ class ProgramGenerator():
                 temperature=self.temperature,
                 top_p=self.top_p,
                 max_tokens=512,
-                seed=42+retry
+                seed=retry
             )
 
             prob = None

@@ -32,7 +32,14 @@ system_prompt:
     You have access to the following functions:
     {{functions}}
   parse_query_details: >
-    The predicates MUST be selected from the provided functions. Think step by step about all the region graphs, predicates, and duration constraints needed to resolve the user's request. Parse out as few region graphs, predicates, and duration constraints as possible while ensuring that the user's intent can be precisely captured. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list, you must simply reply: NO.
+    The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list, you must simply reply: NO.
+
+  force_parse_query_overall: >
+    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function.
+  dsl_definition_image: >
+    The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas.
+  force_parse_query_details: >
+    The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
 
   verify_udfs: >
     You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
@@ -65,7 +72,7 @@ prompt:
     ```
   verify_udfs: >
     The proposed functions are { {{proposed_functions}} }.
-  generate_semantic_interpretation: >
+  generate_semantic_interpretation_backup: >
     Generate {{num_interpretations}} different, diverse semantic interpretations for the following Python task. Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names.
 
     Task: determine {{udf_description}}. {{schema_info}}. The function takes {{n_obj}} as input, and returns a boolean value.

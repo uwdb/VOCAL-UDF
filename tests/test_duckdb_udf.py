@@ -10,8 +10,11 @@ from duckdb_dir.udf import register_udf
 import yaml
 from vocaludf.utils import duckdb_execute_cache_sequence, duckdb_execute_clevrer_cache_sequence, duckdb_execute_clevrer_dataframe
 from src.utils import program_to_dsl, dsl_to_program
+import json
 
-config = yaml.safe_load(open("/home/enhao/VOCAL-UDF/configs/config.yaml", "r"))
+from vocaludf.main import parse_signature
+
+config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
 def test_table_as_input():
     def test_udf(o1: dict, o2: dict) -> bool:
@@ -24,6 +27,63 @@ def test_table_as_input():
     print("start")
     res = conn.execute("SELECT * FROM Obj_clevrer o1, Obj_clevrer o2 WHERE o1.vid < 100 AND o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid <> o2.oid AND test_udf(o1, o2) = true LIMIT 10").df()
     print(res.to_string())
+
+def test_custom_udf():
+    def far(o1: dict, o2: dict) -> bool:
+        import math
+        cx1 = (o1['x1'] + o1['x2']) / 2
+        cy1 = (o1['y1'] + o1['y2']) / 2
+        cx2 = (o2['x1'] + o2['x2']) / 2
+        cy2 = (o2['y1'] + o2['y2']) / 2
+        distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1['x2'] - o1['x1'] + o2['x2'] - o2['x1']) / 2)
+        return distance > 3.0
+
+    def behind(o1: dict, o2: dict) -> bool:
+        center_y_o1 = (o1['y1'] + o1['y2']) / 2
+        center_y_o2 = (o2['y1'] + o2['y2']) / 2
+        return center_y_o1 < center_y_o2
+
+    def Material_Metal(o0: dict) -> bool:
+        return o0.get('material') == 'metal'
+
+    conn = duckdb.connect()
+    conn.execute("CREATE TABLE Obj_clevrer (oid INT, vid INT, fid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)")
+    conn.execute("COPY Obj_clevrer FROM '{}' (FORMAT 'csv', delimiter ',', header 0)".format(os.path.join(config["db_dir"], "obj_clevrer.csv")))
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_clevrer ON Obj_clevrer (vid)")
+
+    # Register custom UDF
+    registered_functions = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))['test']
+    for func in registered_functions:
+        signature = func['signature']
+        udf_name, udf_vars = parse_signature(signature)
+        python_func_name = func['python_function'].split()[1].split('(')[0]
+        python_func_args = func['python_function'].split('(')[1].split(')')[0].split(',')
+        # TODO: Add type annotation to the function
+        python_arg_str = ", ".join(f"{arg}: dict" for arg in python_func_args)
+        python_header_type_annotated = f"def {python_func_name}({python_arg_str}) -> bool:"
+        # Remove the first line of the function definition
+        python_function = python_header_type_annotated + '\n' + '\n'.join(func['python_function'].split('\n')[1:])
+        exec(python_function)
+        exec(f"conn.create_function('{udf_name}', {python_func_name})")
+        print(f"Registered function: {func['signature']}")
+
+    conn.create_function("custom_Far", far)
+    conn.create_function("custom_Behind", behind)
+    conn.create_function("custom_Material_Metal", Material_Metal)
+
+    list_size = 72159
+    memo = [{} for _ in range(list_size)]
+    inputs_table_name = "Obj_clevrer"
+    input_vids = 1000
+
+    test_query = "Duration((Color_Red(o0), FrontOf(o1, o2), LeftOf(o2, o0)), 15); Duration((custom_Far(o1, o2), LeftOf(o0, o2)), 5); (custom_Behind(o2, o0), custom_Material_Metal(o1))" # 105s with 1000 videos
+    test_program = dsl_to_program(test_query)
+    _start = time()
+    # outputs, new_memo = duckdb_execute_clevrer_dataframe(conn, test_program, memo, inputs_table_name, input_vids)
+    outputs, new_memo = duckdb_execute_clevrer_cache_sequence(conn, test_program, memo, inputs_table_name, input_vids, table_as_input_to_udf=True)
+    print(sorted(outputs))
+    _end = time()
+    print(f"Time: {_end - _start}")
 
 def test_duckdb_execute_clevrer():
     conn = duckdb.connect()
@@ -39,8 +99,8 @@ def test_duckdb_execute_clevrer():
     input_vids = 10000
 
     # test_query = "Color(o0, 'red'), Material(o0, 'rubber'), Top(o1), FrontOf(o0, o1); FrontOf(o1, o0); Duration((Top(o2), Left(o2)), 25)"
-    # test_query = "Duration((FrontOf(o0, o1), LeftOf(o1, o2), LeftOf(o2, o1), Top(o2)), 10); Duration((Color(o2, 'gray'), Material(o1, 'rubber')), 5); Duration(LeftOf(o0, o1), 15)" # 718s
-    test_query = "Duration((Color(o0, 'red'), FrontOf(o1, o2), LeftOf(o2, o0)), 15); Duration((Far(o1, o2, 3.0), LeftOf(o0, o2)), 5); (Behind(o2, o0), Material(o1, 'metal'))"
+    # test_query = "Duration((FrontOf(o0, o1), LeftOf(o1, o2), LeftOf(o2, o1), Top(o2)), 10); Duration((Color(o2, 'gray'), Material(o1, 'rubber')), 5); Duration(LeftOf(o0, o1), 15)" # 718s with 10000 videos
+    test_query = "Duration((Color(o0, 'red'), FrontOf(o1, o2), LeftOf(o2, o0)), 15); Duration((Far(o1, o2), LeftOf(o0, o2)), 5); (Behind(o2, o0), Material(o1, 'metal'))" # 27s with 1000 videos; 185s with 10000 videos
     test_program = dsl_to_program(test_query)
     _start = time()
     # outputs, new_memo = duckdb_execute_clevrer_dataframe(conn, test_program, memo, inputs_table_name, input_vids)
@@ -54,4 +114,5 @@ def test_duckdb_execute_clevrer():
 
 if __name__ == "__main__":
     # test_duckdb_execute_clevrer()
-    test_table_as_input()
+    # test_table_as_input()
+    test_custom_udf()

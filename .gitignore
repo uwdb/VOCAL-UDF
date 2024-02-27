@@ -17,7 +17,8 @@ outputs/*
 *.ipynb_checkpoints/
 *.o
 *.so
-data/clevr/*
+data/clevr/*/*
+data/clevrer/*/*
 data/models/*
 *.pt
 *.duckdb*

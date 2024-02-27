@@ -3,7 +3,14 @@ import duckdb
 import itertools
 import copy
 
-def duckdb_execute_cache_sequence(conn, current_query, memo, inputs_table_name, input_vids):
+def replace_slot(text, entries):
+    for key, value in entries.items():
+        if not isinstance(value, str):
+            value = str(value)
+        text = text.replace("{{" + key +"}}", value.replace('"', "'"))
+    return text
+
+def duckdb_execute_cache_sequence(conn, current_query, memo, inputs_table_name, input_vids, table_as_input_to_udf=False):
     """
     This method uses temp views and only caches binary query predictions.
     input_vids: list of video segment ids. For image datasets, this is actually fids.
@@ -69,15 +76,18 @@ def duckdb_execute_cache_sequence(conn, current_query, memo, inputs_table_name, 
             where_clauses.append("{v1}.fid = {v2}.fid".format(v1=encountered_variables[i], v2=encountered_variables[i+1])) # join variables
         for p in scene_graph:
             predicate = p["predicate"]
-            parameter = p["parameter"]
+            parameter = p.get("parameter", None)
             variables = p["variables"]
-            args = []
-            for v in variables:
-                if is_traffic:
-                    args.append("{v}.x1, {v}.y1, {v}.x2, {v}.y2, {v}.vx, {v}.vy, {v}.ax, {v}.ay".format(v=v))
-                else:
-                    args.append("{v}.shape, {v}.color, {v}.material, {v}.x1, {v}.y1, {v}.x2, {v}.y2".format(v=v))
-            args = ", ".join(args)
+            if table_as_input_to_udf:
+                args = ", ".join([v for v in variables])
+            else:
+                args = []
+                for v in variables:
+                    if is_traffic:
+                        args.append("{v}.x1, {v}.y1, {v}.x2, {v}.y2, {v}.vx, {v}.vy, {v}.ax, {v}.ay".format(v=v))
+                    else:
+                        args.append("{v}.shape, {v}.color, {v}.material, {v}.x1, {v}.y1, {v}.x2, {v}.y2".format(v=v))
+                args = ", ".join(args)
             if parameter:
                 if isinstance(parameter, str):
                     args = "'{}', {}".format(parameter, args)

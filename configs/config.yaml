@@ -4,6 +4,31 @@ output_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/outputs
 prompt_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/prompts
 log_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/logs
 llava_path: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models/llava-1.5-7b-hf
+query_parser:
+  temperature: 0
+  top_p: 1
+udf_proposer:
+  temperature: 0
+  top_p: 1
+interpretation_generator:
+  temperature: 0.7
+  top_p: 1
+  max_tokens: 4095
+udf_generator:
+  temperature: 0.2
+  top_p: 0.5
+  n_train: 10000
+  n_test: 10000
+clevrer:
+  height: 320
+  width: 480
+  dataset_size: 10000
+  input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/3_new_udfs_labels.json
+clevr:
+  height: 320
+  width: 480
+  dataset_size: 15000
+  input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevr/3_new_udfs_labels.json
 visprog:
   program_generator:
     temperature: 0.2
