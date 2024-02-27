@@ -3,8 +3,12 @@
         {
             "question": "For at least 15 frames, an object o2 is to the left of a red object o0, and another object o1 is in the front of o2. Then, for a minimum of 5 frames, o1 is far from o2 and o0 is to the left of o2. Finally, o2 is behind o0, and o1 is made of metal.",
             "visprog_program": "",
-            "dsl": "Duration((Color(o0, 'red'), FrontOf(o1, o2), LeftOf(o2, o0)), 15); Duration((Far(o1, o2, 3.0), LeftOf(o0, o2)), 5); (Behind(o2, o0), Material(o1, 'metal'))",
-            "new_modules": ["FAR", "BEHIND", "METAL"],
+            "dsl": "Duration((Color_red(o0), FrontOf(o1, o2), LeftOf(o2, o0)), 15); Duration((Far(o1, o2), LeftOf(o0, o2)), 5); (Behind(o2, o0), Material_metal(o1))",
+            "new_modules": [
+                "FAR",
+                "BEHIND",
+                "METAL"
+            ],
             "positive_videos": [
                 22,
                 25,
@@ -583,8 +587,12 @@
         {
             "question": "In the video, an object o0 is behind another object o1 that is at the top of the frame, and and there is a third object o2 with a cylinder shape. Then, for at least 15 frames, o2 is on the left of the frame and is to the left of o1, and o1 is to the right of o2. Finally, the object o0 is green for a duration of at least 15 frames.",
             "visprog_program": "",
-            "dsl": "(Behind(o0, o1), Shape(o2, 'cylinder'), Top(o1)); Duration((LeftOf(o2, o1), Left(o2), RightOf(o1, o2)), 15); Duration(Color(o0, 'green'), 15)",
-            "new_modules": ["BEHIND", "CYLINDER", "RIGHTOF"],
+            "dsl": "(Behind(o0, o1), Shape_cylinder(o2), Top(o1)); Duration((LeftOf(o2, o1), Left(o2), RightOf(o1, o2)), 15); Duration(Color_green(o0), 15)",
+            "new_modules": [
+                "BEHIND",
+                "CYLINDER",
+                "RIGHTOF"
+            ],
             "positive_videos": [
                 4,
                 18,
@@ -2464,8 +2472,12 @@
         {
             "question": "An object o0 is at the bottom of the frame while another object o1 is in front of a third object o2. Subsequently, o0 is far away from o1 which is at the top of the frame. Finally, for a duration of at least 5 frames, o1 is yellow, and o0 is in front of o2, which is shaped like a cube.",
             "visprog_program": "",
-            "dsl": "(Bottom(o0), FrontOf(o1, o2)); (Far(o0, o1, 3.0), Top(o1)); Duration((Color(o1, 'yellow'), FrontOf(o0, o2), Shape(o2, 'cube')), 5)",
-            "new_modules": ["BOTTOM", "FAR", "YELLOW"],
+            "dsl": "(Bottom(o0), FrontOf(o1, o2)); (Far(o0, o1), Top(o1)); Duration((Color_yellow(o1), FrontOf(o0, o2), Shape_cube(o2)), 5)",
+            "new_modules": [
+                "BOTTOM",
+                "FAR",
+                "YELLOW"
+            ],
             "positive_videos": [
                 11,
                 18,
@@ -3668,8 +3680,12 @@
         {
             "question": "For at least 5 frames, an object o0 is in front of another object o1 and near it, and a cylinder-shaped object o2 is also in front of o1. Following that, for at least 10 frames, o2 is red, o0 is to the right of o2, and o1 is at the top of the video frame.",
             "visprog_program": "",
-            "dsl": "Duration((FrontOf(o0, o1), FrontOf(o2, o1), Near(o0, o1, 1.0), Shape(o2, 'cylinder')), 5); Duration((Color(o2, 'red'), RightOf(o0, o2), Top(o1)), 10)",
-            "new_modules": ["NEAR", "CYLINDER", "RIGHTOF"],
+            "dsl": "Duration((FrontOf(o0, o1), FrontOf(o2, o1), Near(o0, o1), Shape_cylinder(o2)), 5); Duration((Color_red(o2), RightOf(o0, o2), Top(o1)), 10)",
+            "new_modules": [
+                "NEAR",
+                "CYLINDER",
+                "RIGHTOF"
+            ],
             "positive_videos": [
                 23,
                 31,
@@ -4266,8 +4282,12 @@
         {
             "question": "For at least 15 frames, an object o0 is in front of another object o1, and a third object o2 is to the left of o1, while o1 is made of metal and o0 is to the right of o2. Following this, o0 is on the left side of the video frame for at least 5 frames. Finally, o2 is cyan in color, and o1 is on the left side of the frame.",
             "visprog_program": "",
-            "dsl": "Duration((FrontOf(o0, o1), LeftOf(o2, o1), Material(o1, 'metal'), RightOf(o0, o2)), 15); Duration(Left(o0), 5); (Color(o2, 'cyan'), Left(o1))",
-            "new_modules": ["METAL", "RIGHTOF", "CYAN"],
+            "dsl": "Duration((FrontOf(o0, o1), LeftOf(o2, o1), Material_metal(o1), RightOf(o0, o2)), 15); Duration(Left(o0), 5); (Color_cyan(o2), Left(o1))",
+            "new_modules": [
+                "METAL",
+                "RIGHTOF",
+                "CYAN"
+            ],
             "positive_videos": [
                 4,
                 10,
@@ -5338,8 +5358,12 @@
         {
             "question": "A yellow object o0 is near object o2, while at the same time an object o1 is in front of and to the left of o2. Following that, for at least 10 frames, o2 is to the left of o0 and also at the top of the frame. Lastly, object o0 is made of metal.",
             "visprog_program": "",
-            "dsl": "(Color(o0, 'yellow'), FrontOf(o1, o2), LeftOf(o1, o2), Near(o0, o2, 1.0)); Duration((LeftOf(o2, o0), Top(o2)), 10); Material(o0, 'metal')",
-            "new_modules": ["YELLOW", "NEAR", "METAL"],
+            "dsl": "(Color_yellow(o0), FrontOf(o1, o2), LeftOf(o1, o2), Near(o0, o2)); Duration((LeftOf(o2, o0), Top(o2)), 10); Material_metal(o0)",
+            "new_modules": [
+                "YELLOW",
+                "NEAR",
+                "METAL"
+            ],
             "positive_videos": [
                 4,
                 10,
@@ -6109,8 +6133,12 @@
         {
             "question": "Initially, an object o0 is to the right of another object o1. Then, for at least 15 frames, the purple object o0 is in front of a third object o2. Finally, for a duration of at least 5 frames, o1 is in front of o2, o0 is in front of o1, o0 is to the left of o2, and o2 is made of metal.",
             "visprog_program": "",
-            "dsl": "RightOf(o0, o1); Duration((Color(o0, 'purple'), FrontOf(o0, o2)), 15); Duration((FrontOf(o1, o2), FrontOf(o0, o1), LeftOf(o0, o2), Material(o2, 'metal')), 5)",
-            "new_modules": ["RIGHTOF", "PURPLE", "METAL"],
+            "dsl": "RightOf(o0, o1); Duration((Color_purple(o0), FrontOf(o0, o2)), 15); Duration((FrontOf(o0, o1), FrontOf(o1, o2), LeftOf(o0, o2), Material_metal(o2)), 5)",
+            "new_modules": [
+                "RIGHTOF",
+                "PURPLE",
+                "METAL"
+            ],
             "positive_videos": [
                 7,
                 17,
@@ -7355,8 +7383,12 @@
         {
             "question": "For at least 10 frames, a cylinder-shaped object o0 is in front of another object o1. Then, for a duration of at least 5 frames, an object o2 is at the bottom left of the video frame. Finally, o1 is behind and to the left of o0, and o2 is shaped like a cube.",
             "visprog_program": "",
-            "dsl": "Duration((FrontOf(o0, o1), Shape(o0, 'cylinder')), 10); Duration((Bottom(o2), Left(o2)), 5); (Behind(o1, o0), LeftOf(o1, o0), Shape(o2, 'cube'))",
-            "new_modules": ["CYLINDER", "BOTTOM", "BEHIND"],
+            "dsl": "Duration((FrontOf(o0, o1), Shape_cylinder(o0)), 10); Duration((Bottom(o2), Left(o2)), 5); (Behind(o1, o0), LeftOf(o1, o0), Shape_cube(o2))",
+            "new_modules": [
+                "CYLINDER",
+                "BOTTOM",
+                "BEHIND"
+            ],
             "positive_videos": [
                 11,
                 16,
@@ -9035,8 +9067,12 @@
         {
             "question": "For at least 5 frames, a cylindrical object o0 is in front of another object o1 while a third object o2 is to the left of o1. Then, for at least 15 frames, o1 is behind o2, while o0 is cyan in color and o1 is at the top of the frame. Finally, o2 is on the left side of the video frame for at least 5 frames.",
             "visprog_program": "",
-            "dsl": "Duration((FrontOf(o0, o1), LeftOf(o2, o1), Shape(o0, 'cylinder')), 5); Duration((Behind(o1, o2), Color(o0, 'cyan'), Top(o1)), 15); Duration(Left(o2), 5)",
-            "new_modules": ["CYLINDER", "BEHIND", "CYAN"],
+            "dsl": "Duration((FrontOf(o0, o1), LeftOf(o2, o1), Shape_cylinder(o0)), 5); Duration((Behind(o1, o2), Color_cyan(o0), Top(o1)), 15); Duration(Left(o2), 5)",
+            "new_modules": [
+                "CYLINDER",
+                "BEHIND",
+                "CYAN"
+            ],
             "positive_videos": [
                 4,
                 9,
@@ -10606,8 +10642,12 @@
         {
             "question": "For at least 5 frames, an object o0 is on the top left of the video frame, while another object o1 is on the right side of the frame. Subsequently, o0, which is made of metal, appears in the video for at least 10 frames. Finally, for another 5 frames, o0 is in front of a cylindrical object o2, and o1 is in front of o0.",
             "visprog_program": "",
-            "dsl": "Duration((Left(o0), Right(o1), Top(o0)), 5); Duration(Material(o0, 'metal'), 10); Duration((FrontOf(o0, o2), FrontOf(o1, o0), Shape(o2, 'cylinder')), 5)",
-            "new_modules": ["RIGHT", "METAL", "CYLINDER"],
+            "dsl": "Duration((Left(o0), Right(o1), Top(o0)), 5); Duration(Material_metal(o0), 10); Duration((FrontOf(o0, o2), FrontOf(o1, o0), Shape_cylinder(o2)), 5)",
+            "new_modules": [
+                "RIGHT",
+                "METAL",
+                "CYLINDER"
+            ],
             "positive_videos": [
                 0,
                 4,
