@@ -19,7 +19,7 @@ system_prompt:
     - Material(o0, material_value): Whether the material of o0 is material_value. material_value can be one of the following: ["rubber", "metal"].
     The predicates MUST be selected from the provided functions. Think step by step about all the region graphs, predicates, and duration constraints needed to resolve the user's request. Parse out as few region graphs, predicates, and duration constraints as possible while ensuring that the user's intent can be precisely captured. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list or new enum options that are not in the current enum list, you need to reply an empty string and nothing else.
 
-  parse_query_overall: >
+  parse_query_overall: > # Deprecated
     For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL and verified by the provided function, or NO if parsing the user input requires new predicates that are not listed in the current functions list.
   dsl_definition: >
     Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Remember to always add parentheses around comma-connected predicates. Assume the video segments capture 25 frames per second.
@@ -31,15 +31,15 @@ system_prompt:
   registered_udfs: >
     You have access to the following functions:
     {{functions}}
-  parse_query_details: >
-    The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list, you must simply reply: NO.
+  parse_query: >
+    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL and verified by the provided function, or NO if parsing the user input requires new predicates that are not listed in the current functions list. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request.
 
-  force_parse_query_overall: >
+  force_parse_query_overall: > # Deprecated
     For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function.
   dsl_definition_image: >
     The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas.
-  force_parse_query_details: >
-    The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
+  force_parse_query: >
+    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
 
   verify_udfs: >
     You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.

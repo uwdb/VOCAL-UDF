@@ -40,7 +40,10 @@ def parse_signature(signature):
     return udf_name, udf_vars
 
 class QueryParser:
-    def __init__(self, config, prompt_config, config_list, dataset, registered_functions, allow_new_udfs=True):
+    def __init__(self, config, prompt_config, config_list, dataset, registered_functions, run_id, allow_new_udfs=True):
+        self.registered_function_names = []
+        for registered_function in registered_functions:
+            self.registered_function_names.append(registered_function["signature"].split("(")[0].lower())
         if dataset in ["clevrer"]: # video dataset
             dsl_definition_prompt = prompt_config["system_prompt"]["dsl_definition"]
         elif dataset in ["clevr"]: # image dataset
@@ -50,11 +53,10 @@ class QueryParser:
         if allow_new_udfs:
             system_message = replace_slot(
                 " ".join([
-                    prompt_config["system_prompt"]["parse_query_overall"],
                     dsl_definition_prompt,
                     prompt_config["system_prompt"]["udf_definition"],
                     prompt_config["system_prompt"]["registered_udfs"],
-                    prompt_config["system_prompt"]["parse_query_details"],
+                    prompt_config["system_prompt"]["parse_query"],
                 ]),
                 {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
             )
@@ -62,11 +64,10 @@ class QueryParser:
         else:
             system_message = replace_slot(
                 " ".join([
-                    prompt_config["system_prompt"]["force_parse_query_overall"],
                     dsl_definition_prompt,
                     prompt_config["system_prompt"]["udf_definition"],
                     prompt_config["system_prompt"]["registered_udfs"],
-                    prompt_config["system_prompt"]["force_parse_query_details"],
+                    prompt_config["system_prompt"]["force_parse_query"],
                 ]),
                 {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
             )
@@ -80,6 +81,7 @@ class QueryParser:
                 "config_list": config_list,
                 "timeout": 120,
                 "temperature": config["query_parser"]["temperature"],
+                "seed": run_id
             }
         )
 
@@ -96,13 +98,27 @@ class QueryParser:
 
         @self.user_proxy.register_for_execution()
         @self.parser.register_for_llm(description="Verify syntax correctness of input query.")
-        def verify_syntax(
-            query: Annotated[str, "Input query written in DSL to be verified."],
-        ) -> str:
+        # TODO: Check if UDFs are available
+        def verify_syntax(query: Annotated[str, "Input query written in DSL to be verified."]) -> str:
+            def check_UDF_support(program):
+                unsupported_udfs = []
+                flag = True
+                for sg in program['query']:
+                    for pred in sg['scene_graph']:
+                        if pred['predicate'].lower() not in self.registered_function_names:
+                            flag = False
+                            unsupported_udfs.append(pred['predicate'])
+                return flag, unsupported_udfs
             try:
-                self.parsed_program = parse().parseString(query, parseAll=True).as_dict()
-                self.parsed_query = query
-                return self.parsed_program
+                parsed_program = parse().parseString(query, parseAll=True).as_dict()
+                # Post-check if parsed program uses unsupported UDFs
+                flag, unsupported_udfs = check_UDF_support(parsed_program)
+                if flag:
+                    self.parsed_program = parsed_program
+                    self.parsed_query = query
+                    return self.parsed_program
+                else:
+                    return query + "failed:\n" + "Unsupported UDFs: {}".format(unsupported_udfs)
             except (pp.ParseException, pp.ParseSyntaxException) as err:
                 return err.explain()
             except Exception as e:
@@ -129,13 +145,14 @@ class QueryParser:
         return self.parsed_query
 class UDFProposer:
     # Propose new UDFs and generate semantic interpretations
-    def __init__(self, config, prompt_config, registered_functions, dataset, labeling_budget, num_interpretations, query_id):
+    def __init__(self, config, prompt_config, registered_functions, dataset, labeling_budget, num_interpretations, query_id, run_id):
         self.config = config
         self.prompt_config = prompt_config
 
         self.num_interpretations = num_interpretations
         self.labeling_budget = labeling_budget
         self.query_id = query_id
+        self.run_id = run_id
 
         self.registered_functions = registered_functions
         self.dataset = dataset
@@ -185,9 +202,73 @@ class UDFProposer:
             self.schema_prompt += f"'{key}' can be one of the following: [{possible_values}]. "
         logger.debug("Schema prompt: {}".format(self.schema_prompt))
 
-    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
     def propose(self, user_query):
+        system_message = replace_slot(
+            " ".join([
+                self.prompt_config["system_prompt"]["dsl_definition"],
+                self.prompt_config["system_prompt"]["udf_definition"],
+                self.prompt_config["system_prompt"]["registered_udfs"],
+            ]),
+            {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
+        )
+        is_termination_msg = lambda x: x.get("content", "") and ("yes" in x.get("content", "").rstrip().lower() or "no" in x.get("content", "").rstrip().lower())
+        self.parser = autogen.AssistantAgent(
+            name="parser",
+            system_message=system_message,
+            llm_config={
+                "config_list": config_list,
+                "timeout": 120,
+                "temperature": config["query_parser"]["temperature"],
+                "seed": run_id
+            }
+        )
+
+        self.user_proxy = autogen.UserProxyAgent(
+            name="user_proxy",
+            is_termination_msg=is_termination_msg,
+            human_input_mode="NEVER",
+            max_consecutive_auto_reply=10,
+            code_execution_config={
+                "work_dir": "coding",
+                "use_docker": False
+            }
+        )
+
+        @self.user_proxy.register_for_execution()
+        @self.parser.register_for_llm(description="Verify syntax correctness of input query.")
+        # TODO: Check if UDFs are available
+        def verify_syntax(query: Annotated[str, "Input query written in DSL to be verified."]) -> str:
+            def check_UDF_support(program):
+                unsupported_udfs = []
+                flag = True
+                for sg in program['query']:
+                    for pred in sg['scene_graph']:
+                        if pred['predicate'].lower() not in self.registered_function_names:
+                            flag = False
+                            unsupported_udfs.append(pred['predicate'])
+                return flag, unsupported_udfs
+            try:
+                parsed_program = parse().parseString(query, parseAll=True).as_dict()
+                # Post-check if parsed program uses unsupported UDFs
+                flag, unsupported_udfs = check_UDF_support(parsed_program)
+                if flag:
+                    self.parsed_program = parsed_program
+                    self.parsed_query = query
+                    return self.parsed_program
+                else:
+                    return query + "failed:\n" + "Unsupported UDFs: {}".format(unsupported_udfs)
+            except (pp.ParseException, pp.ParseSyntaxException) as err:
+                return err.explain()
+            except Exception as e:
+                error_message = query + "failed:\n" + str(e)
+                return error_message
+
+
+
+
         # Step 1: propose new UDFs
+        # TODO: ensure proposed UDFs have only one or two arguments
         logger.info("Proposing new UDFs")
         system_message = replace_slot(
             " ".join([
@@ -214,7 +295,7 @@ class UDFProposer:
             temperature=self.config["udf_proposer"]["temperature"],
             top_p=self.config["udf_proposer"]["top_p"],
             max_tokens=512,
-            seed=self.propose.retry.statistics['attempt_number']
+            seed=self.run_id * 42 + self.propose.retry.statistics['attempt_number']
         )
         proposed_functions = json.loads("\n\n".join(re.findall(r"```json\n(.*?)```", response.choices[0].message.content, re.DOTALL)))
         logger.info("Proposed functions: {}".format(proposed_functions))
@@ -238,6 +319,7 @@ class UDFProposer:
         })
         logger.debug("generate_udfs_prompt: {}".format(generate_udfs_prompt))
         for trial in range(3): # Retry 3 times
+            response = None
             try:
                 response = self.client.chat.completions.create(
                     model="gpt-4-1106-preview",
@@ -253,14 +335,14 @@ class UDFProposer:
                     ],
                     temperature=self.config["udf_generator"]["temperature"],
                     top_p=self.config["udf_generator"]["top_p"],
-                    seed=trial
+                    seed=self.run_id * 42 + trial
                 )
                 implemented_udfs = json.loads("\n\n".join(re.findall(r"```json\n(.*?)```", response.choices[0].message.content, re.DOTALL)))["answer"]
-                os.makedirs(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", udf_name), exist_ok=True)
+                os.makedirs(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", f"run-{self.run_id}", udf_name), exist_ok=True)
                 for idx, implemented_udf in enumerate(implemented_udfs):
                     semantic_interpretation = implemented_udf["semantic_interpretation"]
                     function_implementation = implemented_udf["function_implementation"]
-                    with open(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", udf_name, "{}_{}.json".format(udf_name, idx)), "w") as f:
+                    with open(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", f"run-{self.run_id}", udf_name, "{}_{}.json".format(udf_name, idx)), "w") as f:
                         json.dump({
                             "udf_name": udf_name,
                             "udf_signature": udf_signature,
@@ -412,7 +494,7 @@ class UDFProposer:
         n_obj = len(udf_vars)
 
         # Construct training data and test data
-        self.conn.execute("SELECT setseed(0.5)")
+        self.conn.execute(f"SELECT setseed({self.run_id / 100})")
         if n_obj == 1:
             df_filtered = self.conn.execute(
                 "SELECT * FROM Obj_clevrer ORDER BY random() LIMIT {}"
@@ -432,6 +514,8 @@ class UDFProposer:
             """.format(project_clause, self.n_train + self.n_test)).df()
             df_filtered['o1'] = df_filtered.apply(lambda row: {col.split('_', 1)[1]: row[col] for col in df_filtered.columns if col.startswith('o1_')}, axis=1)
             df_filtered['o2'] = df_filtered.apply(lambda row: {col.split('_', 1)[1]: row[col] for col in df_filtered.columns if col.startswith('o2_')}, axis=1)
+        else:
+            raise ValueError("Number of objects not supported: {}".format(n_obj))
         df_train = df_filtered[:self.n_train]
         df_train = df_train.reset_index()
         df_test = df_filtered[self.n_train:]
@@ -447,7 +531,7 @@ class UDFProposer:
         # Read UDF candidates from json files
         udf_candidates_with_scores = [] # [udf_id, udf_candidate, score, loss_t], where loss_t = n_misclassified
         for i in range(self.num_interpretations):
-            with open(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", udf_name, "{}_{}.json".format(udf_name, i)), "r") as f:
+            with open(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", f"run-{self.run_id}", udf_name, "{}_{}.json".format(udf_name, i)), "r") as f:
                 udf_candidate = json.load(f)
                 udf_candidates_with_scores.append([str(i), udf_candidate, 1, 0])
                 # TODO: kwargs
@@ -539,7 +623,7 @@ class UDFProposer:
         best_impl = best_candidates[0][1]
         semantic_interpretation = best_impl["semantic_interpretation"]
         function_implementation = best_impl["function_implementation"]
-        with open(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", udf_name, "{}_selected.json".format(udf_name)), "w") as f:
+        with open(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", f"run-{self.run_id}", udf_name, "{}_selected.json".format(udf_name)), "w") as f:
             json.dump({
                 "udf_name": udf_name,
                 "udf_signature": udf_signature,
@@ -603,7 +687,7 @@ class QueryExecutor:
         return y_pred
 
 if __name__ == "__main__":
-    # python main.py --query_id 0 --dataset "clevrer" --budget 20 --num_interpretations 20
+    # python main.py --query_id 0 --run_id 0 --dataset "clevrer" --budget 20 --num_interpretations 20
     config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
     parser = argparse.ArgumentParser()
@@ -613,8 +697,8 @@ if __name__ == "__main__":
     # parser.add_argument("--gt_udf_impl", type=str, help="ground truth UDF implementation")
     # parser.add_argument("--udf_generation_name", type=str, help="name of the function that GPT will generate")
     parser.add_argument("--query_id", type=int, help="query id")
+    parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
-    parser.add_argument("--log_name_suffix", type=str, help="log name suffix")
     parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     parser.add_argument("--budget", type=int, help="labeling budget")
     parser.add_argument("--ask_for_gt_udf", action='store_true', help='Ask for the gt_udf name interactively if enabled')
@@ -628,29 +712,30 @@ if __name__ == "__main__":
     # udf_description = args.udf_description
     # udf_generation_name = "py_{}".format(udf_class)
     query_id = args.query_id
+    run_id = args.run_id
     dataset = args.dataset
-    log_name_suffix = args.log_name_suffix
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
     # stage = args.stage
 
+    np.random.seed(run_id)
+
     input_query_file = config[dataset]['input_query_file']
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     gt_dsl = input_query["dsl"]
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
-    y_true = [1 if i in positive_videos else 0 for i in range(10000)]
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]['dataset_size'])]
     """
     Set up logging
     """
     # Create a directory if it doesn't already exist
-    os.makedirs(config['log_dir'], exist_ok=True)
-    # os.makedirs(os.path.join('/home/enhao/EQUI-VOCAL/outputs/udf_generation', udf_class), exist_ok=True)
+    os.makedirs(os.path.join(config['log_dir'], "udf_generation", dataset), exist_ok=True)
 
     # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(config['log_dir'], 'qid-{}_budget-{}_ninterp-{}.log'.format(query_id, labeling_budget, num_interpretations)), mode='w')
+    file_handler = logging.FileHandler(os.path.join(config['log_dir'], "udf_generation", dataset, 'qid-{}_run-{}-budget-{}_ninterp-{}.log'.format(query_id, run_id, labeling_budget, num_interpretations)), mode='w')
     file_handler.setLevel(logging.DEBUG)
 
     # Create a console handler with a higher log level
@@ -670,7 +755,7 @@ if __name__ == "__main__":
     # See https://microsoft.github.io/autogen/docs/FAQ#set-your-api-endpoints
     # and OAI_CONFIG_LIST_sample
     config_list = autogen.config_list_from_json(
-        env_or_file="OAI_CONFIG_LIST",
+        env_or_file="/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/OAI_CONFIG_LIST",
         filter_dict={
             "model": ["gpt-4", "gpt-3.5-turbo", "gpt-3.5-turbo-16k"],
         },
@@ -678,12 +763,12 @@ if __name__ == "__main__":
 
     prompt_config = yaml.load(open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"), Loader=yaml.FullLoader)
 
-    registered_functions = json.load(open("registered_udfs.json", "r"))['test']
+    registered_functions = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))['test']
 
     # user_query = "Two objects move from far to close, then to far again"
 
-    up = UDFProposer(config, prompt_config, registered_functions, dataset, labeling_budget, num_interpretations, query_id)
-    qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions)
+    up = UDFProposer(config, prompt_config, registered_functions, dataset, labeling_budget, num_interpretations, query_id, run_id)
+    qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, run_id)
     flag = qp.parse(user_query)
     # Parse query
     while "no" in flag:
@@ -725,10 +810,10 @@ if __name__ == "__main__":
             }
             registered_functions.append(new_udf)
         # Step 6: Re-parse the query
-        qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions)
+        qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, run_id)
         flag = qp.parse(user_query)
     if "yes" in flag:
-        qe = QueryExecutor(config, "Obj_clevrer", registered_functions)
+        qe = QueryExecutor(config, f"Obj_{dataset}", registered_functions)
         parsed_program = qp.get_parsed_program()
         qe.run(parsed_program, y_true, debug=False)
     else:
