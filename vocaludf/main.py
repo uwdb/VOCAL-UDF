@@ -5,6 +5,7 @@ import autogen
 from src.utils import program_to_dsl, dsl_to_program
 import yaml
 import json
+from typing import Tuple, List
 from vocaludf.parser import parse
 import pyparsing as pp
 import os
@@ -98,7 +99,6 @@ class QueryParser:
 
         @self.user_proxy.register_for_execution()
         @self.parser.register_for_llm(description="Verify syntax correctness of input query.")
-        # TODO: Check if UDFs are available
         def verify_syntax(query: Annotated[str, "Input query written in DSL to be verified."]) -> str:
             def check_UDF_support(program):
                 unsupported_udfs = []
@@ -128,8 +128,6 @@ class QueryParser:
     def parse(self, user_query):
         chat_result = self.user_proxy.initiate_chat(
             self.parser,
-            # message="Two objects move from far to close, then to far again",
-            # message="In lane 1, o1 accelerates rapidly and then o2 accelerates rapdily",
             message=user_query,
         )
         chat_messages = self.user_proxy.chat_messages[self.parser]
@@ -202,31 +200,40 @@ class UDFProposer:
             self.schema_prompt += f"'{key}' can be one of the following: [{possible_values}]. "
         logger.debug("Schema prompt: {}".format(self.schema_prompt))
 
-    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
+    # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
     def propose(self, user_query):
+        # Step 1: propose new UDFs
+        # TODO: ensure proposed UDFs have only one or two arguments
+        logger.info("Proposing new UDFs")
+        if self.dataset in ["clevrer"]: # video dataset
+            dsl_definition_prompt = self.prompt_config["system_prompt"]["dsl_definition"]
+        elif self.dataset in ["clevr"]: # image dataset
+            dsl_definition_prompt = self.prompt_config["system_prompt"]["dsl_definition_image"]
         system_message = replace_slot(
             " ".join([
-                self.prompt_config["system_prompt"]["dsl_definition"],
+                dsl_definition_prompt,
                 self.prompt_config["system_prompt"]["udf_definition"],
                 self.prompt_config["system_prompt"]["registered_udfs"],
+                self.prompt_config["prompt"]["propose_udfs"]
             ]),
             {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
         )
-        is_termination_msg = lambda x: x.get("content", "") and ("yes" in x.get("content", "").rstrip().lower() or "no" in x.get("content", "").rstrip().lower())
-        self.parser = autogen.AssistantAgent(
-            name="parser",
+        udf_proposer = autogen.AssistantAgent(
+            name="udf_proposer",
             system_message=system_message,
             llm_config={
                 "config_list": config_list,
                 "timeout": 120,
-                "temperature": config["query_parser"]["temperature"],
-                "seed": run_id
+                "temperature": self.config["udf_proposer"]["temperature"],
+                "seed": self.run_id,
+                "top_p": self.config["udf_proposer"]["top_p"],
+                "max_tokens": 512,
             }
         )
 
-        self.user_proxy = autogen.UserProxyAgent(
+        user_proxy = autogen.UserProxyAgent(
             name="user_proxy",
-            is_termination_msg=is_termination_msg,
+            is_termination_msg=lambda x: x.get("content", "") and "terminate" in x.get("content", "").rstrip().lower(),
             human_input_mode="NEVER",
             max_consecutive_auto_reply=10,
             code_execution_config={
@@ -235,73 +242,35 @@ class UDFProposer:
             }
         )
 
-        @self.user_proxy.register_for_execution()
-        @self.parser.register_for_llm(description="Verify syntax correctness of input query.")
-        # TODO: Check if UDFs are available
-        def verify_syntax(query: Annotated[str, "Input query written in DSL to be verified."]) -> str:
-            def check_UDF_support(program):
-                unsupported_udfs = []
-                flag = True
-                for sg in program['query']:
-                    for pred in sg['scene_graph']:
-                        if pred['predicate'].lower() not in self.registered_function_names:
-                            flag = False
-                            unsupported_udfs.append(pred['predicate'])
-                return flag, unsupported_udfs
+        @user_proxy.register_for_execution()
+        @udf_proposer.register_for_llm(description="Verify syntax correctness of proposed UDFs.")
+        def verify_syntax(proposed_functions: Annotated[List[List[str]], "A list of proposed functions. Each proposed function is represented as a tuple. The first element is a str containing the function signature 'function(args)', and the second element is a str containing the function description"]) -> str:
             try:
-                parsed_program = parse().parseString(query, parseAll=True).as_dict()
-                # Post-check if parsed program uses unsupported UDFs
-                flag, unsupported_udfs = check_UDF_support(parsed_program)
-                if flag:
-                    self.parsed_program = parsed_program
-                    self.parsed_query = query
-                    return self.parsed_program
+                invalid_funcs = []
+                for proposed_function in proposed_functions:
+                    signature = proposed_function[0]
+                    udf_name, udf_vars = parse_signature(signature)
+                    if len(udf_vars) != 1 and len(udf_vars) != 2:
+                        invalid_funcs.append(signature)
+                if len(invalid_funcs) > 0:
+                    return f"Invalid number of arguments for proposed functions: {invalid_funcs}."
                 else:
-                    return query + "failed:\n" + "Unsupported UDFs: {}".format(unsupported_udfs)
-            except (pp.ParseException, pp.ParseSyntaxException) as err:
-                return err.explain()
+                    self.proposed_functions = {func[0]: func[1] for func in proposed_functions}
+                    return "Valid"
             except Exception as e:
-                error_message = query + "failed:\n" + str(e)
-                return error_message
+                return "Error: " + str(e)
 
+        logger.debug(f"system_message: {system_message}")
 
-
-
-        # Step 1: propose new UDFs
-        # TODO: ensure proposed UDFs have only one or two arguments
-        logger.info("Proposing new UDFs")
-        system_message = replace_slot(
-            " ".join([
-                self.prompt_config["system_prompt"]["dsl_definition"],
-                self.prompt_config["system_prompt"]["udf_definition"],
-                self.prompt_config["system_prompt"]["registered_udfs"],
-            ]),
-            {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
+        user_proxy.initiate_chat(
+            udf_proposer,
+            message=f"User query: {user_query}",
         )
-        messages = [
-            {"role": "system", "content": system_message},
-            {
-                "role": "user",
-                "content": " ".join([
-                    f"User query: {user_query}",
-                    self.prompt_config["prompt"]["propose_udfs"],
-                ])
-            },
-        ]
-        logger.debug(f"messages: {messages}", )
-        response = self.client.chat.completions.create(
-            model="gpt-4-1106-preview",
-            messages=messages,
-            temperature=self.config["udf_proposer"]["temperature"],
-            top_p=self.config["udf_proposer"]["top_p"],
-            max_tokens=512,
-            seed=self.run_id * 42 + self.propose.retry.statistics['attempt_number']
-        )
-        proposed_functions = json.loads("\n\n".join(re.findall(r"```json\n(.*?)```", response.choices[0].message.content, re.DOTALL)))
-        logger.info("Proposed functions: {}".format(proposed_functions))
+
+        logger.info("Proposed functions: {}".format(self.proposed_functions))
         # Step 2: verify functions (i.e., whether they can be constructed out of existing ones)
         # TODO: Implement this
-        return proposed_functions
+        return self.proposed_functions
 
     def implement(self, udf_signature, udf_description):
         # Step 3: generate semantic interpretations and implement the UDF. Results are saved to disk
