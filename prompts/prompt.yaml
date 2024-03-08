@@ -64,12 +64,8 @@ prompt:
   parse_query: >
     Now I input { {{user_query}} }.
   propose_udfs: >
-    Please propose the new functions that are necessary to parse the user query.
+    For function proposal tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done. Please propose the new functions that are necessary to parse the user query.
     Let's think step by step. Based on the existing funtions, determine what new functions are needed. The proposed function must follow the format. Don't propose functions that contain changes in states. If you have those, propose a separate function for each state instead. For example, do not propose a function MergeFromAIntoB(o0) that checks whether an object o0 merges from lane A to lane B because it contains two states: o0 is in lane A and o0 is in lane B. Instead, replace it with two separate functions: InLane_A(o0) and InLane_B(o0). Propose as few functions as possible while ensuring that the user's intent can be precisely captured.
-    Use the following output format:
-    ```json
-    {"function(args)": "description"}
-    ```
   verify_udfs: >
     The proposed functions are { {{proposed_functions}} }.
   generate_semantic_interpretation_backup: >

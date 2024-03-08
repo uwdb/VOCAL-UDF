@@ -4,9 +4,11 @@ from typing_extensions import Annotated
 import autogen
 from src.utils import program_to_dsl, dsl_to_program
 import yaml
+import random
+import string
 import json
 from typing import Tuple, List
-from vocaludf.parser import parse
+from vocaludf.parser import parse, parse_udf
 import pyparsing as pp
 import os
 from vocaludf.utils import duckdb_execute_cache_sequence, duckdb_execute_clevrer_cache_sequence, replace_slot
@@ -35,9 +37,18 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 def parse_signature(signature):
-    tokens = list(tokenize.generate_tokens(io.StringIO(signature).readline))
-    udf_name = tokens[0].string
-    udf_vars = [token for token in tokens[2:-3] if token.string not in [',','=']]
+    """
+    Example:
+    signature: "Color_red(o1, -1)"
+    parsed result: {'fn_name': 'Color_red', 'variables': ['o1'], 'parameter': -1}
+    """
+    # NOTE: could throw an exception if the signature is not in the correct format
+    result = parse_udf().parseString(signature, parseAll=True).as_dict()
+    udf_name = result['fn_name']
+    udf_vars = result['variables']
+    # tokens = list(tokenize.generate_tokens(io.StringIO(signature).readline))
+    # udf_name = tokens[0].string
+    # udf_vars = [token for token in tokens[2:-3] if token.string not in [',','=']]
     return udf_name, udf_vars
 
 class QueryParser:
@@ -132,8 +143,14 @@ class QueryParser:
         )
         chat_messages = self.user_proxy.chat_messages[self.parser]
         logger.debug("chat_messages {}".format(chat_messages))
-        flag = chat_messages[-1]['content'].strip().lower()
-        logger.debug("flag {}".format(flag))
+        if chat_messages[-1]['role'] != "user":
+            # The conversation didn't end with the user's message (YES/NO)
+            # Assume YES
+            flag = 'yes'
+            logger.debug("The conversation didn't end with the user's message. Assume: flag {}".format(flag))
+        else:
+            flag = chat_messages[-1]['content'].strip().lower()
+            logger.debug("flag {}".format(flag))
         return flag
 
     def get_parsed_program(self):
@@ -200,10 +217,8 @@ class UDFProposer:
             self.schema_prompt += f"'{key}' can be one of the following: [{possible_values}]. "
         logger.debug("Schema prompt: {}".format(self.schema_prompt))
 
-    # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
     def propose(self, user_query):
         # Step 1: propose new UDFs
-        # TODO: ensure proposed UDFs have only one or two arguments
         logger.info("Proposing new UDFs")
         if self.dataset in ["clevrer"]: # video dataset
             dsl_definition_prompt = self.prompt_config["system_prompt"]["dsl_definition"]
@@ -244,7 +259,7 @@ class UDFProposer:
 
         @user_proxy.register_for_execution()
         @udf_proposer.register_for_llm(description="Verify syntax correctness of proposed UDFs.")
-        def verify_syntax(proposed_functions: Annotated[List[List[str]], "A list of proposed functions. Each proposed function is represented as a tuple. The first element is a str containing the function signature 'function(args)', and the second element is a str containing the function description"]) -> str:
+        def verify_syntax(proposed_functions: Annotated[List[List[str]], "A list of proposed functions where proposed_functions[i] = [signature_i, description_i]. 'signature_i' represents the function signature 'function(args)', and 'description_i' contains the function description."]) -> str:
             try:
                 invalid_funcs = []
                 for proposed_function in proposed_functions:
@@ -256,7 +271,7 @@ class UDFProposer:
                     return f"Invalid number of arguments for proposed functions: {invalid_funcs}."
                 else:
                     self.proposed_functions = {func[0]: func[1] for func in proposed_functions}
-                    return "Valid"
+                    return "Success"
             except Exception as e:
                 return "Error: " + str(e)
 
@@ -267,7 +282,11 @@ class UDFProposer:
             message=f"User query: {user_query}",
         )
 
-        logger.info("Proposed functions: {}".format(self.proposed_functions))
+        logger.info("Proposed functions: {}".format(self.proposed_functions)) # key: signature, value: description
+        registered_function_names = set([registered_function["signature"].split("(")[0].lower() for registered_function in self.registered_functions])
+        for key in list(self.proposed_functions.keys()):
+            if key.split("(")[0].lower() in registered_function_names:
+                del self.proposed_functions[key]
         # Step 2: verify functions (i.e., whether they can be constructed out of existing ones)
         # TODO: Implement this
         return self.proposed_functions
@@ -616,13 +635,15 @@ class QueryExecutor:
             signature = func['signature']
             udf_name, udf_vars = parse_signature(signature)
             python_func_name = func['python_function'].split()[1].split('(')[0]
+            # create a unique suffix
+            suffix = ''.join(random.choices(string.ascii_lowercase, k=8))
             python_func_args = func['python_function'].split('(')[1].split(')')[0].split(',')
             python_arg_str = ", ".join(f"{arg}: dict" for arg in python_func_args)
-            python_header_type_annotated = f"def {python_func_name}({python_arg_str}) -> bool:"
+            python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
             # Remove the first line of the function definition
             python_function = python_header_type_annotated + '\n' + '\n'.join(func['python_function'].split('\n')[1:])
             exec(python_function)
-            exec(f"self.conn.create_function('{udf_name}', {python_func_name})")
+            exec(f"self.conn.create_function('{udf_name}', {python_func_name}_{suffix})")
             logger.debug(f"Registered function: {func['signature']}")
 
     def run(self, program, y_true, debug=False):
@@ -689,6 +710,7 @@ if __name__ == "__main__":
     num_interpretations = args.num_interpretations
     # stage = args.stage
 
+    random.seed(run_id)
     np.random.seed(run_id)
 
     input_query_file = config[dataset]['input_query_file']
@@ -740,50 +762,52 @@ if __name__ == "__main__":
     qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, run_id)
     flag = qp.parse(user_query)
     # Parse query
-    while "no" in flag:
-        # Step 1: propose new UDFs
-        proposed_functions = up.propose(user_query)
-        for udf_signature, udf_description in proposed_functions.items():
-            # Step 2: generate semantic interpretations and implementations. Save the generated UDFs to disk
-            up.implement(udf_signature, udf_description)
-            # Step 3: Select the best UDF
-            # First, retrieve the ground truth UDF
-            if ask_for_gt_udf:
-                # Ask the user for gt_udf name
-                gt_udf_name = input('Please enter gt_udf_name (options: "gt_near.gt_x", "gt_far.gt_x", "gt_rightof.gt_x", "gt_behind.gt_x", "gt_location_right.gt_x", "gt_location_bottom.gt_x", "gt_color_brown.gt_x", "gt_color_purple.gt_x", "gt_color_cyan.gt_x", "gt_color_yellow.gt_x", "gt_shape_cylinder.gt_x", "gt_material_metal.gt_x", where x is a non-negative integer): ')
+    # Step 1: propose new UDFs
+    proposed_functions = up.propose(user_query)
+    for udf_signature, udf_description in proposed_functions.items():
+        # Step 2: generate semantic interpretations and implementations. Save the generated UDFs to disk
+        up.implement(udf_signature, udf_description)
+        # Step 3: Select the best UDF
+        # First, retrieve the ground truth UDF
+        if ask_for_gt_udf:
+            # Ask the user for gt_udf name
+            gt_udf_name = input('Please enter gt_udf_name (options: "gt_near.gt_x", "gt_far.gt_x", "gt_rightof.gt_x", "gt_behind.gt_x", "gt_location_right.gt_x", "gt_location_bottom.gt_x", "gt_color_brown.gt_x", "gt_color_purple.gt_x", "gt_color_cyan.gt_x", "gt_color_yellow.gt_x", "gt_shape_cylinder.gt_x", "gt_material_metal.gt_x", where x is a non-negative integer): ')
+        else:
+            # HACK: Use a LM to automatically resolve the ground truth UDF
+            # NOTE: Correctness is not guaranteed
+            udf_name, udf_vars = parse_signature(udf_signature)
+            if len(udf_vars) == 2:
+                gt_udf_candidates = ["near", "far", "rightof", "behind"]
             else:
-                # HACK: Use a LM to automatically resolve the ground truth UDF
-                # NOTE: Correctness is not guaranteed
-                udf_name, udf_vars = parse_signature(udf_signature)
-                if len(udf_vars) == 2:
-                    gt_udf_candidates = ["near", "far", "rightof", "behind"]
-                else:
-                    gt_udf_candidates = ["location_right", "location_bottom", "color_brown", "color_purple", "color_cyan", "color_yellow", "shape_cylinder", "material_metal"]
-                model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-                gt_udf_embeddings = model.encode(gt_udf_candidates)
-                implemented_udf_embedding = model.encode([udf_name])
-                similarities = util.pytorch_cos_sim(implemented_udf_embedding, gt_udf_embeddings)[0]
-                gt_udf_name = "gt_{}.gt_0".format(gt_udf_candidates[similarities.argmax()])
-                logger.debug("similarities: {}".format([f"{gt_udf_candidate}: {similarity}" for gt_udf_candidate, similarity in zip(gt_udf_candidates, similarities)]))
-                logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-            best_impl = up.select(udf_signature, udf_description, gt_udf_name)
-            # Assume now that the best UDF is the first one
-            # best_impl = implemented_udfs[0]
-            logger.info("Best {} implementation: {}".format(udf_signature, best_impl["function_implementation"]))
-            # Step 5: Register the UDF
-            new_udf = {
-                "signature": udf_signature,
-                "description": udf_description,
-                "semantic_interpretation": best_impl["semantic_interpretation"], # New field. Unsure if we need this
-                "python_function": best_impl["function_implementation"]
-            }
-            registered_functions.append(new_udf)
-        # Step 6: Re-parse the query
-        qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, run_id)
-        flag = qp.parse(user_query)
-    if "yes" in flag:
-        qe = QueryExecutor(config, f"Obj_{dataset}", registered_functions)
+                gt_udf_candidates = ["location_right", "location_bottom", "color_brown", "color_purple", "color_cyan", "color_yellow", "shape_cylinder", "material_metal"]
+            model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            gt_udf_embeddings = model.encode(gt_udf_candidates)
+            implemented_udf_embedding = model.encode([udf_name])
+            similarities = util.pytorch_cos_sim(implemented_udf_embedding, gt_udf_embeddings)[0]
+            gt_udf_name = "gt_{}.gt_0".format(gt_udf_candidates[similarities.argmax()])
+            logger.debug("similarities: {}".format([f"{gt_udf_candidate}: {similarity}" for gt_udf_candidate, similarity in zip(gt_udf_candidates, similarities)]))
+            logger.info(f"Selected gt_udf_name: {gt_udf_name}")
+        best_impl = up.select(udf_signature, udf_description, gt_udf_name)
+        # Assume now that the best UDF is the first one
+        # best_impl = implemented_udfs[0]
+        logger.info("Best {} implementation: {}".format(udf_signature, best_impl["function_implementation"]))
+        # Step 5: Register the UDF
+        new_udf = {
+            "signature": udf_signature,
+            "description": udf_description,
+            "semantic_interpretation": best_impl["semantic_interpretation"], # New field. Unsure if we need this
+            "python_function": best_impl["function_implementation"]
+        }
+        registered_functions.append(new_udf)
+    # Step 6: Re-parse the query
+    # NOTE: Set allow_new_udfs=False. If the parser still wants to propose new UDFs, we will force it to generate a query that is the best approximation.
+    qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, run_id, allow_new_udfs=False)
+    qp.parse(user_query)
+    try:
         parsed_program = qp.get_parsed_program()
+        parsed_dsl = qp.get_parsed_query()
+        qe = QueryExecutor(config, f"Obj_{dataset}", registered_functions)
         qe.run(parsed_program, y_true, debug=False)
-    else:
-        raise ValueError("Invalid response from user_proxy")
+    except Exception as e:
+        logger.error("QueryExecutor Error: {}".format(e))
+        logger.info("F1 score: 0")

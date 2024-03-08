@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=exp-visprog_clevr
+#SBATCH --job-name=exp-udf_exclusion_clevr
 #SBATCH --partition=gpu-a40
 #SBATCH --account=balazinska
 #SBATCH --nodes=1

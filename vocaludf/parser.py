@@ -5,6 +5,7 @@ from pyparsing import (
     Forward,
     alphas,
     alphanums,
+    nums,
     Regex,
     ParseException,
     ParseSyntaxException,
@@ -47,7 +48,7 @@ def parse():
     lpar, rpar, comma = map(Suppress, "(),")
     TRUE = CaselessKeyword("true")
     FALSE = CaselessKeyword("false")
-    var = Word("o", alphanums)
+    var = Word("o", nums)
     posint = Regex(r"[1-9]\d*").set_parse_action(lambda t: int(t[0]))
     string = QuotedString("'") | QuotedString('"')
     number = ppc.number()
@@ -64,7 +65,43 @@ def parse():
     bnf = expr("query") | (lpar + expr("query") + rpar)
     return bnf
 
+def parse_udf():
+    """
+    var     :: 'o' '0'..'9'+
+    value  :: string | number | TRUE | FALSE
+    predicate :: fn '(' var [ ',' var ] [ ',' value ] ')'
+    """
+    lpar, rpar, comma = map(Suppress, "(),")
+    TRUE = CaselessKeyword("true")
+    FALSE = CaselessKeyword("false")
+    var = Word("o", nums)
+    string = QuotedString("'") | QuotedString('"')
+    number = ppc.number()
+    value = string | number | TRUE | FALSE
+    fn_name = ungroup(~Literal("Duration") + Word(alphas, alphanums + "_"))
+    fn_args = Group(var - Opt(comma + var))
+    udf = fn_name("fn_name") - lpar - fn_args('variables') - Opt(comma + value)('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar
+    return udf
+
 if __name__ == "__main__":
+    def test_udf(s, expected=None):
+        try:
+            result = parse_udf().parseString(s, parseAll=True).as_dict()
+            result_as_list = parse_udf().parseString(s, parseAll=True).asList()
+            # results_dump = parse().parseString(s, parseAll=True).dump()
+        except (ParseException, ParseSyntaxException) as err:
+            print(err.explain())
+        except Exception as e:
+            print(s, "failed:\n", str(e))
+        else:
+            if expected is None:
+                print(s, "->", result)
+                print(result_as_list)
+            elif result != expected:
+                print(f"failed:\n[expected] {expected}\n[result] {result}")
+            else:
+                print("success")
+
     def test(s, expected=None):
         try:
             result = parse().parseString(s, parseAll=True).as_dict()
@@ -80,14 +117,22 @@ if __name__ == "__main__":
                 print(result_as_list)
             elif result != expected:
                 print(f"failed:\n[expected] {expected}\n[result] {result}")
-                # print(results_as_list)
-                # print(results_dump)
             else:
                 print("success")
-                # print(results_as_list)
-                # print(results_dump)
     # [{'scene_graph': [{'predicate': 'Color', 'parameter': 'red', 'variables': ['o0']}, {'predicate': 'Far', 'parameter': 3.0, 'variables': ['o0', 'o1']}, {'predicate': 'Shape', 'parameter': 'cylinder', 'variables': ['o1']}], 'duration_constraint': 1}, {'scene_graph': [{'predicate': 'Near', 'parameter': 1.0, 'variables': ['o0', 'o1']}, {'predicate': 'RightQuadrant', 'parameter': None, 'variables': ['o2']}, {'predicate': 'TopQuadrant', 'parameter': None, 'variables': ['o2']}], 'duration_constraint': 1}]
-    # unit tests
+    # unit tests for UDF
+    test_udf("Color_red(o1)", {'fn_name': 'Color_red', 'variables': ['o1']})
+    test_udf("Color_red(o1, o2)", {'fn_name': 'Color_red', 'variables': ['o1', 'o2']})
+    test_udf("Color_red(o1, -1)", {'fn_name': 'Color_red', 'variables': ['o1'], 'parameter': -1})
+    test_udf("Color_red(o1, o2, 3)", {'fn_name': 'Color_red', 'variables': ['o1', 'o2'], 'parameter': 3})
+    test_udf("left(o, o1)", {'fn_name': 'left', 'variables': ['o', 'o1']})
+    # Syntax error
+    test_udf("left(a1)")
+    test_udf("left(o, oa)")
+    test_udf("Color_red(o1, o2, o3)")
+    test_udf("Duration(o1)")
+
+    # unit tests for DSL
     test("Color(o0, 1)", {'query': [{'scene_graph': [{'predicate': 'Color', 'variables': ['o0'], 'parameter': 1}], 'duration_constraint': 1}]})
     test("Color(o0, 'red')", {'query': [{'scene_graph': [{'predicate': 'Color', 'variables': ['o0'], 'parameter': 'red'}], 'duration_constraint': 1}]})
     test('Color(o0, "red")', {'query': [{'scene_graph': [{'predicate': 'Color', 'variables': ['o0'], 'parameter': 'red'}], 'duration_constraint': 1}]})
