@@ -1,108 +1,55 @@
-system_prompt:
-  use_udfs: >
-    You are a helpful AI assistant that can parse and translate user's natural language queries over video segments to a query written in a domain-specific language (DSL).
-    Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Remember to always add parentheses around comma-connected predicates. Assume the video segments capture 25 frames per second.
-    A function has the following format: <function_name>(<var1>[, <var2>][, <value>]). A function can take in one variable for object and attribute predicates, or two variables for relationship predicates. A function can optionally take in a value argument. The value argument is used to specify the value of an attribute predicate. For example, the function Color(o0, 'red') checks whether the color of o0 is red.
-    You have access to the following functions:
-    - Near(o0, o1, theta_value): Whether o0 is near o1. Always set theta_value to 1 when calling the function.
-    - Far(o0, o1, theta_value): Whether o0 is far away from o1. Always set theta_value to 3 when calling the function.
-    - LeftOf(o0, o1): Whether o0 is on the left of o1.
-    - RightOf(o0, o1): Whether o0 is on the right of o1.
-    - Behind(o0, o1): Whether o0 is behind o1.
-    - FrontOf(o0, o1): Whether o0 is in front of o1.
-    - LeftQuadrant(o0): Whether o0 is on the left of the frame.
-    - RightQuadrant(o0): Whether o0 is on the right of the frame.
-    - TopQuadrant(o0): Whether o0 is at the top of the frame.
-    - BottomQuadrant(o0): Whether o0 is at the bottom of the frame.
-    - Color(o0, color_value): Whether the color of o0 is color_value. color_value can be one of the following: ["gray", "red", "blue", "green", "brown", "cyan", "purple", "yellow"].
-    - Shape(o0, shape_value): Whether the shape of o0 is shape_value. shape_value can be one of the following: ["cube", "sphere", "cylinder"].
-    - Material(o0, material_value): Whether the material of o0 is material_value. material_value can be one of the following: ["rubber", "metal"].
-    The predicates MUST be selected from the provided functions. Think step by step about all the region graphs, predicates, and duration constraints needed to resolve the user's request. Parse out as few region graphs, predicates, and duration constraints as possible while ensuring that the user's intent can be precisely captured. It is mandatory that if parsing the user input requires new predicates that are not listed in the current functions list or new enum options that are not in the current enum list, you need to reply an empty string and nothing else.
-
-  parse_query_overall: > # Deprecated
-    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL and verified by the provided function, or NO if parsing the user input requires new predicates that are not listed in the current functions list.
-  dsl_definition: >
-    Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Remember to always add parentheses around comma-connected predicates. Assume the video segments capture 25 frames per second.
-  udf_definition: >
-    A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
-    - object predicate: objectName(o0). For example, Car(o0) checks whether o0 is a car.
-    - relationship predicate: relationshipName(o0, o1). For example, LeftOf(o0, o1) checks whether o0 is on the left of o1.
-    - attribute predicate: key_value(o0). For example, Color_Red(o0) checks whether the color of o0 is red.
-  registered_udfs: >
-    You have access to the following functions:
-    {{functions}}
-  parse_query: >
-    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL and verified by the provided function, or NO if parsing the user input requires new predicates that are not listed in the current functions list. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request.
-
-  force_parse_query_overall: > # Deprecated
-    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function.
-  dsl_definition_image: >
-    The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas.
-  force_parse_query: >
-    For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
-
-  verify_udfs: >
-    You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
-    Here are the existing functions:
-    {{functions}}
-    For each proposed function, determine if it is already covered or can be constructed out of existing functions. If so, remove it from the list. Do not use any assumptions that are not explicitly stated. Output the remaining functions in a strict JSON format (if there is nothing left, please reply empty JSON):
+dsl_definition: >
+  Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Remember to always add parentheses around comma-connected predicates. Assume the video segments capture 25 frames per second.
+udf_definition: >
+  A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
+  - object predicate: objectName(o0). For example, Car(o0) checks whether o0 is a car.
+  - relationship predicate: relationshipName(o0, o1). For example, LeftOf(o0, o1) checks whether o0 is on the left of o1.
+  - attribute predicate: key_value(o0). For example, Color_Red(o0) checks whether the color of o0 is red.
+registered_udfs: >
+  You have access to the following functions:
+  {{functions}}
+parse_query: >
+  For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL and verified by the provided function, or NO if parsing the user input requires new predicates that are not listed in the current functions list. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request.
+dsl_definition_image: >
+  The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas.
+force_parse_query: >
+  For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
+propose_udfs: >
+  For function proposal tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done. Please propose the new functions that are necessary to parse the user query.
+  Let's think step by step. Based on the existing funtions, determine what new functions are needed. The proposed function must follow the format. Don't propose functions that contain changes in states. If you have those, propose a separate function for each state instead. For example, do not propose a function MergeFromAIntoB(o0) that checks whether an object o0 merges from lane A to lane B because it contains two states: o0 is in lane A and o0 is in lane B. Instead, replace it with two separate functions: InLane_A(o0) and InLane_B(o0). Propose as few functions as possible while ensuring that the user's intent can be precisely captured.
+verify_udfs: >
+  You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
+  Here are the existing functions:
+  {{functions}}
+  For each proposed function, determine if it is already covered or can be constructed out of existing functions. If so, remove it from the list. Do not use any assumptions that are not explicitly stated. Output the remaining functions in a strict JSON format (if there is nothing left, please reply empty JSON):
+  ```json
+  {"function(args)": "description"}
+  ```
+generate_udfs: >
+  Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
+  - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
+  - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
+  - {{schema_info}}
+  - The function should take {{n_obj}} as input, and return a boolean value.
+  - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
+  - Use the following output format:
     ```json
-    {"function(args)": "description"}
+    {"answer": [
+        {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
+        {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
+        ...
+    ]}
     ```
-
-  implement_udfs: >
-    Please implement a PostgreSQL function in Python procedural language based on the description using only standard python libraries. An object o has the following attributes: (shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float), where x1, y1, x2, y2 are the upper-left and bottom-right coordinates of the bounding box. Coordinates of the bounding box's corners are calculated with respect to the top-left corner of the image which has (x, y) coordinates (0, 0). Assume the frame size is 480x320. Prefix The PostgreSQL function name with "py". Inputs to the PostgreSQL function consist of a subset of attribues of o and the function returns a boolean value. The function must follow the format:
-    ```sql
-    ```
-
-  implement_udfs_with_input_output_examples: >
-    Please implement a PostgreSQL function in Python procedural language based on the description and the input/output examples using only standard python libraries. The implemented function must be as consistent as possible with the input/output examples. An object o has the following attributes: (shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float), where x1, y1, x2, y2 are the upper-left and bottom-right coordinates of the bounding box. Coordinates of the bounding box's corners are calculated with respect to the top-left corner of the image which has (x, y) coordinates (0, 0). Assume the frame size is 480x320. Prefix The PostgreSQL function name with "py". Inputs to the PostgreSQL function consist of a subset of attribues of o and the function returns a boolean value. The function must follow the format:
-    ```sql
-    ```
-
-prompt:
-  parse_query: >
-    Now I input { {{user_query}} }.
-  propose_udfs: >
-    For function proposal tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done. Please propose the new functions that are necessary to parse the user query.
-    Let's think step by step. Based on the existing funtions, determine what new functions are needed. The proposed function must follow the format. Don't propose functions that contain changes in states. If you have those, propose a separate function for each state instead. For example, do not propose a function MergeFromAIntoB(o0) that checks whether an object o0 merges from lane A to lane B because it contains two states: o0 is in lane A and o0 is in lane B. Instead, replace it with two separate functions: InLane_A(o0) and InLane_B(o0). Propose as few functions as possible while ensuring that the user's intent can be precisely captured.
-  verify_udfs: >
+deprecated:
+  verify_udfs: > # Unused
     The proposed functions are { {{proposed_functions}} }.
-  generate_semantic_interpretation_backup: >
-    Generate {{num_interpretations}} different, diverse semantic interpretations for the following Python task. Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names.
-
-    Task: determine {{udf_description}}. {{schema_info}}. The function takes {{n_obj}} as input, and returns a boolean value.
-
-    Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
-
-    Use the following output format:
-    ```json
-    {"answer": ["interpretation1", "interpretation2", "interpretation3", ...]}
-    ```
-  generate_udfs: >
-    Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
-    - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
-    - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
-    - {{schema_info}}
-    - The function should take {{n_obj}} as input, and return a boolean value.
-    - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
-    - Use the following output format:
-      ```json
-      {"answer": [
-          {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
-          {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
-          ...
-      ]}
-      ```
-
-  generate_semantic_interpretation_backup: >
+  generate_semantic_interpretation: > # Support kwargs
     Generate {{num_interpretations}} different, diverse semantic interpretations for the following Python task, formatted as a numbered list. Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Ensure that each version is separated by a line break.
 
     Task: determine {{udf_description}}. {{schema_info}}. Input includes {{obj_dictionary_str}} and optional numeric parameters that can be adjusted as needed (**kwargs). Output is a boolean value.
 
     Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
-
-  generate_udfs_backup: >
+  generate_udfs: > # Support kwargs
     Please provide a response consisting of two distinct parts: a Python function block and a JSON configuration block. The response should strictly adhere to the formats described below:
 
     1. **Python Function Block**:

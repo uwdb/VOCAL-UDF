@@ -1,8 +1,5 @@
-from typing import Literal
-from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 import autogen
-from src.utils import program_to_dsl, dsl_to_program
 import yaml
 import random
 import string
@@ -16,20 +13,12 @@ import time
 import duckdb
 import logging
 import argparse
-from duckdb_dir.udf import register_udf
 from openai import OpenAI
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-)  # for exponential backoff
 import re
-import io, tokenize
 from collections import defaultdict
 import importlib
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
-import pandas as pd
 from sklearn.metrics import f1_score
 
 logging.basicConfig()
@@ -57,18 +46,18 @@ class QueryParser:
         for registered_function in registered_functions:
             self.registered_function_names.append(registered_function["signature"].split("(")[0].lower())
         if dataset in ["clevrer"]: # video dataset
-            dsl_definition_prompt = prompt_config["system_prompt"]["dsl_definition"]
+            dsl_definition_prompt = prompt_config["dsl_definition"]
         elif dataset in ["clevr"]: # image dataset
-            dsl_definition_prompt = prompt_config["system_prompt"]["dsl_definition_image"]
+            dsl_definition_prompt = prompt_config["dsl_definition_image"]
         else:
             raise ValueError(f"Dataset {dataset} not supported")
         if allow_new_udfs:
             system_message = replace_slot(
                 " ".join([
                     dsl_definition_prompt,
-                    prompt_config["system_prompt"]["udf_definition"],
-                    prompt_config["system_prompt"]["registered_udfs"],
-                    prompt_config["system_prompt"]["parse_query"],
+                    prompt_config["udf_definition"],
+                    prompt_config["registered_udfs"],
+                    prompt_config["parse_query"],
                 ]),
                 {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
             )
@@ -77,9 +66,9 @@ class QueryParser:
             system_message = replace_slot(
                 " ".join([
                     dsl_definition_prompt,
-                    prompt_config["system_prompt"]["udf_definition"],
-                    prompt_config["system_prompt"]["registered_udfs"],
-                    prompt_config["system_prompt"]["force_parse_query"],
+                    prompt_config["udf_definition"],
+                    prompt_config["registered_udfs"],
+                    prompt_config["force_parse_query"],
                 ]),
                 {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
             )
@@ -137,7 +126,7 @@ class QueryParser:
                 return error_message
 
     def parse(self, user_query):
-        chat_result = self.user_proxy.initiate_chat(
+        self.user_proxy.initiate_chat(
             self.parser,
             message=user_query,
         )
@@ -158,25 +147,25 @@ class QueryParser:
 
     def get_parsed_query(self):
         return self.parsed_query
+
 class UDFProposer:
     # Propose new UDFs and generate semantic interpretations
     def __init__(self, config, prompt_config, registered_functions, dataset, labeling_budget, num_interpretations, query_id, run_id):
         self.config = config
         self.prompt_config = prompt_config
-
-        self.num_interpretations = num_interpretations
+        self.registered_functions = registered_functions
+        self.dataset = dataset
         self.labeling_budget = labeling_budget
+        self.num_interpretations = num_interpretations
         self.query_id = query_id
         self.run_id = run_id
 
-        self.registered_functions = registered_functions
-        self.dataset = dataset
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.get_schema()
 
         self.conn = duckdb.connect(database=os.path.join(self.config['db_dir'], 'annotations.duckdb'), read_only=True)
         # Create a train and test split
-        # NOTE:
+        # NOTE: probably put these values in the config file
         self.n_train = 10000
         self.n_test = 10000
 
@@ -221,15 +210,15 @@ class UDFProposer:
         # Step 1: propose new UDFs
         logger.info("Proposing new UDFs")
         if self.dataset in ["clevrer"]: # video dataset
-            dsl_definition_prompt = self.prompt_config["system_prompt"]["dsl_definition"]
+            dsl_definition_prompt = self.prompt_config["dsl_definition"]
         elif self.dataset in ["clevr"]: # image dataset
-            dsl_definition_prompt = self.prompt_config["system_prompt"]["dsl_definition_image"]
+            dsl_definition_prompt = self.prompt_config["dsl_definition_image"]
         system_message = replace_slot(
             " ".join([
                 dsl_definition_prompt,
-                self.prompt_config["system_prompt"]["udf_definition"],
-                self.prompt_config["system_prompt"]["registered_udfs"],
-                self.prompt_config["prompt"]["propose_udfs"]
+                self.prompt_config["udf_definition"],
+                self.prompt_config["registered_udfs"],
+                self.prompt_config["propose_udfs"]
             ]),
             {"functions": "\n".join(["{}: {}".format(func["signature"], func["description"]) for func in registered_functions])}
         )
@@ -294,8 +283,7 @@ class UDFProposer:
     def implement(self, udf_signature, udf_description):
         # Step 3: generate semantic interpretations and implement the UDF. Results are saved to disk
         # TODO: Consider kwargs
-
-        generate_udfs_base_prompt = self.prompt_config["prompt"]["generate_udfs"]
+        generate_udfs_base_prompt = self.prompt_config["generate_udfs"]
         udf_name, udf_vars = parse_signature(udf_signature)
         logger.info(f"Implementing UDF: {udf_signature}, with {self.num_interpretations} semantic interpretations")
         generate_udfs_prompt = replace_slot(generate_udfs_base_prompt, {
@@ -326,7 +314,9 @@ class UDFProposer:
                     seed=self.run_id * 42 + trial
                 )
                 implemented_udfs = json.loads("\n\n".join(re.findall(r"```json\n(.*?)```", response.choices[0].message.content, re.DOTALL)))["answer"]
+
                 os.makedirs(os.path.join(self.config["output_dir"], "udf_generation", self.dataset, "budget-{}_ninterp-{}".format(self.labeling_budget, self.num_interpretations), f"qid-{self.query_id}", f"run-{self.run_id}", udf_name), exist_ok=True)
+
                 for idx, implemented_udf in enumerate(implemented_udfs):
                     semantic_interpretation = implemented_udf["semantic_interpretation"]
                     function_implementation = implemented_udf["function_implementation"]
