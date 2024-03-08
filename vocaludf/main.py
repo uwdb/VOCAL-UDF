@@ -418,6 +418,7 @@ class UDFProposer:
                     top_p=self.config["udf_generator"]["top_p"],
                     seed=self.run_id * 42 + trial,
                 )
+                # NOTE: Sometimes GPT generates more UDFs than requested, so we remove the extra ones
                 implemented_udfs = json.loads(
                     "\n\n".join(
                         re.findall(
@@ -426,7 +427,7 @@ class UDFProposer:
                             re.DOTALL,
                         )
                     )
-                )["answer"]
+                )["answer"][:self.num_interpretations]
 
                 os.makedirs(
                     os.path.join(
@@ -478,7 +479,7 @@ class UDFProposer:
                         f"[{idx}] function_implementation: {function_implementation}"
                     )
             except Exception as e:
-                logger.debug("ERROR: failed to implement UDF {}".format(e))
+                logger.debug("ERROR: failed to implement UDF: {}".format(e))
                 logger.debug(response)
 
     def _compute_u_t(self, posterior_t, predictions_c):
@@ -625,6 +626,7 @@ class UDFProposer:
             y_true = df.apply(lambda row: gt_udf(row["o1"]), axis=1)
         elif n_obj == 2:
             y_true = df.apply(lambda row: gt_udf(row["o1"], row["o2"]), axis=1)
+        logger.debug(f"y_true: {y_true}, y_pred: {y_pred}")
         score = f1_score(y_true, y_pred, zero_division=1.0)
 
         logger.info(
@@ -698,9 +700,9 @@ class UDFProposer:
             )
         else:
             raise ValueError("Number of objects not supported: {}".format(n_obj))
-        df_train = df_filtered[: self.n_train]
+        df_train = df_filtered[:self.n_train]
         df_train = df_train.reset_index()
-        df_test = df_filtered[self.n_train :]
+        df_test = df_filtered[self.n_train:]
         df_test = df_test.reset_index()
 
         # Dynamically import the ground truth UDF
@@ -711,9 +713,7 @@ class UDFProposer:
         gt_udf = getattr(module, function_name)
 
         # Read UDF candidates from json files
-        udf_candidates_with_scores = (
-            []
-        )  # [udf_id, udf_candidate, score, loss_t], where loss_t = n_misclassified
+        udf_candidates_with_scores = [] # [udf_id, udf_candidate, score, loss_t], where loss_t = n_misclassified
         for i in range(self.num_interpretations):
             with open(
                 os.path.join(
@@ -731,6 +731,7 @@ class UDFProposer:
                 "r",
             ) as f:
                 udf_candidate = json.load(f)
+                # TODO: construct a UdfCandidate class
                 udf_candidates_with_scores.append([str(i), udf_candidate, 1, 0])
                 # TODO: kwargs
                 # if len(udf_candidate["kwargs_signature"]) == 0:
@@ -1117,6 +1118,8 @@ if __name__ == "__main__":
         # Step 2: generate semantic interpretations and implementations. Save the generated UDFs to disk
         up.implement(udf_signature, udf_description)
         # Step 3: Select the best UDF
+        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
+        # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
         # First, retrieve the ground truth UDF
         if ask_for_gt_udf:
             # Ask the user for gt_udf name
