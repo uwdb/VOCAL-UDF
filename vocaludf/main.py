@@ -45,6 +45,19 @@ def parse_signature(signature):
     # udf_vars = [token for token in tokens[2:-3] if token.string not in [',','=']]
     return udf_name, udf_vars
 
+class UDFCandidate:
+    def __init__(self, id, payload):
+        self.id = id
+        self.udf_name = payload["udf_name"]
+        self.udf_signature = payload["udf_signature"]
+        self.udf_description = payload["udf_description"]
+        self.semantic_interpretation = payload["semantic_interpretation"]
+        self.function_implementation = payload["function_implementation"]
+        self.score = 1 # F1 score
+        self.loss_t = 0 # loss_t = n_misclassified
+
+    def __str__(self):
+        return f"UDFCandidate(id: {self.id}, function_implementation: {self.function_implementation}, score: {self.score}, loss_t: {self.loss_t})"
 
 class QueryParser:
     def __init__(
@@ -500,7 +513,7 @@ class UDFProposer:
         return u_t
 
     def select_sample(
-        self, udf_candidates_with_scores, udf_name, df_train, n_obj, labeled_index
+        self, udf_candidate_list, udf_name, df_train, n_obj, labeled_index
     ):
         # sample a subset of videos during each iteration
         n_sampled_videos = 500
@@ -523,18 +536,16 @@ class UDFProposer:
         else:
             sampled_index = unlabeled_index
 
-        for udf_id, udf_candidate, _, _ in udf_candidates_with_scores:
+        for udf_candidate in udf_candidate_list:
             try:
                 # For each sampled row in df_train, construct o1 and o2
                 # TODO: kwargs
                 kwargs = {}
-                # for k, v in udf_candidate["kwargs_signature"].items():
+                # for k, v in udf_candidate_dict["kwargs_signature"].items():
                 #     kwargs[k] = float(v["default"])
-                python_func_name = (
-                    udf_candidate["function_implementation"].split()[1].split("(")[0]
-                )
+                python_func_name = udf_candidate.function_implementation.split()[1].split("(")[0]
                 namesapce = {}
-                exec(udf_candidate["function_implementation"], namesapce)
+                exec(udf_candidate.function_implementation, namesapce)
                 udf_function = namesapce[f"py_{udf_name}"]
                 if n_obj == 1:
                     result = df_train.loc[sampled_index].apply(
@@ -545,9 +556,7 @@ class UDFProposer:
                         lambda row: udf_function(row["o1"], row["o2"], **kwargs), axis=1
                     )
             except Exception as e:
-                logger.debug(
-                    "ERROR: failed to execute udf_candidate {}: {}".format(udf_id, e)
-                )
+                logger.debug(f"ERROR: failed to execute UDFCandidate(id={udf_candidate.id}): {e}")
                 result = df_train.loc[sampled_index].apply(lambda row: False, axis=1)
             prediction_matrix.append(result.values)
 
@@ -561,10 +570,10 @@ class UDFProposer:
         )
         logger.debug("prediction_matrix size {}".format(prediction_matrix.shape))
 
-        eta_0 = np.sqrt(np.log(len(udf_candidates_with_scores)) / 2)
+        eta_0 = np.sqrt(np.log(len(udf_candidate_list)) / 2)
 
         # Use F1-scores as weights
-        posterior_t = [score for _, _, score, _ in udf_candidates_with_scores]
+        posterior_t = [udf_candidate.score for udf_candidate in udf_candidate_list]
         # Use the original weights as in the paper
         # eta = eta_0 / np.sqrt(n_sampled_videos)
         # loss_t = [loss_t for _, _, _, loss_t in udf_candidates_with_scores]
@@ -585,7 +594,7 @@ class UDFProposer:
         return [max_entropy_index]
 
     def compute_udf_score(
-        self, gt_udf, udf_candidate, udf_name, n_obj, df, df_newly_labeled=None
+        self, gt_udf, function_implementation, udf_name, n_obj, df, df_newly_labeled=None
     ):
         """
         Compute the F1 score of the UDF candidate on the data (train or test), using the ground truth UDF as the label
@@ -599,7 +608,7 @@ class UDFProposer:
             #     kwargs[k] = float(v["default"])
 
             namesapce = {}
-            exec(udf_candidate["function_implementation"], namesapce)
+            exec(function_implementation, namesapce)
             udf_function = namesapce[f"py_{udf_name}"]
             if n_obj == 1:
                 y_pred = df.apply(lambda row: udf_function(row["o1"], **kwargs), axis=1)
@@ -713,7 +722,7 @@ class UDFProposer:
         gt_udf = getattr(module, function_name)
 
         # Read UDF candidates from json files
-        udf_candidates_with_scores = [] # [udf_id, udf_candidate, score, loss_t], where loss_t = n_misclassified
+        udf_candidate_list = [] # List[UDFCandidate]
         for i in range(self.num_interpretations):
             with open(
                 os.path.join(
@@ -730,9 +739,9 @@ class UDFProposer:
                 ),
                 "r",
             ) as f:
-                udf_candidate = json.load(f)
-                # TODO: construct a UdfCandidate class
-                udf_candidates_with_scores.append([str(i), udf_candidate, 1, 0])
+                new_udf_candidate = UDFCandidate(id=i, payload=json.load(f))
+                logger.debug(new_udf_candidate)
+                udf_candidate_list.append(new_udf_candidate)
                 # TODO: kwargs
                 # if len(udf_candidate["kwargs_signature"]) == 0:
                 #     udf_candidates_with_scores.append([str(i), udf_candidate, 1, 0])
@@ -760,12 +769,6 @@ class UDFProposer:
                 #             logger.debug("udf_candidate {}".format(udf_candidate))
                 #             udf_id = str(i)
                 #         udf_candidates_with_scores.append([udf_id, udf_candidate_variant, 1, 0])
-            logger.debug(
-                "udf {} implementation:\n{}".format(
-                    udf_candidates_with_scores[-1][0],
-                    udf_candidates_with_scores[-1][1]["function_implementation"],
-                )
-            )
 
         # Select new video segments to label
         labeled_index = []
@@ -774,12 +777,8 @@ class UDFProposer:
         for iter in range(self.labeling_budget):
             logger.info("iter {}".format(iter))
             _start_segment_selection_time_per_iter = time.time()
-            # sort udf_candidates_with_scores by score
-            udf_candidates_with_scores = sorted(
-                udf_candidates_with_scores, key=lambda x: x[2], reverse=True
-            )
             new_labeled_index = self.select_sample(
-                udf_candidates_with_scores, udf_name, df_train, n_obj, labeled_index
+                udf_candidate_list, udf_name, df_train, n_obj, labeled_index
             )
             logger.info("pick next segments {}".format(new_labeled_index))
             labeled_index += new_labeled_index
@@ -799,29 +798,22 @@ class UDFProposer:
                 )
             )
             # Update scores
-            updated_scores = []
-            for _, udf_candidate, _, _ in udf_candidates_with_scores:
-                updated_scores.append(
-                    self.compute_udf_score(
-                        gt_udf,
-                        udf_candidate,
-                        udf_name,
-                        n_obj,
-                        df_train.loc[labeled_index],
-                        df_train.loc[new_labeled_index],
-                    )
+            for i in range(len(udf_candidate_list)):
+                score, loss_t = self.compute_udf_score(
+                    gt_udf,
+                    udf_candidate_list[i].function_implementation,
+                    udf_name,
+                    n_obj,
+                    df_train.loc[labeled_index],
+                    df_train.loc[new_labeled_index],
                 )
-            for i in range(len(udf_candidates_with_scores)):
-                udf_candidates_with_scores[i][2] = updated_scores[i][0]
-                udf_candidates_with_scores[i][3] += updated_scores[i][1]
-            logger.debug(
-                "updated udf_candidates_with_scores {}".format(
-                    [
-                        "[udf_{}]: {}, {}".format(udf_id, score, loss_t)
-                        for udf_id, _, score, loss_t in udf_candidates_with_scores
-                    ]
-                )
+                udf_candidate_list[i].score = score
+                udf_candidate_list[i].loss_t = loss_t
+            # sort udf_candidate_list by score
+            udf_candidate_list = sorted(
+                udf_candidate_list, key=lambda x: x.score, reverse=True
             )
+            logger.debug("updated udf_candidate_list: {}".format(udf_candidate_list))
             logger.debug(
                 "test segment_selection_time_per_iter time: {}".format(
                     time.time() - _start_segment_selection_time_per_iter
@@ -832,48 +824,37 @@ class UDFProposer:
             "test segment_selection_time time: {}".format(segment_selection_time)
         )
 
-        # sort udf_candidates_with_scores by score
-        udf_candidates_with_scores = sorted(
-            udf_candidates_with_scores, key=lambda x: x[2], reverse=True
-        )
-        # logger.info("final udf_candidates_with_scores {}".format(["[udf_{}]: {}, {}".format(udf_id, score, loss_t) for udf_id, _, score, loss_t in udf_candidates_with_scores]))
-
         # compute test F1 score
         logger.info("compute test F1 score")
-        for i in range(len(udf_candidates_with_scores)):
+        for i in range(len(udf_candidate_list)):
             f1_score_test = self.compute_udf_score(
-                gt_udf, udf_candidates_with_scores[i][1], udf_name, n_obj, df_test
+                gt_udf, udf_candidate_list[i].function_implementation, udf_name, n_obj, df_test
             )
             logger.info(
                 "udf {}: test f1 {}, train f1 {}, n_misclassified {}".format(
-                    udf_candidates_with_scores[i][0],
+                    udf_candidate_list[i].id,
                     f1_score_test,
-                    udf_candidates_with_scores[i][2],
-                    udf_candidates_with_scores[i][3],
+                    udf_candidate_list[i].score,
+                    udf_candidate_list[i].loss_t,
                 )
             )
 
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
-        best_score = udf_candidates_with_scores[0][2]
-        best_candidates = [udf_candidates_with_scores[0]]
-        for i in range(1, len(udf_candidates_with_scores)):
-            if udf_candidates_with_scores[i][2] == best_score:
-                best_candidates.append(udf_candidates_with_scores[i])
-            else:
-                break
+        best_score = max(udf_candidate.score for udf_candidate in udf_candidate_list)
+        best_candidates = [udf_candidate for udf_candidate in udf_candidate_list if udf_candidate.score == best_score]
 
         f1_score_test_list = []
         for best_candidate in best_candidates:
             f1_score_test = self.compute_udf_score(
-                gt_udf, best_candidate[1], udf_name, n_obj, df_test
+                gt_udf, best_candidate.function_implementation, udf_name, n_obj, df_test
             )
             f1_score_test_list.append(f1_score_test)
         median_f1_score_test = np.median(f1_score_test_list)
-        logger.info("median test f1 {}".format(median_f1_score_test))
+        logger.info("median test f1: {}".format(median_f1_score_test))
         # TODO: If there are multiple best udfs, select the one with faster execution time?
-        best_impl = best_candidates[0][1]
-        semantic_interpretation = best_impl["semantic_interpretation"]
-        function_implementation = best_impl["function_implementation"]
+        selected_udf_candidate = best_candidates[0]
+        semantic_interpretation = selected_udf_candidate.semantic_interpretation
+        function_implementation = selected_udf_candidate.function_implementation
         with open(
             os.path.join(
                 self.config["output_dir"],
@@ -903,7 +884,7 @@ class UDFProposer:
             )
         logger.info(f"[Selected] semantic_interpretation: {semantic_interpretation}")
         logger.info(f"[Selected] function_implementation: {function_implementation}")
-        return best_impl
+        return selected_udf_candidate
 
 
 class QueryExecutor:
@@ -1161,22 +1142,20 @@ if __name__ == "__main__":
                 )
             )
             logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-        best_impl = up.select(udf_signature, udf_description, gt_udf_name)
+        selected_udf_candidate = up.select(udf_signature, udf_description, gt_udf_name)
         # Assume now that the best UDF is the first one
         # best_impl = implemented_udfs[0]
         logger.info(
             "Best {} implementation: {}".format(
-                udf_signature, best_impl["function_implementation"]
+                udf_signature, selected_udf_candidate.function_implementation
             )
         )
         # Step 5: Register the UDF
         new_udf = {
             "signature": udf_signature,
             "description": udf_description,
-            "semantic_interpretation": best_impl[
-                "semantic_interpretation"
-            ],  # New field. Unsure if we need this
-            "python_function": best_impl["function_implementation"],
+            "semantic_interpretation": selected_udf_candidate.semantic_interpretation,  # New field. Unsure if we need this
+            "python_function": selected_udf_candidate.function_implementation,
         }
         registered_functions.append(new_udf)
     # Step 6: Re-parse the query
@@ -1196,6 +1175,7 @@ if __name__ == "__main__":
         parsed_dsl = qp.get_parsed_query()
         qe = QueryExecutor(config, f"Obj_{dataset}", registered_functions)
         qe.run(parsed_program, y_true, debug=False)
+        # TODO: Only register UDFs that are actually used in the query and when the F1 score is above a certain threshold
     except Exception as e:
         logger.error("QueryExecutor Error: {}".format(e))
         logger.info("F1 score: 0")
