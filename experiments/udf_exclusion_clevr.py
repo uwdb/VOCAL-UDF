@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
-    # python udf_exclusion_clevr.py --save_output --output_dir "/gscratch/balazinska/enhaoz/VOCAL-UDF/outputs" --run_id 0 --question_id 0 --method "nl_udf_excluded" --udf "Behind" --llm_model "gpt-4-1106-preview"
+    # python udf_exclusion_clevr.py --save_output --output_dir "/gscratch/balazinska/enhaoz/VOCAL-UDF/outputs" --run_id 0 --question_id 0 --method "dsl_udf_excluded" --udf "Behind" --llm_model "gpt-4-1106-preview"
     parser = argparse.ArgumentParser()
     parser.add_argument('--save_output', action='store_true', help='save the output')
     parser.add_argument('--output_dir', type=str, help='where to save the results')
@@ -79,7 +79,7 @@ if __name__ == "__main__":
                   ]:
         if method == "nl_udf_excluded":
             registered_functions = [func for func in registered_functions if func['signature'].split('(')[0].lower() != udf.lower()]
-        qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, allow_new_udfs=False)
+        qp = QueryParser(config, prompt_config, config_list, dataset, registered_functions, run_id, allow_new_udfs=False)
         qp.parse(question)
         parsed_program = qp.get_parsed_program()
         parsed_dsl = qp.get_parsed_query()
@@ -90,12 +90,16 @@ if __name__ == "__main__":
         registered_functions = [func for func in registered_functions if func['signature'].split('(')[0].lower() != udf.lower()]
         parsed_program = parse().parseString(gt_dsl, parseAll=True).as_dict()
         # Remove the UDF from the parsed program
+        new_query = []
         for sg in parsed_program['query']:
+            new_scene_graph = []
             for pred in sg['scene_graph']:
-                if udf.lower() == pred['predicate'].lower():
-                    sg['scene_graph'].remove(pred)
+                if udf.lower() != pred['predicate'].lower():
+                    new_scene_graph.append(pred)
+            new_query.append({'scene_graph': new_scene_graph, 'duration_constraint': sg['duration_constraint']})
+        parsed_program = {'query': new_query}
         logger.info(f"parsed_program: {parsed_program}")
-        parsed_dsl = program_to_dsl(parsed_program['query'], rewrite_variables=True, sort_variables=False)
+        parsed_dsl = program_to_dsl(parsed_program['query'], rewrite_variables=False, sort_variables=False)
         logger.info(f"parsed_dsl: {parsed_dsl}")
     else:
         raise ValueError("Invalid method")
@@ -130,6 +134,3 @@ if __name__ == "__main__":
 
         with open(os.path.join(output_dir, 'udf_exclusion', dataset, method, llm_model, f"udf-{udf}_run-{run_id}_question-{question_id}.json"), "w") as f:
             json.dump(output, f)
-
-
-
