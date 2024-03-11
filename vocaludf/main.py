@@ -24,6 +24,7 @@ import importlib
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
 from sklearn.metrics import f1_score
+import copy
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -45,19 +46,54 @@ def parse_signature(signature):
     # udf_vars = [token for token in tokens[2:-3] if token.string not in [',','=']]
     return udf_name, udf_vars
 
+
+def transform_function(original_code, instantiation_dict):
+    """
+    Transforms the original code by removing **kwargs from the function definition
+    and inserting a line defining kwargs with the corrected string format.
+
+    Args:
+        original_code (str): The original code to be transformed.
+        instantiation_dict (dict): The dictionary containing the values for kwargs.
+
+    Returns:
+        str: The transformed code.
+    """
+    # Split the original function into lines
+    lines = original_code.split('\n')
+
+    # Find the line with the function definition and remove **kwargs
+    for i, line in enumerate(lines):
+        if line.startswith('def ') and '**kwargs' in line:
+            # Replace **kwargs with nothing
+            lines[i] = line.replace(', **kwargs', '').replace('**kwargs, ', '').replace('**kwargs', '')
+
+            # Insert the line defining kwargs with the corrected string format
+            kwargs_str = json.dumps(instantiation_dict)
+            kwargs_line = f"    kwargs = {kwargs_str}"
+            lines.insert(i + 1, kwargs_line)
+            break
+
+    # Rejoin the modified lines into a single string
+    transformed_code = '\n'.join(lines)
+
+    return transformed_code
+
 class UDFCandidate:
     def __init__(self, id, payload):
-        self.id = id
+        self.kwargs = payload.get("kwargs", {})
+        self.id = str(id) + "_" + "_".join([f"{k}-{v}" for k, v in self.kwargs.items()]) if self.kwargs else str(id)
         self.udf_name = payload["udf_name"]
         self.udf_signature = payload["udf_signature"]
         self.udf_description = payload["udf_description"]
         self.semantic_interpretation = payload["semantic_interpretation"]
         self.function_implementation = payload["function_implementation"]
-        self.score = 1 # F1 score
-        self.loss_t = 0 # loss_t = n_misclassified
+        self.score = 1  # F1 score
+        self.loss_t = 0  # loss_t = n_misclassified
 
     def __str__(self):
         return f"UDFCandidate(id: {self.id}, function_implementation: {self.function_implementation}, score: {self.score}, loss_t: {self.loss_t})"
+
 
 class QueryParser:
     def __init__(
@@ -228,6 +264,7 @@ class UDFProposer:
         num_interpretations,
         query_id,
         run_id,
+        allow_kwargs_in_udf=False,
     ):
         self.config = config
         self.prompt_config = prompt_config
@@ -237,6 +274,7 @@ class UDFProposer:
         self.num_interpretations = num_interpretations
         self.query_id = query_id
         self.run_id = run_id
+        self.allow_kwargs_in_udf = allow_kwargs_in_udf
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.get_schema()
@@ -251,9 +289,9 @@ class UDFProposer:
         self.n_test = 10000
 
     def get_schema(self):
-        self.object_schema = []
-        self.relationship_schema = []
-        self.attribute_schema = defaultdict(list)
+        object_schema = []
+        relationship_schema = []
+        attribute_schema = defaultdict(list)
         # Object schema: (obj_class_name, x1, y1, x2, y2)
         # Relationship schema: relationship_name
         # Attribute schema: key, possible values
@@ -262,14 +300,14 @@ class UDFProposer:
             udf_name, udf_vars = parse_signature(signature)
             if len(udf_vars) == 2:
                 # Relationship UDF
-                self.relationship_schema.append(udf_name.lower())
+                relationship_schema.append(udf_name.lower())
             elif "_" in udf_name:
                 # Attribute UDF
                 udf_key, udf_value = udf_name.split("_")
-                self.attribute_schema[udf_key.lower()].append(udf_value.lower())
+                attribute_schema[udf_key.lower()].append(udf_value.lower())
             else:
                 # Object UDF
-                self.object_schema.append(udf_name.lower())
+                object_schema.append(udf_name.lower())
         # Construct a string that describes the schema
         # Merge the object schema and attribute schema into one, with attribute keys as the column names and attribute values as the possible values
         obj_cols = [
@@ -278,13 +316,13 @@ class UDFProposer:
             ("y1", "float"),
             ("x2", "float"),
             ("y2", "float"),
-        ] + list((key, "str") for key in self.attribute_schema.keys())
+        ] + list((key, "str") for key in attribute_schema.keys())
         obj_cols_str = ", ".join([f"{col[0]}: {col[1]}" for col in obj_cols])
         # TODO: Add relationship to the prompt
         self.schema_prompt = (
             f"Each object is represented by a dictionary of {{ {obj_cols_str} }}. "
         )
-        possible_values = ", ".join(["'" + c + "'" for c in self.object_schema])
+        possible_values = ", ".join(["'" + c + "'" for c in object_schema])
         self.schema_prompt += (
             f"'class_name' can be one of the following: [{possible_values}]. "
         )
@@ -292,7 +330,7 @@ class UDFProposer:
         image_w = self.config[self.dataset]["width"]
         # self.schema_prompt += f"x1, y1, x2, y2 are the top-left and bottom-right coordinates of the bounding box. "
         self.schema_prompt += f"x1, y1, x2, y2 are the top-left and bottom-right coordinates of the bounding box. The origin (x, y) = (0, 0) is located at the top left corner of a {image_w}x{image_h} frame. The x axis is oriented from left to right; the y axis is oriented from top to bottom. "
-        for key, values in self.attribute_schema.items():
+        for key, values in attribute_schema.items():
             possible_values = ", ".join(["'" + v + "'" for v in values])
             self.schema_prompt += (
                 f"'{key}' can be one of the following: [{possible_values}]. "
@@ -398,8 +436,10 @@ class UDFProposer:
 
     def implement(self, udf_signature, udf_description):
         # Step 3: generate semantic interpretations and implement the UDF. Results are saved to disk
-        # TODO: Consider kwargs
-        generate_udfs_base_prompt = self.prompt_config["generate_udfs"]
+        if self.allow_kwargs_in_udf:
+            generate_udfs_base_prompt = self.prompt_config["generate_udfs_with_optional_kwargs"]
+        else:
+            generate_udfs_base_prompt = self.prompt_config["generate_udfs"]
         udf_name, udf_vars = parse_signature(udf_signature)
         logger.info(
             f"Implementing UDF: {udf_signature}, with {self.num_interpretations} semantic interpretations"
@@ -418,6 +458,7 @@ class UDFProposer:
         for trial in range(3):  # Retry 3 times
             response = None
             try:
+                logger.debug(f"trial: {trial}")
                 response = self.client.chat.completions.create(
                     model="gpt-4-1106-preview",
                     messages=[
@@ -432,7 +473,7 @@ class UDFProposer:
                     seed=self.run_id * 42 + trial,
                 )
                 # NOTE: Sometimes GPT generates more UDFs than requested, so we remove the extra ones
-                implemented_udfs = json.loads(
+                implemented_udfs = eval(
                     "\n\n".join(
                         re.findall(
                             r"```json\n(.*?)```",
@@ -442,39 +483,26 @@ class UDFProposer:
                     )
                 )["answer"][:self.num_interpretations]
 
-                os.makedirs(
-                    os.path.join(
-                        self.config["output_dir"],
-                        "udf_generation",
-                        self.dataset,
-                        "budget-{}_ninterp-{}".format(
-                            self.labeling_budget, self.num_interpretations
-                        ),
-                        f"qid-{self.query_id}",
-                        f"run-{self.run_id}",
-                        udf_name,
+                self.udf_save_dir = os.path.join(
+                    self.config["output_dir"],
+                    "udf_generation",
+                    self.dataset,
+                    "budget-{}_ninterp-{}_{}".format(
+                        self.labeling_budget,
+                        self.num_interpretations,
+                        "with_kwargs" if self.allow_kwargs_in_udf else "without_kwargs",
                     ),
-                    exist_ok=True,
+                    f"qid-{self.query_id}",
+                    f"run-{self.run_id}",
+                    udf_name,
                 )
+                os.makedirs(self.udf_save_dir, exist_ok=True)
 
                 for idx, implemented_udf in enumerate(implemented_udfs):
                     semantic_interpretation = implemented_udf["semantic_interpretation"]
                     function_implementation = implemented_udf["function_implementation"]
-                    with open(
-                        os.path.join(
-                            self.config["output_dir"],
-                            "udf_generation",
-                            self.dataset,
-                            "budget-{}_ninterp-{}".format(
-                                self.labeling_budget, self.num_interpretations
-                            ),
-                            f"qid-{self.query_id}",
-                            f"run-{self.run_id}",
-                            udf_name,
-                            "{}_{}.json".format(udf_name, idx),
-                        ),
-                        "w",
-                    ) as f:
+                    kwargs = implemented_udf.get("kwargs", {})
+                    with open(os.path.join(self.udf_save_dir, f"{udf_name}_{idx}.json"), "w") as f:
                         json.dump(
                             {
                                 "udf_name": udf_name,
@@ -482,15 +510,14 @@ class UDFProposer:
                                 "udf_description": udf_description,
                                 "semantic_interpretation": semantic_interpretation,
                                 "function_implementation": function_implementation,
+                                "kwargs": kwargs,
                             },
                             f,
                         )
-                    logger.info(
-                        f"[{idx}] semantic_interpretation: {semantic_interpretation}"
-                    )
-                    logger.info(
-                        f"[{idx}] function_implementation: {function_implementation}"
-                    )
+                    logger.info(f"[{idx}] semantic_interpretation: {semantic_interpretation}")
+                    logger.info(f"[{idx}] function_implementation: {function_implementation}")
+                    logger.info(f"[{idx}] kwargs: {kwargs}")
+                break
             except Exception as e:
                 logger.debug("ERROR: failed to implement UDF: {}".format(e))
                 logger.debug(response)
@@ -539,14 +566,13 @@ class UDFProposer:
         for udf_candidate in udf_candidate_list:
             try:
                 # For each sampled row in df_train, construct o1 and o2
-                # TODO: kwargs
                 kwargs = {}
-                # for k, v in udf_candidate_dict["kwargs_signature"].items():
-                #     kwargs[k] = float(v["default"])
-                python_func_name = udf_candidate.function_implementation.split()[1].split("(")[0]
+                for k, v in udf_candidate.kwargs.items():
+                    kwargs[k] = float(v)
+                py_func_name = udf_candidate.function_implementation.split()[1].split("(")[0]
                 namesapce = {}
                 exec(udf_candidate.function_implementation, namesapce)
-                udf_function = namesapce[f"py_{udf_name}"]
+                udf_function = namesapce[py_func_name]
                 if n_obj == 1:
                     result = df_train.loc[sampled_index].apply(
                         lambda row: udf_function(row["o1"], **kwargs), axis=1
@@ -594,7 +620,13 @@ class UDFProposer:
         return [max_entropy_index]
 
     def compute_udf_score(
-        self, gt_udf, function_implementation, udf_name, n_obj, df, df_newly_labeled=None
+        self,
+        gt_udf,
+        udf_candidate,
+        udf_name,
+        n_obj,
+        df,
+        df_newly_labeled=None,
     ):
         """
         Compute the F1 score of the UDF candidate on the data (train or test), using the ground truth UDF as the label
@@ -602,14 +634,13 @@ class UDFProposer:
         """
         try:
             # For each sampled row in df, construct o1 and o2
-            # TODO: kwargs
             kwargs = {}
-            # for k, v in udf_candidate["kwargs_signature"].items():
-            #     kwargs[k] = float(v["default"])
-
+            for k, v in udf_candidate.kwargs.items():
+                kwargs[k] = float(v)
+            py_func_name = udf_candidate.function_implementation.split()[1].split("(")[0]
             namesapce = {}
-            exec(function_implementation, namesapce)
-            udf_function = namesapce[f"py_{udf_name}"]
+            exec(udf_candidate.function_implementation, namesapce)
+            udf_function = namesapce[py_func_name]
             if n_obj == 1:
                 y_pred = df.apply(lambda row: udf_function(row["o1"], **kwargs), axis=1)
             elif n_obj == 2:
@@ -635,7 +666,7 @@ class UDFProposer:
             y_true = df.apply(lambda row: gt_udf(row["o1"]), axis=1)
         elif n_obj == 2:
             y_true = df.apply(lambda row: gt_udf(row["o1"], row["o2"]), axis=1)
-        logger.debug(f"y_true: {y_true}, y_pred: {y_pred}")
+        # logger.debug(f"y_true: {y_true}, y_pred: {y_pred}")
         score = f1_score(y_true, y_pred, zero_division=1.0)
 
         logger.info(
@@ -722,58 +753,44 @@ class UDFProposer:
         gt_udf = getattr(module, function_name)
 
         # Read UDF candidates from json files
-        udf_candidate_list = [] # List[UDFCandidate]
-        for i in range(self.num_interpretations):
-            with open(
-                os.path.join(
-                    self.config["output_dir"],
-                    "udf_generation",
-                    self.dataset,
-                    "budget-{}_ninterp-{}".format(
-                        self.labeling_budget, self.num_interpretations
-                    ),
-                    f"qid-{self.query_id}",
-                    f"run-{self.run_id}",
-                    udf_name,
-                    "{}_{}.json".format(udf_name, i),
-                ),
-                "r",
-            ) as f:
-                new_udf_candidate = UDFCandidate(id=i, payload=json.load(f))
-                logger.debug(new_udf_candidate)
-                udf_candidate_list.append(new_udf_candidate)
-                # TODO: kwargs
-                # if len(udf_candidate["kwargs_signature"]) == 0:
-                #     udf_candidates_with_scores.append([str(i), udf_candidate, 1, 0])
-                # elif num_parameter_search <= 0:
-                #     logger.info("use default values of kwargs in udf candidate {}".format(i))
-                #     try:
-                #         udf_id = str(i) + "_" + "_".join(["{}{}".format(k, v["default"]) for k, v in udf_candidate["kwargs_signature"].items()])
-                #     except Exception as e:
-                #         logger.debug("ERROR: failed to construct udf_id", e)
-                #         logger.debug("udf_candidate {}".format(udf_candidate))
-                #         udf_id = str(i)
-                #     udf_candidates_with_scores.append([udf_id, udf_candidate, 1, 0])
-                # else:
-                #     for _ in range(num_parameter_search):
-                #         # deepcopy udf_candidate
-                #         udf_candidate_variant = copy.deepcopy(udf_candidate)
-                #         for k, v in udf_candidate_variant["kwargs_signature"].items():
-                #             # randomly sample a value from the range
-                #             udf_candidate_variant["kwargs_signature"][k]["default"] = np.random.uniform(v["min"], v["max"])
-                #         # create a unique udf identifier for each udf candidate by concatenating the ksys and the default values of the kwargs
-                #         try:
-                #             udf_id = str(i) + "_" + "_".join(["{}{}".format(k, v["default"]) for k, v in udf_candidate_variant["kwargs_signature"].items()])
-                #         except Exception as e:
-                #             logger.debug("ERROR: failed to construct udf_id", e)
-                #             logger.debug("udf_candidate {}".format(udf_candidate))
-                #             udf_id = str(i)
-                #         udf_candidates_with_scores.append([udf_id, udf_candidate_variant, 1, 0])
-
+        udf_candidate_list = []  # List[UDFCandidate]
+        if self.allow_kwargs_in_udf:
+            for i in range(self.num_interpretations):
+                with open(os.path.join(self.udf_save_dir, f"{udf_name}_{i}.json"), "r") as f:
+                    udf_dict = json.load(f)
+                    if not udf_dict.get("kwargs", {}): # No additional arguments
+                        new_udf_candidate = UDFCandidate(id=i, payload=udf_dict)
+                        logger.debug(new_udf_candidate)
+                        udf_candidate_list.append(new_udf_candidate)
+                    else:
+                        # Instantiate the kwargs with default values
+                        udf_variant_dict = copy.deepcopy(udf_dict)
+                        udf_variant_dict["kwargs"] = {k: v["default"] for k, v in udf_variant_dict["kwargs"].items() if v["default"] is not None}
+                        new_udf_candidate = UDFCandidate(id=i, payload=udf_variant_dict)
+                        logger.debug(new_udf_candidate)
+                        udf_candidate_list.append(new_udf_candidate)
+                        # Instantiate the kwargs with values randomly sampled from the range
+                        if num_parameter_search > 0:
+                            for _ in range(num_parameter_search):
+                                # deepcopy udf_dict
+                                udf_variant_dict = copy.deepcopy(udf_dict)
+                                for k in list(udf_variant_dict["kwargs"].keys()):
+                                    # randomly sample a value from the range
+                                    udf_variant_dict["kwargs"][k] = np.random.uniform(udf_variant_dict["kwargs"][k]["min"], udf_variant_dict["kwargs"][k]["max"])
+                                new_udf_candidate = UDFCandidate(id=i, payload=udf_variant_dict)
+                                logger.debug(new_udf_candidate)
+                                udf_candidate_list.append(new_udf_candidate)
+        else:
+            for i in range(self.num_interpretations):
+                with open(os.path.join(self.udf_save_dir, f"{udf_name}_{i}.json"), "r") as f:
+                    new_udf_candidate = UDFCandidate(id=i, payload=json.load(f))
+                    logger.debug(new_udf_candidate)
+                    udf_candidate_list.append(new_udf_candidate)
         # Select new video segments to label
         labeled_index = []
         segment_selection_time = 0
         _start_segment_selection_time = time.time()
+        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
         for iter in range(self.labeling_budget):
             logger.info("iter {}".format(iter))
             _start_segment_selection_time_per_iter = time.time()
@@ -801,7 +818,7 @@ class UDFProposer:
             for i in range(len(udf_candidate_list)):
                 score, loss_t = self.compute_udf_score(
                     gt_udf,
-                    udf_candidate_list[i].function_implementation,
+                    udf_candidate_list[i],
                     udf_name,
                     n_obj,
                     df_train.loc[labeled_index],
@@ -813,7 +830,7 @@ class UDFProposer:
             udf_candidate_list = sorted(
                 udf_candidate_list, key=lambda x: x.score, reverse=True
             )
-            logger.debug("updated udf_candidate_list: {}".format(udf_candidate_list))
+            logger.debug("updated udf_candidate_list: {}".format([str(e) for e in udf_candidate_list]))
             logger.debug(
                 "test segment_selection_time_per_iter time: {}".format(
                     time.time() - _start_segment_selection_time_per_iter
@@ -828,7 +845,11 @@ class UDFProposer:
         logger.info("compute test F1 score")
         for i in range(len(udf_candidate_list)):
             f1_score_test = self.compute_udf_score(
-                gt_udf, udf_candidate_list[i].function_implementation, udf_name, n_obj, df_test
+                gt_udf,
+                udf_candidate_list[i],
+                udf_name,
+                n_obj,
+                df_test,
             )
             logger.info(
                 "udf {}: test f1 {}, train f1 {}, n_misclassified {}".format(
@@ -841,49 +862,42 @@ class UDFProposer:
 
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
         best_score = max(udf_candidate.score for udf_candidate in udf_candidate_list)
-        best_candidates = [udf_candidate for udf_candidate in udf_candidate_list if udf_candidate.score == best_score]
+        best_candidates = [
+            udf_candidate
+            for udf_candidate in udf_candidate_list
+            if udf_candidate.score == best_score
+        ]
 
         f1_score_test_list = []
         for best_candidate in best_candidates:
             f1_score_test = self.compute_udf_score(
-                gt_udf, best_candidate.function_implementation, udf_name, n_obj, df_test
+                gt_udf, best_candidate, udf_name, n_obj, df_test
             )
             f1_score_test_list.append(f1_score_test)
         median_f1_score_test = np.median(f1_score_test_list)
         logger.info("median test f1: {}".format(median_f1_score_test))
         # TODO: If there are multiple best udfs, select the one with faster execution time?
         selected_udf_candidate = best_candidates[0]
-        semantic_interpretation = selected_udf_candidate.semantic_interpretation
-        function_implementation = selected_udf_candidate.function_implementation
-        with open(
-            os.path.join(
-                self.config["output_dir"],
-                "udf_generation",
-                self.dataset,
-                "budget-{}_ninterp-{}".format(
-                    self.labeling_budget, self.num_interpretations
-                ),
-                f"qid-{self.query_id}",
-                f"run-{self.run_id}",
-                udf_name,
-                "{}_selected.json".format(udf_name),
-            ),
-            "w",
-        ) as f:
+        # Transforms the function by removing **kwargs from the function signature and replacing the kwargs with the actual values
+        selected_udf_candidate.function_implementation = transform_function(
+            original_code=selected_udf_candidate.function_implementation,
+            instantiation_dict=selected_udf_candidate.kwargs,
+        )
+        with open(os.path.join(self.udf_save_dir, f"{udf_name}_selected.json"), "w") as f:
             json.dump(
                 {
                     "udf_name": udf_name,
                     "udf_signature": udf_signature,
                     "udf_description": udf_description,
-                    "semantic_interpretation": semantic_interpretation,
-                    "function_implementation": function_implementation,
+                    "semantic_interpretation": selected_udf_candidate.semantic_interpretation,
+                    "function_implementation": selected_udf_candidate.function_implementation,
                     "f1_score_train": best_score,
                     "f1_score_test": f1_score_test_list[0],
                 },
                 f,
             )
-        logger.info(f"[Selected] semantic_interpretation: {semantic_interpretation}")
-        logger.info(f"[Selected] function_implementation: {function_implementation}")
+        logger.info(f"[Selected] semantic_interpretation: {selected_udf_candidate.semantic_interpretation}")
+        logger.info(f"[Selected] function_implementation: {selected_udf_candidate.function_implementation}")
         return selected_udf_candidate
 
 
@@ -898,28 +912,25 @@ class QueryExecutor:
         self.registered_functions = registered_functions
         for func in self.registered_functions:
             signature = func["signature"]
-            udf_name, udf_vars = parse_signature(signature)
-            python_func_name = func["python_function"].split()[1].split("(")[0]
-            # create a unique suffix
-            suffix = "".join(random.choices(string.ascii_lowercase, k=8))
-            python_func_args = (
-                func["python_function"].split("(")[1].split(")")[0].split(",")
-            )
-            python_arg_str = ", ".join(f"{arg}: dict" for arg in python_func_args)
-            python_header_type_annotated = (
-                f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
-            )
-            # Remove the first line of the function definition
-            python_function = (
-                python_header_type_annotated
-                + "\n"
-                + "\n".join(func["python_function"].split("\n")[1:])
-            )
+            udf_name, _ = parse_signature(signature)
+            lines = func["python_function"].split("\n")
+            for i, line in enumerate(lines):
+                if line.startswith('def '):
+                    python_func_name = line.split()[1].split("(")[0]
+                    # create a unique suffix
+                    suffix = "".join(random.choices(string.ascii_lowercase, k=8))
+                    python_func_args = line.split("(")[1].split(")")[0].split(",")
+                    python_arg_str = ", ".join(f"{arg}: dict" for arg in python_func_args)
+                    python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
+                    lines[i] = python_header_type_annotated
+                    break
+            # Rejoin the modified lines into a single string
+            python_function = '\n'.join(lines)
             exec(python_function)
             exec(
                 f"self.conn.create_function('{udf_name}', {python_func_name}_{suffix})"
             )
-            logger.debug(f"Registered function: {func['signature']}")
+            logger.debug(f"Registered function: {signature}")
 
     def run(self, program, y_true, debug=False):
         if self.inputs_table_name == "Obj_clevrer":
@@ -963,51 +974,30 @@ class QueryExecutor:
 
 if __name__ == "__main__":
     # python main.py --query_id 0 --run_id 0 --dataset "clevrer" --budget 20 --num_interpretations 20
+    # python main.py --query_id 0 --run_id 0 --dataset "clevrer" --budget 10 --num_interpretations 5 --allow_kwargs_in_udf --num_parameter_search 10
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
 
     parser = argparse.ArgumentParser()
-    # parser.add_argument("--udf_class", type=str, help="UDF class name we want to generate")
-    # parser.add_argument("--n_obj", type=int, help="number of objects in the UDF signature")
-    # parser.add_argument("--udf_description", type=str, help="UDF description")
-    # parser.add_argument("--gt_udf_impl", type=str, help="ground truth UDF implementation")
-    # parser.add_argument("--udf_generation_name", type=str, help="name of the function that GPT will generate")
     parser.add_argument("--query_id", type=int, help="query id")
     parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
-    parser.add_argument(
-        "--num_parameter_search",
-        type=int,
-        help="for udf candidate with kwargs, the number of different parameter values to explore",
-    )
+    parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
+    parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     parser.add_argument("--budget", type=int, help="labeling budget")
-    parser.add_argument(
-        "--ask_for_gt_udf",
-        action="store_true",
-        help="Ask for the gt_udf name interactively if enabled",
-    )
-    parser.add_argument(
-        "--num_interpretations",
-        type=int,
-        help="number of semantic interpretations to generate for the UDF class",
-    )
-    # parser.add_argument("--stage", type=str, help="stage of the experiment (udf_generation, udf_selection, or all)")
+    parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
+    parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
 
     args = parser.parse_args()
-    # gt_udf_impl = args.gt_udf_impl
-    # udf_class = args.udf_class
-    # n_obj= args.n_obj
-    # udf_description = args.udf_description
-    # udf_generation_name = "py_{}".format(udf_class)
     query_id = args.query_id
     run_id = args.run_id
     dataset = args.dataset
+    allow_kwargs_in_udf = args.allow_kwargs_in_udf
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
-    # stage = args.stage
 
     random.seed(run_id)
     np.random.seed(run_id)
@@ -1017,9 +1007,7 @@ if __name__ == "__main__":
     gt_dsl = input_query["dsl"]
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
-    y_true = [
-        1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])
-    ]
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
     """
     Set up logging
     """
@@ -1076,100 +1064,99 @@ if __name__ == "__main__":
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r")
     )["test"]
 
-    # user_query = "Two objects move from far to close, then to far again"
-
-    up = UDFProposer(
-        config,
-        prompt_config,
-        registered_functions,
-        dataset,
-        labeling_budget,
-        num_interpretations,
-        query_id,
-        run_id,
-    )
+    # Parse query
     qp = QueryParser(
         config, prompt_config, config_list, dataset, registered_functions, run_id
     )
     flag = qp.parse(user_query)
-    # Parse query
-    # Step 1: propose new UDFs
-    proposed_functions = up.propose(user_query)
-    for udf_signature, udf_description in proposed_functions.items():
-        # Step 2: generate semantic interpretations and implementations. Save the generated UDFs to disk
-        up.implement(udf_signature, udf_description)
-        # Step 3: Select the best UDF
-        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
-        # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
-        # First, retrieve the ground truth UDF
-        if ask_for_gt_udf:
-            # Ask the user for gt_udf name
-            gt_udf_name = input(
-                'Please enter gt_udf_name (options: "gt_near.gt_x", "gt_far.gt_x", "gt_rightof.gt_x", "gt_behind.gt_x", "gt_location_right.gt_x", "gt_location_bottom.gt_x", "gt_color_brown.gt_x", "gt_color_purple.gt_x", "gt_color_cyan.gt_x", "gt_color_yellow.gt_x", "gt_shape_cylinder.gt_x", "gt_material_metal.gt_x", where x is a non-negative integer): '
-            )
-        else:
-            # HACK: Use a LM to automatically resolve the ground truth UDF
-            # NOTE: Correctness is not guaranteed
-            udf_name, udf_vars = parse_signature(udf_signature)
-            if len(udf_vars) == 2:
-                gt_udf_candidates = ["near", "far", "rightof", "behind"]
+    if 'no' in flag:
+        # Step 1: propose new UDFs
+        up = UDFProposer(
+            config,
+            prompt_config,
+            registered_functions,
+            dataset,
+            labeling_budget,
+            num_interpretations,
+            query_id,
+            run_id,
+            allow_kwargs_in_udf,
+        )
+        proposed_functions = up.propose(user_query)
+        for udf_signature, udf_description in proposed_functions.items():
+            # Step 2: generate semantic interpretations and implementations. Save the generated UDFs to disk
+            up.implement(udf_signature, udf_description)
+            # Step 3: Select the best UDF
+            # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
+            # First, retrieve the ground truth UDF
+            if ask_for_gt_udf:
+                # Ask the user for gt_udf name
+                gt_udf_name = input(
+                    'Please enter gt_udf_name (options: "gt_near.gt_x", "gt_far.gt_x", "gt_rightof.gt_x", "gt_behind.gt_x", "gt_location_right.gt_x", "gt_location_bottom.gt_x", "gt_color_brown.gt_x", "gt_color_purple.gt_x", "gt_color_cyan.gt_x", "gt_color_yellow.gt_x", "gt_shape_cylinder.gt_x", "gt_material_metal.gt_x", where x is a non-negative integer): '
+                )
             else:
-                gt_udf_candidates = [
-                    "location_right",
-                    "location_bottom",
-                    "color_brown",
-                    "color_purple",
-                    "color_cyan",
-                    "color_yellow",
-                    "shape_cylinder",
-                    "material_metal",
-                ]
-            model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-            gt_udf_embeddings = model.encode(gt_udf_candidates)
-            implemented_udf_embedding = model.encode([udf_name])
-            similarities = util.pytorch_cos_sim(
-                implemented_udf_embedding, gt_udf_embeddings
-            )[0]
-            gt_udf_name = "gt_{}.gt_0".format(gt_udf_candidates[similarities.argmax()])
-            logger.debug(
-                "similarities: {}".format(
-                    [
-                        f"{gt_udf_candidate}: {similarity}"
-                        for gt_udf_candidate, similarity in zip(
-                            gt_udf_candidates, similarities
-                        )
+                # HACK: Use a LM to automatically resolve the ground truth UDF
+                # NOTE: Correctness is not guaranteed
+                udf_name, udf_vars = parse_signature(udf_signature)
+                if len(udf_vars) == 2:
+                    gt_udf_candidates = ["near", "far", "rightof", "behind"]
+                else:
+                    gt_udf_candidates = [
+                        "location_right",
+                        "location_bottom",
+                        "color_brown",
+                        "color_purple",
+                        "color_cyan",
+                        "color_yellow",
+                        "shape_cylinder",
+                        "material_metal",
                     ]
+                model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+                gt_udf_embeddings = model.encode(gt_udf_candidates)
+                implemented_udf_embedding = model.encode([udf_name])
+                similarities = util.pytorch_cos_sim(
+                    implemented_udf_embedding, gt_udf_embeddings
+                )[0]
+                gt_udf_name = "gt_{}.gt_0".format(gt_udf_candidates[similarities.argmax()])
+                logger.debug(
+                    "similarities: {}".format(
+                        [
+                            f"{gt_udf_candidate}: {similarity}"
+                            for gt_udf_candidate, similarity in zip(
+                                gt_udf_candidates, similarities
+                            )
+                        ]
+                    )
+                )
+                logger.info(f"Selected gt_udf_name: {gt_udf_name}")
+            selected_udf_candidate = up.select(udf_signature, udf_description, gt_udf_name)
+            # Assume now that the best UDF is the first one
+            # best_impl = implemented_udfs[0]
+            logger.info(
+                "Best: {}, implementation: {}".format(
+                    udf_signature, selected_udf_candidate.function_implementation
                 )
             )
-            logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-        selected_udf_candidate = up.select(udf_signature, udf_description, gt_udf_name)
-        # Assume now that the best UDF is the first one
-        # best_impl = implemented_udfs[0]
-        logger.info(
-            "Best {} implementation: {}".format(
-                udf_signature, selected_udf_candidate.function_implementation
-            )
+            # Step 5: Register the UDF
+            new_udf = {
+                "signature": udf_signature,
+                "description": udf_description,
+                "semantic_interpretation": selected_udf_candidate.semantic_interpretation,  # New field. Unsure if we need this
+                "python_function": selected_udf_candidate.function_implementation,
+            }
+            registered_functions.append(new_udf)
+        # Step 6: Re-parse the query
+        # NOTE: Set allow_new_udfs=False. If the parser still wants to propose new UDFs, we will force it to generate a query that is the best approximation.
+        qp = QueryParser(
+            config,
+            prompt_config,
+            config_list,
+            dataset,
+            registered_functions,
+            run_id,
+            allow_new_udfs=False,
         )
-        # Step 5: Register the UDF
-        new_udf = {
-            "signature": udf_signature,
-            "description": udf_description,
-            "semantic_interpretation": selected_udf_candidate.semantic_interpretation,  # New field. Unsure if we need this
-            "python_function": selected_udf_candidate.function_implementation,
-        }
-        registered_functions.append(new_udf)
-    # Step 6: Re-parse the query
-    # NOTE: Set allow_new_udfs=False. If the parser still wants to propose new UDFs, we will force it to generate a query that is the best approximation.
-    qp = QueryParser(
-        config,
-        prompt_config,
-        config_list,
-        dataset,
-        registered_functions,
-        run_id,
-        allow_new_udfs=False,
-    )
-    qp.parse(user_query)
+        qp.parse(user_query)
     try:
         parsed_program = qp.get_parsed_program()
         parsed_dsl = qp.get_parsed_query()

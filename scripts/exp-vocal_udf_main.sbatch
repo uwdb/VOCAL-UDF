@@ -31,4 +31,6 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --query_id $query_id \
         --dataset "$dataset" \
         --budget $budget \
-        --num_interpretations $num_interpretations
+        --num_interpretations $num_interpretations \
+        --allow_kwargs_in_udf \
+        --num_parameter_search 20

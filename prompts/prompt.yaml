@@ -1,5 +1,7 @@
 dsl_definition: >
   Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Remember to always add parentheses around comma-connected predicates. Assume the video segments capture 25 frames per second.
+dsl_definition_image: >
+  The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas.
 udf_definition: >
   A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
   - object predicate: objectName(o0). For example, Car(o0) checks whether o0 is a car.
@@ -10,8 +12,6 @@ registered_udfs: >
   {{functions}}
 parse_query: >
   For text-to-DSL translation tasks, only use the functions you have been provided with. Reply YES when the text is succesfully translated into the DSL and verified by the provided function, or NO if parsing the user input requires new predicates that are not listed in the current functions list. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request.
-dsl_definition_image: >
-  The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas.
 force_parse_query: >
   For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is succesfully translated into the DSL and verified by the provided function. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
 propose_udfs: >
@@ -29,6 +29,7 @@ generate_udfs: >
   Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
   - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
   - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
+  - Prioritize generating functions that are likely to see frequent use, starting with the most common.
   - {{schema_info}}
   - The function should take {{n_obj}} as input, and return a boolean value.
   - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
@@ -39,6 +40,31 @@ generate_udfs: >
         {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
         ...
     ]}
+    ```
+generate_udfs_with_optional_kwargs: > # Support kwargs
+  Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
+  - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
+  - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
+  - Prioritize generating functions that are likely to see frequent use, starting with the most common.
+  - {{schema_info}}
+  - The function should take as input {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value.
+  - Include `**kwargs` in the function's arguments only if necessary and restrict its data types to numeric values. String, boolean, or object data types are not allowed within `**kwargs`.
+  - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
+  - Use the following output format:
+    ```json
+    {
+      "answer": [
+        {
+          "semantic_interpretation": "interpretation",
+          "function_implementation": "def py_{{udf_signature}}:\n    # Your code here",
+          "kwargs": {
+            "arg_name1": {"min": minimum_value, "max": maximum_value, "default": default_value},
+            // Add more arguments as needed.
+          },
+        },
+        // Add more functions as needed.
+      ]
+    }
     ```
 deprecated:
   verify_udfs: > # Unused
