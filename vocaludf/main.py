@@ -563,7 +563,8 @@ class UDFProposer:
         else:
             sampled_index = unlabeled_index
 
-        for udf_candidate in udf_candidate_list:
+        indices_to_remove = []
+        for i, udf_candidate in enumerate(udf_candidate_list):
             try:
                 # For each sampled row in df_train, construct o1 and o2
                 kwargs = {}
@@ -581,10 +582,21 @@ class UDFProposer:
                     result = df_train.loc[sampled_index].apply(
                         lambda row: udf_function(row["o1"], row["o2"], **kwargs), axis=1
                     )
+                contains_non_boolean = result.map(lambda x: not isinstance(x, bool)).any()
+                if contains_non_boolean:
+                    logger.debug(
+                        f"ERROR: UDFCandidate(id={udf_candidate.id}) returned non-boolean value"
+                    )
+                    indices_to_remove.append(i)
+                    continue
             except Exception as e:
                 logger.debug(f"ERROR: failed to execute UDFCandidate(id={udf_candidate.id}): {e}")
-                result = df_train.loc[sampled_index].apply(lambda row: False, axis=1)
+                indices_to_remove.append(i)
+                continue
             prediction_matrix.append(result.values)
+        # Remove UDFs that failed to execute
+        for i in sorted(indices_to_remove, reverse=True):
+            del udf_candidate_list[i]
 
         prediction_matrix = np.array(
             prediction_matrix
@@ -757,29 +769,33 @@ class UDFProposer:
         if self.allow_kwargs_in_udf:
             for i in range(self.num_interpretations):
                 with open(os.path.join(self.udf_save_dir, f"{udf_name}_{i}.json"), "r") as f:
-                    udf_dict = json.load(f)
-                    if not udf_dict.get("kwargs", {}): # No additional arguments
-                        new_udf_candidate = UDFCandidate(id=i, payload=udf_dict)
-                        logger.debug(new_udf_candidate)
-                        udf_candidate_list.append(new_udf_candidate)
-                    else:
-                        # Instantiate the kwargs with default values
-                        udf_variant_dict = copy.deepcopy(udf_dict)
-                        udf_variant_dict["kwargs"] = {k: v["default"] for k, v in udf_variant_dict["kwargs"].items() if v["default"] is not None}
-                        new_udf_candidate = UDFCandidate(id=i, payload=udf_variant_dict)
-                        logger.debug(new_udf_candidate)
-                        udf_candidate_list.append(new_udf_candidate)
-                        # Instantiate the kwargs with values randomly sampled from the range
-                        if num_parameter_search > 0:
-                            for _ in range(num_parameter_search):
-                                # deepcopy udf_dict
-                                udf_variant_dict = copy.deepcopy(udf_dict)
-                                for k in list(udf_variant_dict["kwargs"].keys()):
-                                    # randomly sample a value from the range
-                                    udf_variant_dict["kwargs"][k] = np.random.uniform(udf_variant_dict["kwargs"][k]["min"], udf_variant_dict["kwargs"][k]["max"])
-                                new_udf_candidate = UDFCandidate(id=i, payload=udf_variant_dict)
-                                logger.debug(new_udf_candidate)
-                                udf_candidate_list.append(new_udf_candidate)
+                    try:
+                        udf_dict = json.load(f)
+                        if not udf_dict.get("kwargs", {}): # No additional arguments
+                            new_udf_candidate = UDFCandidate(id=i, payload=udf_dict)
+                            logger.debug(new_udf_candidate)
+                            udf_candidate_list.append(new_udf_candidate)
+                        else:
+                            # Instantiate the kwargs with default values
+                            udf_variant_dict = copy.deepcopy(udf_dict)
+                            udf_variant_dict["kwargs"] = {k: v["default"] for k, v in udf_variant_dict["kwargs"].items() if v["default"] is not None}
+                            new_udf_candidate = UDFCandidate(id=i, payload=udf_variant_dict)
+                            logger.debug(new_udf_candidate)
+                            udf_candidate_list.append(new_udf_candidate)
+                            # Instantiate the kwargs with values randomly sampled from the range
+                            if num_parameter_search > 0:
+                                for _ in range(num_parameter_search):
+                                    # deepcopy udf_dict
+                                    udf_variant_dict = copy.deepcopy(udf_dict)
+                                    for k in list(udf_variant_dict["kwargs"].keys()):
+                                        # randomly sample a value from the range
+                                        udf_variant_dict["kwargs"][k] = np.random.uniform(udf_variant_dict["kwargs"][k]["min"], udf_variant_dict["kwargs"][k]["max"])
+                                    new_udf_candidate = UDFCandidate(id=i, payload=udf_variant_dict)
+                                    logger.debug(new_udf_candidate)
+                                    udf_candidate_list.append(new_udf_candidate)
+                    except Exception as e:
+                        logger.debug(f"ERROR: failed to load UDFCandidate(id={i}): {e}")
+
         else:
             for i in range(self.num_interpretations):
                 with open(os.path.join(self.udf_save_dir, f"{udf_name}_{i}.json"), "r") as f:
@@ -1013,7 +1029,17 @@ if __name__ == "__main__":
     """
     # Create a directory if it doesn't already exist
     os.makedirs(
-        os.path.join(config["log_dir"], "udf_generation", dataset), exist_ok=True
+        os.path.join(
+            config["log_dir"],
+            "udf_generation",
+            dataset,
+            "budget-{}_ninterp-{}_{}".format(
+                labeling_budget,
+                num_interpretations,
+                "with_kwargs" if allow_kwargs_in_udf else "without_kwargs",
+            ),
+        ),
+        exist_ok=True,
     )
 
     # Create a file handler that logs even debug messages
@@ -1022,9 +1048,12 @@ if __name__ == "__main__":
             config["log_dir"],
             "udf_generation",
             dataset,
-            "qid-{}_run-{}-budget-{}_ninterp-{}.log".format(
-                query_id, run_id, labeling_budget, num_interpretations
+            "budget-{}_ninterp-{}_{}".format(
+                labeling_budget,
+                num_interpretations,
+                "with_kwargs" if allow_kwargs_in_udf else "without_kwargs",
             ),
+            "qid-{}_run-{}.log".format(query_id, run_id),
         ),
         mode="w",
     )

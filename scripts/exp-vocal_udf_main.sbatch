@@ -34,3 +34,6 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --num_interpretations $num_interpretations \
         --allow_kwargs_in_udf \
         --num_parameter_search 20
+
+# --allow_kwargs_in_udf \
+# --num_parameter_search 20

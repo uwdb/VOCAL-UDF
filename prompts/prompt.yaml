@@ -48,7 +48,7 @@ generate_udfs_with_optional_kwargs: > # Support kwargs
   - Prioritize generating functions that are likely to see frequent use, starting with the most common.
   - {{schema_info}}
   - The function should take as input {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value.
-  - Include `**kwargs` in the function's arguments only if necessary and restrict its data types to numeric values. String, boolean, or object data types are not allowed within `**kwargs`.
+  - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
   - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
   - Use the following output format:
     ```json
@@ -66,6 +66,47 @@ generate_udfs_with_optional_kwargs: > # Support kwargs
       ]
     }
     ```
+model:
+  generate_description: >
+    You are given a visual concept name.
+
+    Follow these steps:
+    <step1>You have to work as an expert
+        linguist. There are some human
+        annotators who need to determine
+        if given images are in-scope or
+        out-of-scope for this visual
+        concept. Your task is to generate
+        description of the visual
+        concept which annotators can use
+        to decide if any images are in-
+        scope or out-of-scope for the
+        given visual concept.</step1>
+    <step2>Provide an concept definition of
+        this visual image in a few
+        sentences.</step2>
+    <step3>Provide all the image attributes
+        that an image must have in order
+        to be in-scope for this visual
+        concept.</step3>
+    <step4>Each attribute found in step2
+        and step3 should be verbose,
+        independent, self-explanatory and
+        meaningful.</step4>
+    <step7>Write your response in following
+        user friendly and readable
+        format:
+    Visual concept definition:
+    <Add 2-3 line concept definition of the
+        visual concept here.>
+    Image must have following attributes
+        for it to be in-scope for this
+        visual concept:
+    <Add details here as bullet points.>
+    </step7>
+    <visualConceptName>{{concept_name}}</
+        visualConceptName>
+
 deprecated:
   verify_udfs: > # Unused
     The proposed functions are { {{proposed_functions}} }.
