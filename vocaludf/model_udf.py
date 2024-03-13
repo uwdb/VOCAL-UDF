@@ -166,6 +166,9 @@ class ModelDistiller:
                     )
                     result = response.choices[0].message.content
                     logger.debug("Result: {}".format(result))
+                    attr_key, attr_value = self.udf_class.lower().split("_")
+                    gt_label = 1 if getattr(row, attr_key) == attr_value else 0
+                    logger.debug("gt_label: {}".format(gt_label))
                     if "yes" in result.lower():
                         image_features = self.extract_features(frame)
                         labeled_data['train'].append([image_features, 1])
