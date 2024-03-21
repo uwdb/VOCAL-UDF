@@ -25,32 +25,41 @@ verify_udfs: >
   ```json
   {"function(args)": "description"}
   ```
-generate_udfs: >
-  Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
-  - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
-  - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
-  - Prioritize generating functions that are likely to see frequent use, starting with the most common.
-  - {{schema_info}}
-  - The function should take {{n_obj}} as input, and return a boolean value.
-  - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
-  - Use the following output format:
-    ```json
-    {"answer": [
-        {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
-        {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
-        ...
-    ]}
-    ```
-generate_udfs_with_optional_kwargs: > # Support kwargs
-  Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
-  - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
-  - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
-  - Prioritize generating functions that are likely to see frequent use, starting with the most common.
-  - {{schema_info}}
-  - The function should take as input {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value.
-  - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
-  - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
-  - Use the following output format:
+generate_udfs:
+  overall: >
+    Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
+  task: >
+    - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
+  details: >
+    - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
+    - Prioritize generating functions that are likely to see frequent use, starting with the most common.
+  semantic_interpretation: >
+    - Semantic interpretation: {{semantic_interpretation}}
+  schema: >
+    - {{schema_info}}
+  inputs: >
+    - The function should take {{n_obj}} as input, and return a boolean value.
+  inputs_with_pixels: >
+    - The function should take an image and {{n_obj}} as input, and return a boolean value. The image is in the format of a NumPy array and in the RGB color space. Import all necessary libraries at the beginning of the function body. If solving the task requires a pre-trained machine learning model, load a pre-trained model that is available on Hugging Face, TensorFlow Hub, or PyTorch Hub. Implement the image preprocessing required by the chosen model. Remember to move the model to GPU if available.
+  inputs_with_optional_kwargs: >
+    - The function should take as input {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value.
+    - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
+  inputs_with_pixels_and_optional_kwargs: >
+    - The function should take as input an image, {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value. You can assume that the image is in the format of a NumPy array and in the RGB color space. Import all necessary libraries at the beginning of the function body. If solving the task requires a pre-trained machine learning model, load a pre-trained model that is available on Hugging Face, TensorFlow Hub, or PyTorch Hub. Implement the image preprocessing required by the chosen model. Remember to move the model to GPU if available.
+    - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
+  comments: >
+    - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
+  output: >
+    - Use the following output format:
+      ```json
+      {"answer": [
+          {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
+          {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"},
+          ...
+      ]}
+      ```
+  output_with_optional_kwargs: >
+    - Use the following output format:
     ```json
     {
       "answer": [
@@ -64,6 +73,23 @@ generate_udfs_with_optional_kwargs: > # Support kwargs
         },
         // Add more functions as needed.
       ]
+    }
+    ```
+  output_one_implementation: >
+    - Use the following output format:
+    ```json
+    {"semantic_interpretation": "interpretation", "function_implementation": "def py_{{udf_signature}}:\n    # Your code here"}
+    ```
+  output_one_implementation_with_optional_kwargs: >
+    - Use the following output format:
+    ```json
+    {
+      "semantic_interpretation": "interpretation",
+      "function_implementation": "def py_{{udf_signature}}:\n    # Your code here",
+      "kwargs": {
+        "arg_name1": {"min": minimum_value, "max": maximum_value, "default": default_value},
+        // Add more arguments as needed.
+      }
     }
     ```
 model:
