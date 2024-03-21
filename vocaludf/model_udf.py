@@ -14,7 +14,7 @@ from transformers import CLIPProcessor, CLIPModel
 import torch
 from torch.utils.data import Dataset
 from torchvision import datasets
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from vocaludf import mlp
 import torchmetrics
 from torch.utils.data import WeightedRandomSampler
@@ -23,7 +23,7 @@ from collections import defaultdict
 client = OpenAI()
 
 logging.basicConfig()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("vocal_udf")
 logger.setLevel(logging.DEBUG)
 
 class CustomImageDataset(Dataset):
@@ -74,7 +74,8 @@ class ModelDistiller:
         vid = row.vid
         cap = cv2.VideoCapture(
             os.path.join(
-                '/home/enhao/EQUI-VOCAL/inputs/videos',
+                self.config['data_dir'],
+                self.dataset,
                 f'video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}',
                 f"video_{str(vid).zfill(5)}.mp4"
             )
@@ -126,10 +127,10 @@ class ModelDistiller:
         labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset)
         labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_class, self.run_id, self.n_train))
         os.makedirs(labeled_data_dir, exist_ok=True)
-        if self.load_labeled_data:
+        if self.load_labeled_data and os.path.exists(labeled_data_path):
             labeled_data = torch.load(labeled_data_path)
         else:
-            # Training data
+            # Training and validation data
             label_count = 0
             for row in self.df_train.itertuples():
                 try:
@@ -141,7 +142,7 @@ class ModelDistiller:
                     # Convert the frame to a base 64 encoded image
                     _, buffer = cv2.imencode('.jpg', frame)
                     base64_image = base64.b64encode(buffer).decode('utf-8')
-                    logger.debug("base64_image", base64_image)
+                    logger.debug("base64_image: {}".format(base64_image))
                     # training_images.append(base64_image)
                     response = client.chat.completions.create(
                         model="gpt-4-vision-preview",
@@ -169,6 +170,7 @@ class ModelDistiller:
                     attr_key, attr_value = self.udf_class.lower().split("_")
                     gt_label = 1 if getattr(row, attr_key) == attr_value else 0
                     logger.debug("gt_label: {}".format(gt_label))
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     if "yes" in result.lower():
                         image_features = self.extract_features(frame)
                         labeled_data['train'].append([image_features, 1])
@@ -190,8 +192,9 @@ class ModelDistiller:
                 try:
                     # Read and crop frame
                     frame = self.frame_processing(row)
-                    if frame is None:
+                    if frame is None: # failed to read the frame
                         continue
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     image_features = self.extract_features(frame)
                     attr_key, attr_value = self.udf_class.lower().split("_")
                     label = 1 if getattr(row, attr_key) == attr_value else 0
@@ -207,19 +210,24 @@ class ModelDistiller:
             if self.save_labeled_data:
                 torch.save(labeled_data, labeled_data_path)
 
+        # use 20% of the training data as validation data
         train_dataset = CustomImageDataset(labeled_data['train'])
+        train_set_size = int(len(train_dataset) * 0.8)
+        valid_set_size = len(train_dataset) - train_set_size
+        train_dataset, valid_dataset = torch.utils.data.random_split(train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id))
+
         class_counts = [sum(y == i for _, y in labeled_data['train']) for i in range(2)]
-        class_weights = [1.0 / count for count in class_counts]
-        weights = [class_weights[y] for _, y in labeled_data['train']]
-        logger.debug("class_counts: {}, class_weights: {}".format(class_counts, class_weights))
+        self.class_weights = torch.tensor([1.0 / count for count in class_counts]).to(self.device)
+        # weights = [class_weights[y] for _, y in labeled_data['train']]
+        logger.debug("class_counts: {}, class_weights: {}".format(class_counts, self.class_weights))
 
         # TODO: Alternatively, set class weights in the loss function
         # Create a weighted random sampler
-        sampler = WeightedRandomSampler(weights, len(weights))
+        # sampler = WeightedRandomSampler(weights, len(weights))
         # train_set, val_set = torch.utils.data.random_split(dataset, [0.8, 0.2], generator=torch.Generator().manual_seed(self.run_id))
-        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, sampler=sampler, shuffle=False)  # Note: set shuffle to False
-        # train_loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
-        # val_loader = torch.utils.data.DataLoader(val_set, batch_size=32, shuffle=False)
+        # self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, sampler=sampler, shuffle=False)  # Note: set shuffle to False
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+        self.val_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=32, shuffle=False)
         test_dataset = CustomImageDataset(labeled_data['test'])
         self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False)
 
@@ -227,28 +235,33 @@ class ModelDistiller:
         # Define the model
         self.dim_in = self.clip_model.config.projection_dim
         logger.debug("dim_in: {}".format(self.dim_in)) # should be 512 for clip-vit-base-patch32
-        self.mlp_model = mlp.MLP(self.dim_in, 2, logger) # binary classification
-        checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, self.udf_class)
-        os.makedirs(checkpoint_root, exist_ok=True)
+        self.mlp_model = mlp.MLP(self.dim_in, 2, logger, self.class_weights) # binary classification
+        self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, self.udf_class)
+        self.checkpoint_filename = "udf-{}_run-{}_ntrain-{}".format(self.udf_class, self.run_id, self.n_train)
+        os.makedirs(self.checkpoint_root, exist_ok=True)
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            dirpath=checkpoint_root,
-            save_last=True,
+            dirpath=self.checkpoint_root,
+            filename=self.checkpoint_filename,
+            monitor="val_loss",
+            mode="min",
         )
         callbacks=[checkpoint_callback]
         log_dir=os.path.join(self.config["output_dir"], 'tensorboard')
-        pl_logger = pl.loggers.TensorBoardLogger(log_dir, name="udf-{}_run-{}.log".format(self.udf_class, self.run_id), default_hp_metric=False)
+        pl_logger = pl.loggers.TensorBoardLogger(log_dir, name="udf-{}_run-{}_ntrain-{}.log".format(self.udf_class, self.run_id, self.n_train), default_hp_metric=False)
+        earlystopping_callback = pl.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10)
+        callbacks.append(earlystopping_callback)
         self.trainer = pl.Trainer(
             # deterministic=self.deterministic,
-            max_epochs=200,
+            max_epochs=50,
             devices=1,
             accelerator="auto",
             enable_progress_bar=True,
             enable_checkpointing=True,
             enable_model_summary=False,
             logger=pl_logger,
-            default_root_dir=checkpoint_root,
+            default_root_dir=self.checkpoint_root,
             callbacks=callbacks,
-            check_val_every_n_epoch=5,
+            # check_val_every_n_epoch=5,
             # log_every_n_steps=min(50, len(dataset)-1),
             log_every_n_steps=1
         )
@@ -256,18 +269,21 @@ class ModelDistiller:
         self.trainer.fit(
             self.mlp_model,
             train_dataloaders=self.train_loader,
-            val_dataloaders=None
+            val_dataloaders=self.val_loader
         )
 
     def test(self):
         # Inference:
         # model = mlp.MLP.load_from_checkpoint(self.dim_in, 2)
+        logger.debug("test with last model: ")
         self.trainer.test(self.mlp_model, dataloaders=self.test_loader)
+        logger.debug("test with best model: ")
+        self.trainer.test(ckpt_path="best", dataloaders=self.test_loader)
 
 if __name__ == "__main__":
-    # python model_udf.py --run_id 0 --dataset "clevrer" --udf_class "color_red" --n_train 10
+    # python model_udf.py --run_id 0 --dataset "clevrer" --udf_class "color_red" --n_train 100 --load_labeled_data
     config = yaml.safe_load(
-        open("/home/enhao/VOCAL-UDF/configs/config.yaml", "r")
+        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
 
     parser = argparse.ArgumentParser()

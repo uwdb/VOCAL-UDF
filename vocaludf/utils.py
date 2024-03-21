@@ -2,6 +2,62 @@ from src.utils import program_to_dsl, dsl_to_program, postgres_execute, postgres
 import duckdb
 import itertools
 import copy
+from vocaludf.parser import parse, parse_udf
+import json
+import logging
+import os
+
+logging.basicConfig()
+logger = logging.getLogger("vocal_udf")
+logger.setLevel(logging.DEBUG)
+
+def parse_signature(signature):
+    """
+    Example:
+    signature: "Color_red(o1, -1)"
+    parsed result: {'fn_name': 'Color_red', 'variables': ['o1'], 'parameter': -1}
+    """
+    # NOTE: could throw an exception if the signature is not in the correct format
+    result = parse_udf().parseString(signature, parseAll=True).as_dict()
+    udf_name = result["fn_name"]
+    udf_vars = result["variables"]
+    # tokens = list(tokenize.generate_tokens(io.StringIO(signature).readline))
+    # udf_name = tokens[0].string
+    # udf_vars = [token for token in tokens[2:-3] if token.string not in [',','=']]
+    return udf_name, udf_vars
+
+
+def transform_function(original_code, instantiation_dict):
+    """
+    Transforms the original code by removing **kwargs from the function definition
+    and inserting a line defining kwargs with the corrected string format.
+
+    Args:
+        original_code (str): The original code to be transformed.
+        instantiation_dict (dict): The dictionary containing the values for kwargs.
+
+    Returns:
+        str: The transformed code.
+    """
+    # Split the original function into lines
+    lines = original_code.split('\n')
+
+    # Find the line with the function definition and remove **kwargs
+    for i, line in enumerate(lines):
+        if line.startswith('def ') and '**kwargs' in line:
+            # Replace **kwargs with nothing
+            lines[i] = line.replace(', **kwargs', '').replace('**kwargs, ', '').replace('**kwargs', '')
+
+            # Insert the line defining kwargs with the corrected string format
+            kwargs_str = json.dumps(instantiation_dict)
+            kwargs_line = f"    kwargs = {kwargs_str}"
+            lines.insert(i + 1, kwargs_line)
+            break
+
+    # Rejoin the modified lines into a single string
+    transformed_code = '\n'.join(lines)
+
+    return transformed_code
 
 def replace_slot(text, entries):
     for key, value in entries.items():
