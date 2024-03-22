@@ -26,5 +26,4 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --dataset "clevrer" \
         --udf_class "$udf" \
         --code_based \
-        --budget 20 \
         --num_interpretations 10

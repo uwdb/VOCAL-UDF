@@ -31,10 +31,11 @@ logger = logging.getLogger("vocal_udf")
 logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
+    # Code-based UDF
+    # python compare_code_and_model_udf.py --run_id 1 --dataset "clevrer" --udf_class "material_metal" --code_based --num_interpretations 10
+
     # Model-based UDF
     # python compare_code_and_model_udf.py --run_id 0 --dataset "clevrer" --udf_class "color_brown" --model_based --n_train 100 --save_labeled_data --load_labeled_data
-    # Code-based UDF
-    # python compare_code_and_model_udf.py --run_id 0 --dataset "clevrer" --udf_class "color_brown" --code_based --budget 20 --num_interpretations 10
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -51,9 +52,10 @@ if __name__ == "__main__":
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
     # parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     # parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
-    parser.add_argument("--budget", type=int, help="labeling budget")
+    # parser.add_argument("--budget", type=int, help="labeling budget")
     parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
+    parser.add_argument("--save_generated_udf", action="store_true", help="save generated UDF to file")
 
     args = parser.parse_args()
     # query_id = args.query_id
@@ -68,9 +70,10 @@ if __name__ == "__main__":
     udf_type = "code-based" if code_based else "model-based"
     # allow_kwargs_in_udf = args.allow_kwargs_in_udf
     # num_parameter_search = args.num_parameter_search
-    labeling_budget = args.budget
+    # labeling_budget = args.budget
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
+    save_generated_udf = args.save_generated_udf
 
     random.seed(run_id)
     np.random.seed(run_id)
@@ -145,13 +148,14 @@ if __name__ == "__main__":
             None,
             registered_functions,
             dataset,
-            labeling_budget,
+            -1,
             num_interpretations,
             None,
             -1,
             run_id,
+            save_generated_udf,
             allow_kwargs_in_udf=False)
-        up.implement(udf_signature, udf_description)
+        udf_candidate_list = up.implement(udf_signature, udf_description)
         # Select the best UDF
         if ask_for_gt_udf:
             # Ask the user for gt_udf name
@@ -193,15 +197,7 @@ if __name__ == "__main__":
                 )
             )
             logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-        selected_udf_candidate = up.select(udf_signature, udf_description, gt_udf_name)
-        # Step 5: Register the UDF
-        new_udf = {
-            "signature": udf_signature,
-            "description": udf_description,
-            "semantic_interpretation": selected_udf_candidate.semantic_interpretation,  # New field. Unsure if we need this
-            "python_function": selected_udf_candidate.function_implementation,
-        }
-        registered_functions.append(new_udf)
+        up.compute_best_test_score(gt_udf_name, udf_candidate_list)
     else:
         md = ModelDistiller(config, prompt_config, dataset, udf_class, run_id, n_train, save_labeled_data, load_labeled_data)
         md.prepare_data()

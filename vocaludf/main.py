@@ -33,6 +33,7 @@ if __name__ == "__main__":
     parser.add_argument("--budget", type=int, help="labeling budget")
     parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
+    parser.add_argument("--save_generated_udf", action="store_true", help="save generated UDF to file")
 
     args = parser.parse_args()
     query_id = args.query_id
@@ -43,6 +44,7 @@ if __name__ == "__main__":
     labeling_budget = args.budget
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
+    save_generated_udf = args.save_generated_udf
 
     random.seed(run_id)
     np.random.seed(run_id)
@@ -129,12 +131,13 @@ if __name__ == "__main__":
             num_parameter_search,
             query_id,
             run_id,
+            save_generated_udf,
             allow_kwargs_in_udf,
         )
         proposed_functions = up.propose(user_query)
         for udf_signature, udf_description in proposed_functions.items():
             # Step 2: generate semantic interpretations and implementations. Save the generated UDFs to disk
-            up.implement(udf_signature, udf_description)
+            udf_candidate_list = up.implement(udf_signature, udf_description)
             # Step 3: Select the best UDF
             # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
             # First, retrieve the ground truth UDF
@@ -178,7 +181,7 @@ if __name__ == "__main__":
                     )
                 )
                 logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-            selected_udf_candidate = up.select(udf_signature, udf_description, gt_udf_name)
+            selected_udf_candidate = up.select(gt_udf_name, udf_candidate_list)
             # Assume now that the best UDF is the first one
             # best_impl = implemented_udfs[0]
             logger.info(
