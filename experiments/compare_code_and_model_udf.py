@@ -53,7 +53,7 @@ if __name__ == "__main__":
     # parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     # parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     # parser.add_argument("--budget", type=int, help="labeling budget")
-    parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
+    # parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
     parser.add_argument("--save_generated_udf", action="store_true", help="save generated UDF to file")
 
@@ -71,7 +71,7 @@ if __name__ == "__main__":
     # allow_kwargs_in_udf = args.allow_kwargs_in_udf
     # num_parameter_search = args.num_parameter_search
     # labeling_budget = args.budget
-    ask_for_gt_udf = args.ask_for_gt_udf
+    # ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
     save_generated_udf = args.save_generated_udf
 
@@ -133,15 +133,30 @@ if __name__ == "__main__":
     # )["test"]
     registered_functions = []
 
+    name_map = {
+        "color_brown": {"signature": "Color_Brown(o0)", "description": "Whether the color of o0 is brown."},
+        "color_purple": {"signature": "Color_Purple(o0)", "description": "Whether the color of o0 is purple."},
+        "color_cyan": {"signature": "Color_Cyan(o0)", "description": "Whether the color of o0 is cyan."},
+        "shape_cylinder": {"signature": "Shape_Cylinder(o0)", "description": "Whether the shape of o0 is cylinder."},
+        "shape_cube": {"signature": "Shape_Cube(o0)", "description": "Whether the shape of o0 is cube."},
+        "shape_sphere": {"signature": "Shape_Sphere(o0)", "description": "Whether the shape of o0 is sphere."},
+        "material_metal": {"signature": "Material_Metal(o0)", "description": "Whether the material of o0 is metal."},
+        "material_rubber": {"signature": "Material_Rubber(o0)", "description": "Whether the material of o0 is rubber."},
+        "near": {"signature": "Near(o0, o1)", "description": "Whether o0 is near o1."},
+        "far": {"signature": "Far(o0, o1)", "description": "Whether o0 is far away from o1."},
+        "rightof": {"signature": "RightOf(o0, o1)", "description": "Whether o0 is on the right of o1."},
+        "behind": {"signature": "Behind(o0, o1)", "description": "Whether o0 is behind o1."},
+        "location_right": {"signature": "Location_Right(o0)", "description": "Whether o0 is on the right of the frame."},
+        "location_bottom": {"signature": "Location_Bottom(o0)", "description": "Whether o0 is at the bottom of the frame."},
+    }
+    udf_signature = name_map[udf_class]["signature"]
+    udf_description = name_map[udf_class]["description"]
+
+    udf_name, udf_vars = parse_signature(udf_signature)
+    gt_udf_name = "gt_{}.gt_0".format(udf_class)
+    logger.info(f"Selected gt_udf_name: {gt_udf_name}")
+
     if code_based:
-        name_map = {
-            "color_brown": {"signature": "Color_Brown(o0)", "description": "Whether the color of o0 is brown."},
-            "color_purple": {"signature": "Color_Purple(o0)", "description": "Whether the color of o0 is purple."},
-            "shape_cylinder": {"signature": "Shape_Cylinder(o0)", "description": "Whether the shape of o0 is cylinder."},
-            "material_metal": {"signature": "Material_Metal(o0)", "description": "Whether the material of o0 is metal."},
-        }
-        udf_signature = name_map[udf_class]["signature"]
-        udf_description = name_map[udf_class]["description"]
         up = CodeUDFWithPixelsProposer(
             config,
             prompt_config,
@@ -156,50 +171,9 @@ if __name__ == "__main__":
             save_generated_udf,
             allow_kwargs_in_udf=False)
         udf_candidate_list = up.implement(udf_signature, udf_description)
-        # Select the best UDF
-        if ask_for_gt_udf:
-            # Ask the user for gt_udf name
-            gt_udf_name = input(
-                'Please enter gt_udf_name (options: "gt_near.gt_x", "gt_far.gt_x", "gt_rightof.gt_x", "gt_behind.gt_x", "gt_location_right.gt_x", "gt_location_bottom.gt_x", "gt_color_brown.gt_x", "gt_color_purple.gt_x", "gt_color_cyan.gt_x", "gt_color_yellow.gt_x", "gt_shape_cylinder.gt_x", "gt_material_metal.gt_x", where x is a non-negative integer): '
-            )
-        else:
-            # HACK: Use a LM to automatically resolve the ground truth UDF
-            # NOTE: Correctness is not guaranteed
-            udf_name, udf_vars = parse_signature(udf_signature)
-            if len(udf_vars) == 2:
-                gt_udf_candidates = ["near", "far", "rightof", "behind"]
-            else:
-                gt_udf_candidates = [
-                    "location_right",
-                    "location_bottom",
-                    "color_brown",
-                    "color_purple",
-                    "color_cyan",
-                    "color_yellow",
-                    "shape_cylinder",
-                    "material_metal",
-                ]
-            model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-            gt_udf_embeddings = model.encode(gt_udf_candidates)
-            implemented_udf_embedding = model.encode([udf_name])
-            similarities = util.pytorch_cos_sim(
-                implemented_udf_embedding, gt_udf_embeddings
-            )[0]
-            gt_udf_name = "gt_{}.gt_0".format(gt_udf_candidates[similarities.argmax()])
-            logger.debug(
-                "similarities: {}".format(
-                    [
-                        f"{gt_udf_candidate}: {similarity}"
-                        for gt_udf_candidate, similarity in zip(
-                            gt_udf_candidates, similarities
-                        )
-                    ]
-                )
-            )
-            logger.info(f"Selected gt_udf_name: {gt_udf_name}")
         up.compute_best_test_score(gt_udf_name, udf_candidate_list)
     else:
-        md = ModelDistiller(config, prompt_config, dataset, udf_class, run_id, n_train, save_labeled_data, load_labeled_data)
+        md = ModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
         md.prepare_data()
         md.train()
         md.test()

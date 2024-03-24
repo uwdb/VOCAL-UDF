@@ -19,6 +19,10 @@ from vocaludf import mlp
 import torchmetrics
 from torch.utils.data import WeightedRandomSampler
 from collections import defaultdict
+from vocaludf.utils import parse_signature
+from vocaludf.udf_proposer import UDFProposer
+import string
+import importlib
 
 client = OpenAI()
 
@@ -27,39 +31,48 @@ logger = logging.getLogger("vocal_udf")
 logger.setLevel(logging.DEBUG)
 
 class CustomImageDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
+    def __init__(self, data, train):
+        self.X = [d["image_features"] for d in data]
+        if train:
+            self.y = [d["llm_label"] for d in data]
+        else:
+            self.y = [d["label"] for d in data]
 
     def __len__(self):
-        return len(self.data)
+        return len(self.X)
 
     def __getitem__(self, idx):
-        X, y = self.data[idx]
-        return X, y
+        return self.X[idx], self.y[idx]
 
-class ModelDistiller:
-    def __init__(self, config, prompt_config, dataset, udf_class, run_id, n_train, save_labeled_data, load_labeled_data):
+class ModelDistiller(UDFProposer):
+    def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data):
         self.config = config
         self.prompt_config = prompt_config
         self.dataset = dataset
-        self.udf_class = udf_class
+        udf_name, udf_vars = parse_signature(udf_signature)
+        self.udf_class = udf_name.lower()
+        self.n_obj = len(udf_vars)
+        assert self.n_obj in [1, 2], "n_obj must be 1 or 2"
+        self.udf_description = udf_description
         self.run_id = run_id
         self.n_train = n_train
         self.n_test = 1000
         self.save_labeled_data = save_labeled_data
         self.load_labeled_data = load_labeled_data
         # self.n_train = config["model_distiller"]["n_train"]
+
+        module_name, function_name = gt_udf_name.split(".")
+        module_name = "udfs.{}".format(module_name)
+        module = importlib.import_module(module_name)
+        self.gt_udf = getattr(module, function_name)
+
         self.conn = duckdb.connect(
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
             read_only=True,
         )
-        self.conn.execute(f"SELECT setseed({self.run_id / 100})")
-        # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples to ensure we have enough training samples
-        self.df_filtered = self.conn.execute(
-            "SELECT * FROM Obj_clevrer ORDER BY random() LIMIT {}".format(self.n_train * 2 + self.n_test)
-        ).df()
-        self.df_train = self.df_filtered[:self.n_train*2]
-        self.df_test = self.df_filtered[self.n_train*2:]
+
+        # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 2) to ensure we have enough training samples
+        self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, self.n_train * 2, self.n_test)
 
         # Load the CLIP model
         # model_name = "openai/clip-vit-base-patch32"
@@ -71,7 +84,8 @@ class ModelDistiller:
         # self.processor.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
 
     def frame_processing(self, row):
-        vid = row.vid
+        vid = row.vid if self.n_obj == 1 else row.o1_vid
+        fid = row.fid if self.n_obj == 1 else row.o1_fid
         cap = cv2.VideoCapture(
             os.path.join(
                 self.config['data_dir'],
@@ -80,24 +94,24 @@ class ModelDistiller:
                 f"video_{str(vid).zfill(5)}.mp4"
             )
         )
-        cap.set(cv2.CAP_PROP_POS_FRAMES, row.fid)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, fid)
         ret, frame = cap.read()
         if not ret:
             logger.debug("Failed to read the frame")
             return None
         cap.release()
         image_size = frame.shape[:2]
-        # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        x1, y1, x2, y2 = self.expand_box(row.x1, row.y1, row.x2, row.y2, image_size)
-        frame = frame[y1:y2, x1:x2]
+        if self.n_obj == 1:
+            x1, y1, x2, y2 = self.expand_box(row.x1, row.y1, row.x2, row.y2, image_size)
+            frame = frame[y1:y2, x1:x2]
+        else:
+            o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row.o1_x1, row.o1_y1, row.o1_x2, row.o1_y2, image_size)
+            o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row.o2_x1, row.o2_y1, row.o2_x2, row.o2_y2, image_size)
+            frame = frame[min(o1_y1, o2_y1):max(o1_y2, o2_y2), min(o1_x1, o2_x1):max(o1_x2, o2_x2)]
         # resize the frame to 224x224
         frame = cv2.resize(frame, (224, 224))
-        # resize the shortest edge of the frame to 224, while maintaining the aspect ratio
-        # if frame.shape[0] < frame.shape[1]:
-        #     frame = cv2.resize(frame, (224, int(224 * frame.shape[1] / frame.shape[0])))
-        # else:
-        #     frame = cv2.resize(frame, (int(224 * frame.shape[0] / frame.shape[1]), 224))
         return frame
+
 
     def expand_box(self,x1,y1,x2,y2,img_size,factor=1.5):
         H, W = img_size
@@ -121,7 +135,8 @@ class ModelDistiller:
 
     def prepare_data(self):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
-        image_prompt = "Does the object have attribute {}? Answer with 'yes' or 'no'.".format(self.udf_class.replace("_", " ").lower())
+        # NOTE: it won't work well for relationships where the order of objects matters
+        image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.udf_description.rstrip(string.punctuation))
         logger.debug("Image prompt: {}".format(image_prompt))
 
         labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset)
@@ -129,7 +144,13 @@ class ModelDistiller:
         os.makedirs(labeled_data_dir, exist_ok=True)
         if self.load_labeled_data and os.path.exists(labeled_data_path):
             labeled_data = torch.load(labeled_data_path)
+            for data in labeled_data['train']:
+                logger.debug("base64_image: {}".format(data["base64_image"]))
+                logger.debug("gt_label: {}, llm_label: {}".format(data["label"], data["llm_label"]))
+            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}".format(labeled_data["metadata"]["llm_TP"], labeled_data["metadata"]["llm_FP"], labeled_data["metadata"]["llm_TN"], labeled_data["metadata"]["llm_FN"]))
+            logger.debug("test_pos: {}, test_neg: {}".format(labeled_data["metadata"]["test_pos"], labeled_data["metadata"]["test_neg"]))
         else:
+            llm_TP, llm_FP, llm_TN, llm_FN = 0, 0, 0, 0
             # Training and validation data
             label_count = 0
             for row in self.df_train.itertuples():
@@ -167,18 +188,25 @@ class ModelDistiller:
                     )
                     result = response.choices[0].message.content
                     logger.debug("Result: {}".format(result))
-                    attr_key, attr_value = self.udf_class.lower().split("_")
-                    gt_label = 1 if getattr(row, attr_key) == attr_value else 0
+                    gt_label = int(self.gt_udf(row.o1) if self.n_obj == 1 else self.gt_udf(row.o1, row.o2))
                     logger.debug("gt_label: {}".format(gt_label))
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     if "yes" in result.lower():
                         image_features = self.extract_features(frame)
-                        labeled_data['train'].append([image_features, 1])
+                        labeled_data['train'].append({"image_features": image_features, "label": gt_label, "llm_label": 1, "base64_image": base64_image})
                         label_count += 1
+                        if gt_label == 1:
+                            llm_TP += 1
+                        else:
+                            llm_FP += 1
                     elif "no" in result.lower():
                         image_features = self.extract_features(frame)
-                        labeled_data['train'].append([image_features, 0])
+                        labeled_data['train'].append({"image_features": image_features, "label": gt_label, "llm_label": 0, "base64_image": base64_image})
                         label_count += 1
+                        if gt_label == 0:
+                            llm_TN += 1
+                        else:
+                            llm_FN += 1
                     else:
                         raise ValueError("Invalid response", result)
                     if label_count >= self.n_train:
@@ -186,6 +214,8 @@ class ModelDistiller:
                 except Exception as e:
                     logger.debug("Error: {}".format(e))
                     continue
+            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}".format(llm_TP, llm_FP, llm_TN, llm_FN))
+            labeled_data["metadata"] = {"llm_TP": llm_TP, "llm_FP": llm_FP, "llm_TN": llm_TN, "llm_FN": llm_FN}
 
             # Test data
             for row in self.df_test.itertuples():
@@ -196,39 +226,33 @@ class ModelDistiller:
                         continue
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     image_features = self.extract_features(frame)
-                    attr_key, attr_value = self.udf_class.lower().split("_")
-                    label = 1 if getattr(row, attr_key) == attr_value else 0
-                    labeled_data['test'].append([image_features, label])
+                    label = int(self.gt_udf(row.o1) if self.n_obj == 1 else self.gt_udf(row.o1, row.o2))
+                    labeled_data['test'].append({"image_features": image_features, "label": label})
                 except Exception as e:
                     logger.debug("Error: {}".format(e))
                     continue
-            pos_count = sum([1 for _, label in labeled_data['test'] if label == 1])
-            neg_count = sum([1 for _, label in labeled_data['test'] if label == 0])
-            logger.debug("pos_count: {}, neg_count: {}".format(pos_count, neg_count))
-
+            pos_count = sum([1 for data in labeled_data['test'] if data["label"] == 1])
+            neg_count = sum([1 for data in labeled_data['test'] if data["label"] == 0])
+            logger.debug("test_pos: {}, test_neg: {}".format(pos_count, neg_count))
+            labeled_data["metadata"]["test_pos"] = pos_count
+            labeled_data["metadata"]["test_neg"] = neg_count
             # save labeled_data to a file
             if self.save_labeled_data:
                 torch.save(labeled_data, labeled_data_path)
 
         # use 20% of the training data as validation data
-        train_dataset = CustomImageDataset(labeled_data['train'])
+        train_dataset = CustomImageDataset(labeled_data['train'], train=True)
         train_set_size = int(len(train_dataset) * 0.8)
         valid_set_size = len(train_dataset) - train_set_size
         train_dataset, valid_dataset = torch.utils.data.random_split(train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id))
 
-        class_counts = [sum(y == i for _, y in labeled_data['train']) for i in range(2)]
+        class_counts = [sum(data["llm_label"] == i for data in labeled_data['train']) for i in range(2)]
         self.class_weights = torch.tensor([1.0 / count for count in class_counts]).to(self.device)
-        # weights = [class_weights[y] for _, y in labeled_data['train']]
         logger.debug("class_counts: {}, class_weights: {}".format(class_counts, self.class_weights))
 
-        # TODO: Alternatively, set class weights in the loss function
-        # Create a weighted random sampler
-        # sampler = WeightedRandomSampler(weights, len(weights))
-        # train_set, val_set = torch.utils.data.random_split(dataset, [0.8, 0.2], generator=torch.Generator().manual_seed(self.run_id))
-        # self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, sampler=sampler, shuffle=False)  # Note: set shuffle to False
         self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
         self.val_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=32, shuffle=False)
-        test_dataset = CustomImageDataset(labeled_data['test'])
+        test_dataset = CustomImageDataset(labeled_data['test'], train=False)
         self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     def train(self):
@@ -294,6 +318,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_train", type=int, help="number of training samples")
     parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
+    parser.add_argument("--n_obj", type=int, help="number of objects in the UDF arguments")
     # parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     # parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     # parser.add_argument("--budget", type=int, help="labeling budget")
@@ -308,6 +333,7 @@ if __name__ == "__main__":
     n_train = args.n_train
     save_labeled_data = args.save_labeled_data
     load_labeled_data = args.load_labeled_data
+    n_obj = args.n_obj
     # allow_kwargs_in_udf = args.allow_kwargs_in_udf
     # num_parameter_search = args.num_parameter_search
     # labeling_budget = args.budget
@@ -362,8 +388,26 @@ if __name__ == "__main__":
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
-
-    md = ModelDistiller(config, prompt_config, dataset, udf_class, run_id, n_train, save_labeled_data, load_labeled_data)
+    name_map = {
+        "color_brown": {"signature": "Color_Brown(o0)", "description": "Whether the color of o0 is brown."},
+        "color_purple": {"signature": "Color_Purple(o0)", "description": "Whether the color of o0 is purple."},
+        "color_cyan": {"signature": "Color_Cyan(o0)", "description": "Whether the color of o0 is cyan."},
+        "shape_cylinder": {"signature": "Shape_Cylinder(o0)", "description": "Whether the shape of o0 is cylinder."},
+        "shape_cube": {"signature": "Shape_Cube(o0)", "description": "Whether the shape of o0 is cube."},
+        "shape_sphere": {"signature": "Shape_Sphere(o0)", "description": "Whether the shape of o0 is sphere."},
+        "material_metal": {"signature": "Material_Metal(o0)", "description": "Whether the material of o0 is metal."},
+        "material_rubber": {"signature": "Material_Rubber(o0)", "description": "Whether the material of o0 is rubber."},
+        "near": {"signature": "Near(o0, o1)", "description": "Whether o0 is near o1."},
+        "far": {"signature": "Far(o0, o1)", "description": "Whether o0 is far away from o1."},
+        "rightof": {"signature": "RightOf(o0, o1)", "description": "Whether o0 is on the right of o1."},
+        "behind": {"signature": "Behind(o0, o1)", "description": "Whether o0 is behind o1."},
+        "location_right": {"signature": "Location_Right(o0)", "description": "Whether o0 is on the right of the frame."},
+        "location_bottom": {"signature": "Location_Bottom(o0)", "description": "Whether o0 is at the bottom of the frame."},
+    }
+    udf_signature = name_map[udf_class]["signature"]
+    udf_description = name_map[udf_class]["description"]
+    gt_udf_name = "gt_{}.gt_0".format(udf_class)
+    md = ModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
     md.prepare_data()
     md.train()
     md.test()
