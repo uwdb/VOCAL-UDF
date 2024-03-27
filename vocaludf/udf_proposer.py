@@ -21,9 +21,8 @@ import copy
 import cv2
 
 logging.basicConfig()
-logger = logging.getLogger("vocal_udf")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
 
 class UDFCandidate:
     def __init__(self, id, payload):

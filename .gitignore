@@ -20,6 +20,7 @@ outputs/*
 data/clevr/*/*
 data/clevrer/*/*
 data/models/*
+data/gqa/*
 *.pt
 *.duckdb*
 duckdb_dir/*

@@ -6,9 +6,8 @@ import pyparsing as pp
 import logging
 
 logging.basicConfig()
-logger = logging.getLogger("vocal_udf")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
 class QueryParser:
     def __init__(
         self,

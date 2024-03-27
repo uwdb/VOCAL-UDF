@@ -13,9 +13,8 @@ from vocaludf.udf_proposer import UDFProposer
 from vocaludf.query_executor import QueryExecutor
 
 logging.basicConfig()
-logger = logging.getLogger("vocal_udf")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
 
 if __name__ == "__main__":
     # python main.py --query_id 0 --run_id 0 --dataset "clevrer" --budget 10 --num_interpretations 10
@@ -81,7 +80,7 @@ if __name__ == "__main__":
 
     # Create a console handler with a higher log level
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
 
     # Create formatters and add them to the handlers
     formatter = logging.Formatter(

@@ -20,15 +20,15 @@ from vocaludf import mlp
 from collections import defaultdict
 from vocaludf.utils import parse_signature
 from vocaludf.udf_proposer import CodeUDFWithPixelsProposer
-from vocaludf.model_udf import ModelDistiller
+from vocaludf.model_udf import ModelDistiller, BoundingBoxAnnotatedModelDistiller
 from sentence_transformers import SentenceTransformer, util
 
 
 client = OpenAI()
 
-logging.basicConfig()
-logger = logging.getLogger("vocal_udf")
-logger.setLevel(logging.DEBUG)
+# logging.basicConfig()
+root_logger = logging.getLogger("vocaludf")
+root_logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
     # Code-based UDF
@@ -120,8 +120,8 @@ if __name__ == "__main__":
     console_handler.setFormatter(formatter)
 
     # Add the handlers to the logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
@@ -154,7 +154,7 @@ if __name__ == "__main__":
 
     udf_name, udf_vars = parse_signature(udf_signature)
     gt_udf_name = "gt_{}.gt_0".format(udf_class)
-    logger.info(f"Selected gt_udf_name: {gt_udf_name}")
+    root_logger.info(f"Selected gt_udf_name: {gt_udf_name}")
 
     if code_based:
         up = CodeUDFWithPixelsProposer(
@@ -173,7 +173,8 @@ if __name__ == "__main__":
         udf_candidate_list = up.implement(udf_signature, udf_description)
         up.compute_best_test_score(gt_udf_name, udf_candidate_list)
     else:
-        md = ModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
+        # md = ModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
+        md = BoundingBoxAnnotatedModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
         md.prepare_data()
         md.train()
         md.test()

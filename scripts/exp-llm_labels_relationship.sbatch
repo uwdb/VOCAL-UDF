@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=compare_udf
+#SBATCH --job-name=llm_labels
 #SBATCH --partition=ckpt
 #SBATCH --account=cse
 #SBATCH --nodes=1
@@ -21,13 +21,14 @@ echo "udf: $udf"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/compare_code_and_model_udf.py \
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/llm_labels_relationship.py \
         --run_id $run \
-        --dataset "clevrer" \
-        --udf_class "$udf" \
-        --model_based \
+        --dataset "gqa" \
+        --relationship "$udf" \
         --n_train 100 \
-        --save_labeled_data
+        --method "balanced_with_oname_box_annotated" \
+        --save_labeled_data \
+        --load_labeled_data
 
         # --save_labeled_data \
         # --load_labeled_data

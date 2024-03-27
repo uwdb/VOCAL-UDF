@@ -8,7 +8,7 @@ import logging
 import os
 
 logging.basicConfig()
-logger = logging.getLogger("vocal_udf")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 def parse_signature(signature):

@@ -12,9 +12,8 @@ import logging
 from sklearn.metrics import f1_score
 
 logging.basicConfig()
-logger = logging.getLogger("vocal_udf")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
 
 class QueryExecutor:
     def __init__(self, config, inputs_table_name, registered_functions):
