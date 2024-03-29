@@ -4,19 +4,8 @@ import os
 import random
 import yaml
 import numpy as np
-import cv2
-import duckdb
-import base64
 from openai import OpenAI
-from transformers import CLIPProcessor, CLIPModel
-import torch
-from torch.utils.data import Dataset
-import lightning.pytorch as pl
-from vocaludf import mlp
-from collections import defaultdict
-from vocaludf.utils import parse_signature
-from vocaludf.udf_proposer import CodeUDFWithPixelsProposer
-from vocaludf.model_udf import ModelDistiller, BoundingBoxAnnotatedModelDistiller, GQARelationshipModelDistiller, GQARelationshipBalancedModelDistiller, GQARelationshipWithObjNameBalancedModelDistiller, GQARelationshipWithObjNameBoundingBoxAnnotatedBalancedModelDistiller
+from vocaludf.model_udf import *
 
 
 client = OpenAI()
@@ -27,6 +16,7 @@ logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
     # python llm_labels_relationship.py --run_id 0 --dataset "gqa" --relationship "on" --n_train 10 --method "balanced" --save_labeled_data
+    # python llm_labels_relationship.py --run_id 0 --dataset "gqa" --relationship "on" --n_train 100 --method "balanced_three_clip" --save_labeled_data --load_labeled_data
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -52,11 +42,38 @@ if __name__ == "__main__":
     random.seed(run_id)
     np.random.seed(run_id)
 
+    if method == "default":
+        model_distiller = GQARelationshipModelDistiller
+    elif method == "balanced":
+        model_distiller = GQARelationshipBalancedModelDistiller
+    elif method == "balanced_clip_unnorm_bbox":
+        model_distiller = GQARelationshipUnnormBboxBalancedModelDistiller
+    elif method == "balanced_clip_norm_bbox":
+        model_distiller = GQARelationshipNormBboxBalancedModelDistiller
+    elif method == "balanced_two_clip":
+        model_distiller = GQARelationshipTwoCLIPBalancedModelDistiller
+    elif method == "balanced_three_clip":
+        model_distiller = GQARelationshipThreeCLIPBalancedModelDistiller
+    elif method == "balanced_norm_bbox_only":
+        model_distiller = GQARelationshipNormBboxOnlyBalancedModelDistiller
+    elif method == "llava_balanced_clip_unnorm_bbox":
+        model_distiller = GQARelationshipLlavaUnnormBboxBalancedModelDistiller
+    elif method == "llava_balanced_clip_norm_bbox":
+        model_distiller = GQARelationshipLlavaNormBboxBalancedModelDistiller
+    elif method == "llava_balanced_two_clip":
+        model_distiller = GQARelationshipLlavaTwoCLIPBalancedModelDistiller
+    elif method == "llava_balanced_three_clip":
+        model_distiller = GQARelationshipLlavaThreeCLIPBalancedModelDistiller
+    elif method == "llava_balanced_norm_bbox_only":
+        model_distiller = GQARelationshipLlavaNormBboxOnlyBalancedModelDistiller
+    elif method == "llava_34b_balanced_three_clip":
+        model_distiller = GQARelationshipLlava34bThreeCLIPBalancedModelDistiller
+
     """
     Set up logging
     """
     # Create a directory if it doesn't already exist
-    log_dir = os.path.join(config["log_dir"], "llm_labels_relationship", dataset, method)
+    log_dir = os.path.join(config["log_dir"], "llm_labels_relationship", dataset, f"{model_distiller.llm_method}_{model_distiller.mlp_method}")
     os.makedirs(
         log_dir,
         exist_ok=True,
@@ -100,16 +117,19 @@ if __name__ == "__main__":
     udf_signature = name_map[relationship]["signature"]
     udf_description = name_map[relationship]["description"]
 
-
-    if method == "default":
-        model_distiller = GQARelationshipModelDistiller
-    elif method == "balanced":
-        model_distiller = GQARelationshipBalancedModelDistiller
-    elif method == "balanced_with_oname":
-        model_distiller = GQARelationshipWithObjNameBalancedModelDistiller
-    elif method == "balanced_with_oname_box_annotated":
-        model_distiller = GQARelationshipWithObjNameBoundingBoxAnnotatedBalancedModelDistiller
     md = model_distiller(config, prompt_config, dataset, udf_signature, udf_description, run_id, n_train, save_labeled_data, load_labeled_data)
-    md.prepare_data()
+    md.llm_annotate_data()
+    md.mlp_prepare_data()
+    # lr_list = [3e-3, 3e-4]
+    # n_layers = [1, 2, 3]
+    # hidden_features = [16, 64, 128, 256]
+    # for lr in lr_list:
+    #     for n_layer in n_layers:
+    #         for hidden_feature in hidden_features:
+    #             mlp_config = {
+    #                 "lr": lr,
+    #                 "n_layers": n_layer,
+    #                 "hidden_features": hidden_feature
+    #             }
     md.train()
     md.test()

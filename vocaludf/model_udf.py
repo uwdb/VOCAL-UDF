@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 import duckdb
 import base64
 from openai import OpenAI
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPModel, LlavaNextForConditionalGeneration, LlavaNextProcessor
 import torch
 from torch.utils.data import Dataset
 from torchvision import datasets
@@ -57,6 +57,8 @@ class CustomImageDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 class ModelDistiller(UDFProposer):
+    llm_method = "gpt4v"
+    mlp_method = "clip"
     def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data):
         self.config = config
         self.prompt_config = prompt_config
@@ -87,22 +89,19 @@ class ModelDistiller(UDFProposer):
         self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, self.n_train * 2, self.n_test)
 
         # Load the CLIP model
-        # model_name = "openai/clip-vit-base-patch32"
-        model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
+        # clip_model_name = "openai/clip-vit-base-patch32"
+        clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.clip_model = CLIPModel.from_pretrained(model_name).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
+        self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
+        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
         # self.clip_model.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
-        # self.processor.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
+        # self.clip_processor.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
 
         self.dim_in = self.clip_model.config.projection_dim
 
-    def __str__(self):
-        return "default"
-
     def frame_processing(self, row):
-        vid = row.vid if self.n_obj == 1 else row.o1_vid
-        fid = row.fid if self.n_obj == 1 else row.o1_fid
+        vid = row['vid'] if self.n_obj == 1 else row['o1_vid']
+        fid = row['fid'] if self.n_obj == 1 else row['o1_fid']
         cap = cv2.VideoCapture(
             os.path.join(
                 self.config['data_dir'],
@@ -115,20 +114,19 @@ class ModelDistiller(UDFProposer):
         ret, frame = cap.read()
         if not ret:
             logger.debug("Failed to read the frame")
-            return None
+            return None, None
         cap.release()
         image_size = frame.shape[:2]
         if self.n_obj == 1:
-            x1, y1, x2, y2 = self.expand_box(row.x1, row.y1, row.x2, row.y2, image_size)
+            x1, y1, x2, y2 = self.expand_box(row['x1'], row['y1'], row['x2'], row['y2'], image_size)
             frame = frame[y1:y2, x1:x2]
         else:
-            o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row.o1_x1, row.o1_y1, row.o1_x2, row.o1_y2, image_size)
-            o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row.o2_x1, row.o2_y1, row.o2_x2, row.o2_y2, image_size)
+            o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
+            o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
             frame = frame[min(o1_y1, o2_y1):max(o1_y2, o2_y2), min(o1_x1, o2_x1):max(o1_x2, o2_x2)]
         # resize the frame to 224x224
         frame = cv2.resize(frame, (224, 224))
-        return frame
-
+        return frame, image_size
 
     def expand_box(self,x1,y1,x2,y2,img_size,factor=1.5):
         H, W = img_size
@@ -142,109 +140,50 @@ class ModelDistiller(UDFProposer):
         y2 = min(cy + dh,H)
         return [x1,y1,x2,y2]
 
-    def extract_features(self, frame, row):
-        # image = Image.open(path).convert("RGB")
-        inputs = self.processor(images=frame, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            outputs = self.clip_model.get_image_features(**inputs)
-        outputs = outputs.squeeze(0)
-        return outputs
-
-    def prepare_data(self):
+    def llm_annotate_data(self):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
 
-        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.__str__())
+        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method)
         labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_class, self.run_id, self.n_train))
         os.makedirs(labeled_data_dir, exist_ok=True)
         if self.load_labeled_data and os.path.exists(labeled_data_path):
+            logger.info("Loading labeled data from {}".format(labeled_data_path))
             labeled_data = torch.load(labeled_data_path)
             for data in labeled_data['train']:
+                logger.debug("row: {}".format(data['row'].to_dict()))
                 logger.debug("base64_image: {}".format(data["base64_image"]))
                 logger.debug("gt_label: {}, llm_label: {}".format(data["label"], data["llm_label"]))
-            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(labeled_data["metadata"]["llm_TP"], labeled_data["metadata"]["llm_FP"], labeled_data["metadata"]["llm_TN"], labeled_data["metadata"]["llm_FN"]), labeled_data["metadata"]["llm_f1"])
+            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(labeled_data["metadata"]["llm_TP"], labeled_data["metadata"]["llm_FP"], labeled_data["metadata"]["llm_TN"], labeled_data["metadata"]["llm_FN"], labeled_data["metadata"]["llm_f1"]))
             logger.debug("test_pos: {}, test_neg: {}".format(labeled_data["metadata"]["test_pos"], labeled_data["metadata"]["test_neg"]))
         else:
-            llm_TP, llm_FP, llm_TN, llm_FN = 0, 0, 0, 0
+            self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN = 0, 0, 0, 0
             # Training and validation data
-            label_count = 0
-            for row in self.df_train.itertuples():
+            self.label_count = 0
+            for _, row in self.df_train.iterrows():
                 try:
-                    # Read and crop frame
-                    logger.debug("row: {}".format(row))
-                    frame = self.frame_processing(row)
-                    if frame is None:
-                        continue
-                    # Convert the frame to a base 64 encoded image
-                    _, buffer = cv2.imencode('.jpg', frame)
-                    base64_image = base64.b64encode(buffer).decode('utf-8')
-                    logger.debug("base64_image: {}".format(base64_image))
-                    # training_images.append(base64_image)
-                    image_prompt = self._create_image_prompt(row)
-                    logger.debug("Image prompt: {}".format(image_prompt))
-                    response = completion_with_backoff(
-                        model="gpt-4-vision-preview",
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": image_prompt},
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:image/jpeg;base64,{base64_image}"
-                                        },
-                                    },
-                                ],
-                            }
-                        ],
-                        max_tokens=10,
-                        temperature=0.2,
-                        top_p=0.5,
-                        seed=self.run_id
-                    )
-                    result = response.choices[0].message.content
-                    logger.debug("Result: {}".format(result))
                     gt_label = self._get_gt_label(row)
                     logger.debug("gt_label: {}".format(gt_label))
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    if "yes" in result.lower():
-                        image_features = self.extract_features(frame, row)
-                        labeled_data['train'].append({"image_features": image_features, "label": gt_label, "llm_label": 1, "base64_image": base64_image})
-                        label_count += 1
-                        if gt_label == 1:
-                            llm_TP += 1
-                        else:
-                            llm_FP += 1
-                    elif "no" in result.lower():
-                        image_features = self.extract_features(frame, row)
-                        labeled_data['train'].append({"image_features": image_features, "label": gt_label, "llm_label": 0, "base64_image": base64_image})
-                        label_count += 1
-                        if gt_label == 0:
-                            llm_TN += 1
-                        else:
-                            llm_FN += 1
-                    else:
-                        raise ValueError("Invalid response", result)
-                    if label_count >= self.n_train:
+                    # Read and crop frame
+                    logger.debug("row: {}".format(row.to_dict()))
+                    frame, image_size = self.frame_processing(row)
+                    if frame is None:
+                        continue
+                    llm_label, base64_image, image_prompt = self._llm_annotate_frame(frame, image_size, row, gt_label)
+                    labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
+                    if self.label_count >= self.n_train:
                         break
                 except Exception as e:
                     logger.debug("Error: {}".format(e))
                     continue
-            llm_f1 = 2*llm_TP/(2*llm_TP+llm_FP+llm_FN) if 2*llm_TP+llm_FP+llm_FN > 0 else 0.0
-            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(llm_TP, llm_FP, llm_TN, llm_FN, llm_f1))
-            labeled_data["metadata"] = {"llm_TP": llm_TP, "llm_FP": llm_FP, "llm_TN": llm_TN, "llm_FN": llm_FN, "llm_f1": llm_f1}
+            llm_f1 = 2*self.llm_TP/(2*self.llm_TP+self.llm_FP+self.llm_FN) if 2*self.llm_TP+self.llm_FP+self.llm_FN > 0 else 0.0
+            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN, llm_f1))
+            labeled_data["metadata"] = {"llm_TP": self.llm_TP, "llm_FP": self.llm_FP, "llm_TN": self.llm_TN, "llm_FN": self.llm_FN, "llm_f1": llm_f1}
 
             # Test data
-            for row in self.df_test.itertuples():
+            for _, row in self.df_test.iterrows():
                 try:
-                    # Read and crop frame
-                    frame = self.frame_processing(row)
-                    if frame is None: # failed to read the frame
-                        continue
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    image_features = self.extract_features(frame, row)
                     gt_label = self._get_gt_label(row)
-                    labeled_data['test'].append({"image_features": image_features, "label": gt_label})
+                    labeled_data['test'].append({"label": gt_label, "row": row})
                 except Exception as e:
                     logger.debug("Error: {}".format(e))
                     continue
@@ -255,48 +194,129 @@ class ModelDistiller(UDFProposer):
             labeled_data["metadata"]["test_neg"] = neg_count
             # save labeled_data to a file
             if self.save_labeled_data:
+                logger.info("Saving labeled data to {}".format(labeled_data_path))
                 torch.save(labeled_data, labeled_data_path)
+        self.labeled_data = labeled_data
 
-        # use 20% of the training data as validation data
-        train_dataset = CustomImageDataset(labeled_data['train'], train=True)
-        train_set_size = int(len(train_dataset) * 0.8)
-        valid_set_size = len(train_dataset) - train_set_size
-        train_dataset, valid_dataset = torch.utils.data.random_split(train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id))
+    def _llm_annotate_frame(self, frame, image_size, row, gt_label):
+        # Convert the frame to a base 64 encoded image
+        _, buffer = cv2.imencode('.jpg', frame)
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        logger.debug("base64_image: {}".format(base64_image))
+        image_prompt = self._create_image_prompt(row, image_size)
+        logger.debug("Image prompt: {}".format(image_prompt))
+        response = completion_with_backoff(
+            model="gpt-4-vision-preview",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": image_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_tokens=10,
+            temperature=0.2,
+            top_p=0.5,
+            seed=self.run_id
+        )
+        result = response.choices[0].message.content
+        logger.debug("Result: {}".format(result))
+        if "yes" in result.lower():
+            llm_label = 1
+            if gt_label == 1:
+                self.llm_TP += 1
+            else:
+                self.llm_FP += 1
+        elif "no" in result.lower():
+            llm_label = 0
+            if gt_label == 0:
+                self.llm_TN += 1
+            else:
+                self.llm_FN += 1
+        else:
+            raise ValueError("Invalid response", result)
+        self.label_count += 1
+        return llm_label, base64_image, image_prompt
 
-        class_counts = [sum(data["llm_label"] == i for data in labeled_data['train']) for i in range(2)]
-        self.class_weights = torch.tensor([1.0 / count for count in class_counts]).to(self.device)
-        logger.debug("class_counts: {}, class_weights: {}".format(class_counts, self.class_weights))
-
-        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
-        self.val_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=32, shuffle=False)
-        test_dataset = CustomImageDataset(labeled_data['test'], train=False)
-        self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False)
-
-    def _create_image_prompt(self, row):
+    def _create_image_prompt(self, row, image_size):
         # NOTE: it won't work well for relationships where the order of objects matters
         image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.udf_description.rstrip(string.punctuation))
         return image_prompt
 
     def _get_gt_label(self, row):
-        return int(self.gt_udf(row.o1) if self.n_obj == 1 else self.gt_udf(row.o1, row.o2))
+        return int(self.gt_udf(row['o1']) if self.n_obj == 1 else self.gt_udf(row['o1'], row['o2']))
+
+    def mlp_prepare_data(self):
+        for split in ['train', 'test']:
+            logger.info("Processing {} data".format(split))
+            idx_to_remove = []
+            for i in range(len(self.labeled_data[split])):
+                try:
+                    data = self.labeled_data[split][i]
+                    row = data['row']
+                    logger.debug("row: {}".format(row.to_dict()))
+                    frame, image_size = self.frame_processing(row)
+                    if frame is None: # failed to read the frame
+                        idx_to_remove.append(i)
+                        continue
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    image_features = self.extract_features(frame, row, image_size)
+                    self.labeled_data[split][i]["image_features"] = image_features
+                except Exception as e:
+                    logger.debug("Error: {}".format(e))
+                    idx_to_remove.append(i)
+                    continue
+            for i in reversed(idx_to_remove):
+                del self.labeled_data[split][i]
+
+        # use 20% of the training data as validation data
+        train_dataset = CustomImageDataset(self.labeled_data['train'], train=True)
+        train_set_size = int(len(train_dataset) * 0.8)
+        valid_set_size = len(train_dataset) - train_set_size
+        train_dataset, valid_dataset = torch.utils.data.random_split(train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id))
+
+        class_counts = [sum(data["llm_label"] == i for data in self.labeled_data['train']) for i in range(2)]
+        self.class_weights = torch.tensor([1.0 / count for count in class_counts]).to(self.device)
+        logger.debug("class_counts: {}, class_weights: {}".format(class_counts, self.class_weights))
+
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+        self.val_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=32, shuffle=False)
+        test_dataset = CustomImageDataset(self.labeled_data['test'], train=False)
+        self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+    def extract_features(self, frame, row, image_size):
+        inputs = self.clip_processor(images=frame, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.clip_model.get_image_features(**inputs)
+        outputs = outputs.squeeze(0)
+        return outputs
 
     def train(self):
+        # logger.debug("mlp_config: {}".format(mlp_config))
         logger.debug("dim_in: {}".format(self.dim_in)) # should be 512 for clip-vit-base-patch32
-        self.mlp_model = mlp.MLP(self.dim_in, 2, logger, self.class_weights) # binary classification
-        self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, self.udf_class)
+        self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, f"{self.llm_method}_{self.mlp_method}", self.udf_class)
         self.checkpoint_filename = "udf-{}_run-{}_ntrain-{}".format(self.udf_class, self.run_id, self.n_train)
         os.makedirs(self.checkpoint_root, exist_ok=True)
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            dirpath=self.checkpoint_root,
             filename=self.checkpoint_filename,
             monitor="val_loss",
             mode="min",
         )
         callbacks=[checkpoint_callback]
-        log_dir=os.path.join(self.config["output_dir"], 'tensorboard')
+        log_dir=os.path.join(self.config["output_dir"], 'tensorboard', self.dataset, f"{self.llm_method}_{self.mlp_method}", self.udf_class)
         pl_logger = pl.loggers.TensorBoardLogger(log_dir, name="udf-{}_run-{}_ntrain-{}.log".format(self.udf_class, self.run_id, self.n_train), default_hp_metric=False)
         earlystopping_callback = pl.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10)
         callbacks.append(earlystopping_callback)
+
+        self.mlp_model = mlp.MLP(self.dim_in, 2, logger, self.class_weights) # binary classification
+
         self.trainer = pl.Trainer(
             # deterministic=self.deterministic,
             max_epochs=50,
@@ -305,7 +325,7 @@ class ModelDistiller(UDFProposer):
             enable_progress_bar=True,
             enable_checkpointing=True,
             enable_model_summary=False,
-            logger=pl_logger,
+            # logger=pl_logger,
             default_root_dir=self.checkpoint_root,
             callbacks=callbacks,
             # check_val_every_n_epoch=5,
@@ -327,25 +347,121 @@ class ModelDistiller(UDFProposer):
         logger.debug("test with best model: ")
         self.trainer.test(ckpt_path="best", dataloaders=self.test_loader)
 
+class LlavaModelDistiller(ModelDistiller):
+    llm_method = "llava_v1.6_mistral_7b"
+    mlp_method = "clip"
+    def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data):
+        super().__init__(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
+
+        # llava_model_name = "llava-hf/llava-v1.6-mistral-7b-hf"
+        llava_model_name = os.path.join(self.config['model_dir'], 'llava-v1.6-mistral-7b-hf')
+        self.llava_model = LlavaNextForConditionalGeneration.from_pretrained(
+            llava_model_name,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            # load_in_4bit=True,
+            # bnb_4bit_compute_dtype=torch.float16,
+            attn_implementation="flash_attention_2",
+            # device_map="auto",
+        # )
+        ).to(self.device)
+        self.llava_processor = LlavaNextProcessor.from_pretrained(llava_model_name)
+        self.llava_processor.tokenizer.padding_side = "left"
+        # self.llava_model.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-mistral-7b-hf'))
+        # self.llava_processor.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-mistral-7b-hf'))
+
+    def _llm_annotate_frame(self, frame, image_size, row, gt_label):
+        _, buffer = cv2.imencode('.jpg', frame)
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        logger.debug("base64_image: {}".format(base64_image))
+        # Convert the frame to PIL image
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame)
+        image_prompt, last_word = self._create_image_prompt(row, image_size)
+        logger.debug("Image prompt: {}".format(image_prompt))
+        inputs = self.llava_processor(image_prompt, pil_image, return_tensors="pt").to(self.device)
+        output = self.llava_model.generate(
+            **inputs,
+            max_new_tokens=10,
+            do_sample=True,
+            temperature=0.2,
+            top_p=0.7
+        )
+        result = self.llava_processor.decode(output[0], skip_special_tokens=True)
+        # logger.debug("Raw result: {}".format(result))
+        result = result.split(last_word)[-1].strip().lower()
+        logger.debug("Result: {}".format(result))
+        if "yes" in result.lower():
+            llm_label = 1
+            if gt_label == 1:
+                self.llm_TP += 1
+            else:
+                self.llm_FP += 1
+        elif "no" in result.lower():
+            llm_label = 0
+            if gt_label == 0:
+                self.llm_TN += 1
+            else:
+                self.llm_FN += 1
+        else:
+            raise ValueError("Invalid response", result)
+        self.label_count += 1
+        return llm_label, base64_image, image_prompt
+
+    def _create_image_prompt(self, row, image_size):
+        # NOTE: it won't work well for relationships where the order of objects matters
+        image_prompt = "[INST] <image>\n{}? Answer with 'yes' or 'no'. [/INST]".format(self.udf_description.rstrip(string.punctuation))
+        return image_prompt, "[/INST]"
+
+class Llava34bModelDistiller(LlavaModelDistiller):
+    llm_method = "llava-v1.6-34b-hf"
+    mlp_method = "clip"
+    def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data):
+        super().__init__(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
+
+        # llava_model_name = "llava-hf/llava-v1.6-34b-hf"
+        llava_model_name = os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf')
+        self.llava_model = LlavaNextForConditionalGeneration.from_pretrained(
+            llava_model_name,
+            torch_dtype=torch.float16,
+            # low_cpu_mem_usage=True,
+            # load_in_4bit=True,
+            # bnb_4bit_compute_dtype=torch.float16,
+            # attn_implementation="flash_attention_2",
+            device_map="auto",
+        )
+        # ).to(self.device)
+        logger.debug("llava_model.hf_device_map: {}".format(self.llava_model.hf_device_map))
+        self.llava_processor = LlavaNextProcessor.from_pretrained(llava_model_name)
+        self.llava_processor.tokenizer.padding_side = "left"
+        # self.llava_model.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf'))
+        # self.llava_processor.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf'))
+
+    def _create_image_prompt(self, row, image_size):
+        # NOTE: it won't work well for relationships where the order of objects matters
+        image_prompt = "<|im_start|>system\nAnswer the questions.<|im_end|><|im_start|>user\n<image>\n{}? Answer with 'yes' or 'no'.<|im_end|><|im_start|>assistant\n".format(self.udf_description.rstrip(string.punctuation))
+        return image_prompt, "assistant"
 
 class BoundingBoxAnnotatedModelDistiller(ModelDistiller):
     """
     Annotate image with bounding boxes (subject: red box, target: blue box) so that the model is aware of the subject and the target in the image.
     The subject is annotated with a red bounding box, and the target is annotated with a blue bounding box
     """
+    llm_method = "gpt4v_norm_bbox"
+    mlp_method = "clip_norm_bbox"
     def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data):
         super().__init__(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
         if self.n_obj == 2:
             self.dim_in += 8 # concat with bounding box features
 
-    def __str__(self):
-        return "box_annotated"
-
-    def _create_image_prompt(self, row):
+    def _create_image_prompt(self, row, image_size):
         if self.n_obj == 1:
             image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.udf_description.rstrip(string.punctuation))
         else:
-            boxes = [(row.o1_x1, row.o1_y1, row.o1_x2, row.o1_y2), (row.o2_x1, row.o2_y1, row.o2_x2, row.o2_y2)]
+            boxes = [(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2']), (row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'])]
+            # normalize the bounding box coordinates by the image size
+            boxes = [(round(x1/image_size[1], 3), round(y1/image_size[0], 3), round(x2/image_size[1], 3), round(y2/image_size[0], 3)) for x1, y1, x2, y2 in boxes]
+
             image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), boxes))
         return image_prompt
 
@@ -358,84 +474,25 @@ class BoundingBoxAnnotatedModelDistiller(ModelDistiller):
         sorted_objects = sorted(objects, key=lambda x: int(x[1:]))
 
         if len(sorted_objects) == 2:
-            # Crop the frame:
-            # o1_x1, o1_y1, o1_x2, o1_y2 = boxes[0]
-            # o2_x1, o2_y1, o2_x2, o2_y2 = boxes[1]
-            # o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(o1_x1, o1_y1, o1_x2, o1_y2, image_size)
-            # o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(o2_x1, o2_y1, o2_x2, o2_y2, image_size)
-            # frame = frame[min(o1_y1, o2_y1):max(o1_y2, o2_y2), min(o1_x1, o2_x1):max(o1_x2, o2_x2)]
-            # resize the frame to 224x224:
-            # frame = cv2.resize(frame, (224, 224))
-            # compute bounding box coordinates after image cropping and resizing
-
             new_string = input_string.replace(sorted_objects[0], f"{sorted_objects[0]} at {boxes[0]}")
             new_string = new_string.replace(sorted_objects[1], f"{sorted_objects[1]} at {boxes[1]}")
 
         return new_string
 
-    # @staticmethod
-    # def replace_objects(input_string):
-    #     # Find all occurrences of "o" followed by integers
-    #     objects = re.findall(r'o\d+', input_string)
-    #     # Sort the objects based on the integer part of the identifier
-    #     sorted_objects = sorted(objects, key=lambda x: int(x[1:]))
-
-    #     if len(sorted_objects) == 1:
-    #         new_string = input_string.replace(sorted_objects[0], f"{sorted_objects[0]} in the red box")
-    #     elif len(sorted_objects) > 1:
-    #         new_string = input_string.replace(sorted_objects[0], f"{sorted_objects[0]} in the red box")
-    #         new_string = new_string.replace(sorted_objects[1], f"{sorted_objects[1]} in the blue box")
-    #     else:
-    #         new_string = input_string
-
-    #     return new_string
-
-    # def frame_processing(self, row):
-    #     vid = row.vid if self.n_obj == 1 else row.o1_vid
-    #     fid = row.fid if self.n_obj == 1 else row.o1_fid
-    #     cap = cv2.VideoCapture(
-    #         os.path.join(
-    #             self.config['data_dir'],
-    #             self.dataset,
-    #             f'video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}',
-    #             f"video_{str(vid).zfill(5)}.mp4"
-    #         )
-    #     )
-    #     cap.set(cv2.CAP_PROP_POS_FRAMES, fid)
-    #     ret, frame = cap.read()
-    #     if not ret:
-    #         logger.debug("Failed to read the frame")
-    #         return None
-    #     cap.release()
-    #     image_size = frame.shape[:2]
-
-    #     # draw bounding boxes on the image
-    #     # draw = ImageDraw.Draw(frame)
-    #     if self.n_obj == 1:
-    #         cv2.rectangle(frame, (int(row.x1), int(row.y1)), (int(row.x2), int(row.y2)), color=(0, 0, 255), thickness=3)
-    #         x1, y1, x2, y2 = self.expand_box(row.x1, row.y1, row.x2, row.y2, image_size)
-    #         frame = frame[y1:y2, x1:x2]
-    #     else:
-    #         cv2.rectangle(frame, (int(row.o1_x1), int(row.o1_y1)), (int(row.o1_x2), int(row.o1_y2)), color=(0, 0, 255), thickness=3)
-    #         cv2.rectangle(frame, (int(row.o2_x1), int(row.o2_y1)), (int(row.o2_x2), int(row.o2_y2)), color=(255, 0, 0), thickness=3)
-    #         o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row.o1_x1, row.o1_y1, row.o1_x2, row.o1_y2, image_size)
-    #         o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row.o2_x1, row.o2_y1, row.o2_x2, row.o2_y2, image_size)
-    #         frame = frame[min(o1_y1, o2_y1):max(o1_y2, o2_y2), min(o1_x1, o2_x1):max(o1_x2, o2_x2)]
-    #     # resize the frame to 224x224
-    #     frame = cv2.resize(frame, (224, 224))
-    #     return frame
-
-    def extract_features(self, frame, row):
-        inputs = self.processor(images=frame, return_tensors="pt").to(self.device)
+    def extract_features(self, frame, row, image_size):
+        inputs = self.clip_processor(images=frame, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.clip_model.get_image_features(**inputs)
         outputs = outputs.squeeze(0)
         if self.n_obj == 2:
-            box_features = torch.tensor([int(row.o1_x1), int(row.o1_y1), int(row.o1_x2), int(row.o1_y2), int(row.o2_x1), int(row.o2_y1), int(row.o2_x2), int(row.o2_y2)]).to(self.device)
+            h, w = image_size
+            box_features = torch.tensor([row['o1_x1']*1.0/w, row['o1_y1']*1.0/h, row['o1_x2']*1.0/w, row['o1_y2']*1.0/h, row['o2_x1']*1.0/w, row['o2_y1']*1.0/h, row['o2_x2']*1.0/w, row['o2_y2']*1.0/h]).to(self.device)
             outputs = torch.cat((outputs, box_features))
         return outputs
 
 class GQARelationshipModelDistiller(ModelDistiller):
+    llm_method = "gpt4v"
+    mlp_method = "clip"
     def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, run_id, n_train, save_labeled_data, load_labeled_data):
         self.config = config
         self.prompt_config = prompt_config
@@ -463,12 +520,9 @@ class GQARelationshipModelDistiller(ModelDistiller):
         model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.clip_model = CLIPModel.from_pretrained(model_name).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
+        self.clip_processor = CLIPProcessor.from_pretrained(model_name)
 
         self.dim_in = self.clip_model.config.projection_dim
-
-    def __str__(self):
-        return "default"
 
     def construct_train_and_test_data(self, n_obj, n_train, n_test=None):
         # Construct training data and test data
@@ -525,7 +579,7 @@ class GQARelationshipModelDistiller(ModelDistiller):
             return df_filtered
 
     def frame_processing(self, row):
-        fid = row.fid if self.n_obj == 1 else row.o1_fid
+        fid = row['fid'] if self.n_obj == 1 else row['o1_fid']
         frame = cv2.imread(os.path.join(
                 self.config['data_dir'],
                 self.dataset,
@@ -537,12 +591,12 @@ class GQARelationshipModelDistiller(ModelDistiller):
         if self.n_obj == 1:
             raise ValueError("Number of objects not supported: {}".format(self.n_obj))
         else:
-            o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row.o1_x1, row.o1_y1, row.o1_x2, row.o1_y2, image_size)
-            o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row.o2_x1, row.o2_y1, row.o2_x2, row.o2_y2, image_size)
+            o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
+            o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
             frame = frame[min(o1_y1, o2_y1):max(o1_y2, o2_y2), min(o1_x1, o2_x1):max(o1_x2, o2_x2)]
         # resize the frame to 224x224
         frame = cv2.resize(frame, (224, 224))
-        return frame
+        return frame, image_size
 
     def _get_gt_label(self, row):
         df = self.conn.execute(
@@ -551,21 +605,91 @@ class GQARelationshipModelDistiller(ModelDistiller):
             FROM gqa_relationships
             WHERE fid = {} AND oid1 = {} AND oid2 = {} AND rname = '{}'
             """.format(
-                row.o1_fid, row.o1_oid, row.o2_oid, self.udf_class.replace("_", " ")
+                row['o1_fid'], row['o1_oid'], row['o2_oid'], self.udf_class.replace("_", " ")
             )
         ).df()
         # logger.debug("df: {}".format(df))
         return 1 if len(df) > 0 else 0
 
+    def _create_image_prompt(self, row, image_size):
+        image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
+        return image_prompt
+
+    def replace_objects(self, input_string, row, image_size):
+        # Find all occurrences of "o" followed by integers
+        objects = re.findall(r'o\d+', input_string)
+        # Sort the objects based on the integer part of the identifier
+        sorted_objects = sorted(objects, key=lambda x: int(x[1:]))
+
+        h, w = image_size
+        if len(sorted_objects) == 2:
+            new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {round(row['o1_x1']/w, 3), round(row['o1_y1']/h, 3), round(row['o1_x2']/w, 3), round(row['o1_y2']/h, 3)}")
+            new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {round(row['o2_x1']/w, 3), round(row['o2_y1']/h, 3), round(row['o2_x2']/w, 3), round(row['o2_y2']/h, 3)}")
+
+        return new_string
+
+class GQARelationshipLlavaModelDistiller(LlavaModelDistiller, GQARelationshipModelDistiller):
+    llm_method = "llava_v1.6_mistral_7b"
+    mlp_method = "clip"
+    def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, run_id, n_train, save_labeled_data, load_labeled_data):
+        GQARelationshipModelDistiller.__init__(self, config, prompt_config, dataset, udf_signature, udf_description, run_id, n_train, save_labeled_data, load_labeled_data)
+
+        llava_model_name = "llava-hf/llava-v1.6-mistral-7b-hf"
+        # llava_model_name = os.path.join(self.config['model_dir'], 'llava-v1.6-mistral-7b-hf')
+        self.llava_model = LlavaNextForConditionalGeneration.from_pretrained(
+            llava_model_name,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            # load_in_4bit=True,
+            # bnb_4bit_compute_dtype=torch.float16,
+            attn_implementation="flash_attention_2",
+            # device_map="auto",
+        # )
+        ).to(self.device)
+        self.llava_processor = LlavaNextProcessor.from_pretrained(llava_model_name)
+        self.llava_processor.tokenizer.padding_side = "left"
+        self.llava_model.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-mistral-7b-hf'))
+        self.llava_processor.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-mistral-7b-hf'))
+
+    def _create_image_prompt(self, row, image_size):
+        image_prompt = "[INST] <image>\n{}? Answer with 'yes' or 'no'. [/INST]".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
+        return image_prompt, "[/INST]"
+
+class GQARelationshipLlava34bModelDistiller(GQARelationshipLlavaModelDistiller):
+    llm_method = "llava-v1.6-34b-hf"
+    mlp_method = "clip"
+    def __init__(self, config, prompt_config, dataset, udf_signature, udf_description, run_id, n_train, save_labeled_data, load_labeled_data):
+        GQARelationshipModelDistiller.__init__(self, config, prompt_config, dataset, udf_signature, udf_description, run_id, n_train, save_labeled_data, load_labeled_data)
+
+        llava_model_name = "llava-hf/llava-v1.6-34b-hf"
+        # llava_model_name = os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf')
+        self.llava_model = LlavaNextForConditionalGeneration.from_pretrained(
+            llava_model_name,
+            torch_dtype=torch.float16,
+            # low_cpu_mem_usage=True,
+            # load_in_4bit=True,
+            # bnb_4bit_compute_dtype=torch.float16,
+            # attn_implementation="flash_attention_2",
+            device_map="auto",
+        )
+        # ).to(self.device)
+        logger.debug("llava_model.hf_device_map: {}".format(self.llava_model.hf_device_map))
+        self.llava_processor = LlavaNextProcessor.from_pretrained(llava_model_name)
+        self.llava_processor.tokenizer.padding_side = "left"
+        self.llava_model.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf'))
+        self.llava_processor.save_pretrained(os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf'))
+
+    def _create_image_prompt(self, row, image_size):
+        image_prompt = "<|im_start|>system\nAnswer the questions.<|im_end|><|im_start|>user\n<image>\n{}? Answer with 'yes' or 'no'.<|im_end|><|im_start|>assistant\n".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
+        return image_prompt, "assistant"
 
 class GQARelationshipBalancedModelDistiller(GQARelationshipModelDistiller):
+    llm_method = "balanced_gpt4v"
+    mlp_method = "balanced_clip"
     """
     Instead of randomly sampling training data, we sample the same number of positive and negative examples,
     to see whether LLM can label the class correctly and whether the model can learn the class.
     """
-    def __str__(self):
-        return "balanced"
-
     def construct_train_and_test_data(self, n_obj, n_train, n_test=None):
         # Construct training data and test data
         self.conn.execute(f"SELECT setseed({self.run_id / 100})")
@@ -646,64 +770,206 @@ class GQARelationshipBalancedModelDistiller(GQARelationshipModelDistiller):
             return df_filtered
 
     def _get_gt_label(self, row):
-        return row.label
+        return row['label']
 
 
-class GQARelationshipWithObjNameBalancedModelDistiller(GQARelationshipBalancedModelDistiller):
-    def __str__(self):
-        return "balanced_with_oname"
-
-    def _create_image_prompt(self, row):
-        # NOTE: it won't work well for relationships where the order of objects matters
-        image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row))
-        return image_prompt
-
-    def replace_objects(self, input_string, row):
-        # Find all occurrences of "o" followed by integers
-        objects = re.findall(r'o\d+', input_string)
-        # Sort the objects based on the integer part of the identifier
-        sorted_objects = sorted(objects, key=lambda x: int(x[1:]))
-
-        if len(sorted_objects) == 2:
-            new_string = input_string.replace(sorted_objects[0], f"{row.o1_oname} {sorted_objects[0]}")
-            new_string = new_string.replace(sorted_objects[1], f"{row.o2_oname} {sorted_objects[1]}")
-
-        return new_string
-
-class GQARelationshipWithObjNameBoundingBoxAnnotatedBalancedModelDistiller(GQARelationshipWithObjNameBalancedModelDistiller):
+class GQARelationshipUnnormBboxBalancedModelDistiller(GQARelationshipBalancedModelDistiller):
+    llm_method = "balanced_gpt4v"
+    mlp_method = "balanced_clip_unnorm_bbox"
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.dim_in += 8 # concat with bounding box features
+        assert self.load_labeled_data
+        self.dim_in += 8
 
-    def __str__(self):
-        return "balanced_with_oname_box_annotated"
-
-    def _create_image_prompt(self, row):
-        # NOTE: it won't work well for relationships where the order of objects matters
-        image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row))
-        return image_prompt
-
-    def replace_objects(self, input_string, row):
-        # Find all occurrences of "o" followed by integers
-        objects = re.findall(r'o\d+', input_string)
-        # Sort the objects based on the integer part of the identifier
-        sorted_objects = sorted(objects, key=lambda x: int(x[1:]))
-
-        if len(sorted_objects) == 2:
-            new_string = input_string.replace(sorted_objects[0], f"{row.o1_oname} {sorted_objects[0]} at {row.o1_x1, row.o1_y1, row.o1_x2, row.o1_y2}")
-            new_string = new_string.replace(sorted_objects[1], f"{row.o2_oname} {sorted_objects[1]} at {row.o2_x1, row.o2_y1, row.o2_x2, row.o2_y2}")
-
-        return new_string
-
-    def extract_features(self, frame, row):
-        inputs = self.processor(images=frame, return_tensors="pt").to(self.device)
+    def extract_features(self, frame, row, image_size):
+        """
+        CLIP features + un-normalized bbox coordinates for each object
+        """
+        inputs = self.clip_processor(images=frame, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.clip_model.get_image_features(**inputs)
         outputs = outputs.squeeze(0)
         if self.n_obj == 2:
-            box_features = torch.tensor([int(row.o1_x1), int(row.o1_y1), int(row.o1_x2), int(row.o1_y2), int(row.o2_x1), int(row.o2_y1), int(row.o2_x2), int(row.o2_y2)]).to(self.device)
+            box_features = torch.tensor([row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2']], dtype=torch.float32).to(self.device)
             outputs = torch.cat((outputs, box_features))
         return outputs
+
+class GQARelationshipLlavaUnnormBboxBalancedModelDistiller(GQARelationshipLlavaModelDistiller, GQARelationshipUnnormBboxBalancedModelDistiller):
+    llm_method = "balanced_llava_v1.6_mistral_7b"
+    mlp_method = "balanced_clip_unnorm_bbox"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in += 8
+
+class GQARelationshipNormBboxBalancedModelDistiller(GQARelationshipBalancedModelDistiller):
+    llm_method = "balanced_gpt4v"
+    mlp_method = "balanced_clip_norm_bbox"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.load_labeled_data
+        self.dim_in += 8
+
+    def extract_features(self, frame, row, image_size):
+        """
+        CLIP features + normalized bbox coordinates (x1/w, y1/h, x2/w, y2/h) for each object
+        """
+        inputs = self.clip_processor(images=frame, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.clip_model.get_image_features(**inputs)
+        outputs = outputs.squeeze(0)
+        if self.n_obj == 2:
+            h, w = image_size
+            box_features = torch.tensor([row['o1_x1']*1.0/w, row['o1_y1']*1.0/h, row['o1_x2']*1.0/w, row['o1_y2']*1.0/h, row['o2_x1']*1.0/w, row['o2_y1']*1.0/h, row['o2_x2']*1.0/w, row['o2_y2']*1.0/h]).to(self.device)
+            outputs = torch.cat((outputs, box_features))
+        return outputs
+
+class GQARelationshipLlavaNormBboxBalancedModelDistiller(GQARelationshipLlavaModelDistiller, GQARelationshipNormBboxBalancedModelDistiller):
+    llm_method = "balanced_llava_v1.6_mistral_7b"
+    mlp_method = "balanced_clip_norm_bbox"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in += 8
+
+class GQARelationshipTwoCLIPBalancedModelDistiller(GQARelationshipBalancedModelDistiller):
+    llm_method = "balanced_gpt4v"
+    mlp_method = "balanced_two_clip"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.load_labeled_data
+        self.dim_in *= 2
+
+    def extract_features(self, frame, row, image_size):
+        """
+        CLIP features of image with subject in red box + CLIP features of image with target in red box
+        """
+        if self.n_obj == 2:
+            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            frame_subject = frame.copy()
+            frame_target = frame.copy()
+            # draw bounding boxe of subject on the image
+            cv2.rectangle(frame_subject, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
+            cv2.rectangle(frame_target, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(0, 0, 255), thickness=1)
+            _, buffer = cv2.imencode('.jpg', frame_subject)
+            base64_frame_subject = base64.b64encode(buffer).decode('utf-8')
+            logger.debug("base64_frame_subject: {}".format(base64_frame_subject))
+            _, buffer = cv2.imencode('.jpg', frame_target)
+            base64_frame_target = base64.b64encode(buffer).decode('utf-8')
+            logger.debug("base64_frame_target: {}".format(base64_frame_target))
+            frame_subject = cv2.cvtColor(frame_subject, cv2.COLOR_BGR2RGB)
+            frame_target = cv2.cvtColor(frame_target, cv2.COLOR_BGR2RGB)
+            inputs = self.clip_processor(images=[frame_subject, frame_target], return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs = self.clip_model.get_image_features(**inputs)
+            outputs = outputs.reshape(-1)
+        return outputs
+
+    def _compute_new_box_after_crop(self, row, image_size):
+        o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
+        o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
+        x_offset = min(o1_x1, o2_x1)
+        y_offset = min(o1_y1, o2_y1)
+        h_ratio = 224.0 / (max(o1_y2, o2_y2) - y_offset)
+        w_ratio = 224.0 / (max(o1_x2, o2_x2) - x_offset)
+        return (row['o1_x1'] - x_offset) * w_ratio, (row['o1_y1'] - y_offset) * h_ratio, (row['o1_x2'] - x_offset) * w_ratio, (row['o1_y2'] - y_offset) * h_ratio, (row['o2_x1'] - x_offset) * w_ratio, (row['o2_y1'] - y_offset) * h_ratio, (row['o2_x2'] - x_offset) * w_ratio, (row['o2_y2'] - y_offset) * h_ratio
+
+
+class GQARelationshipLlavaTwoCLIPBalancedModelDistiller(GQARelationshipLlavaModelDistiller, GQARelationshipTwoCLIPBalancedModelDistiller):
+    llm_method = "balanced_llava_v1.6_mistral_7b"
+    mlp_method = "balanced_two_clip"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in *= 2
+
+
+class GQARelationshipThreeCLIPBalancedModelDistiller(GQARelationshipBalancedModelDistiller):
+    llm_method = "balanced_gpt4v"
+    mlp_method = "balanced_three_clip"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.load_labeled_data
+        self.dim_in *= 3
+
+    def extract_features(self, frame, row, image_size):
+        """
+        three CLIP features: original image, subject mask, target mask
+        """
+        if self.n_obj == 2:
+            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            frame_subject = frame.copy()
+            frame_target = frame.copy()
+            # set the pixels outside the bounding box to 0
+            frame_subject[:int(o1y1), :] = 0
+            frame_subject[int(o1y2):, :] = 0
+            frame_subject[:, :int(o1x1)] = 0
+            frame_subject[:, int(o1x2):] = 0
+            frame_target[:int(o2y1), :] = 0
+            frame_target[int(o2y2):, :] = 0
+            frame_target[:, :int(o2x1)] = 0
+            frame_target[:, int(o2x2):] = 0
+            _, buffer = cv2.imencode('.jpg', frame_subject)
+            base64_frame_subject = base64.b64encode(buffer).decode('utf-8')
+            logger.debug("base64_frame_subject: {}".format(base64_frame_subject))
+            _, buffer = cv2.imencode('.jpg', frame_target)
+            base64_frame_target = base64.b64encode(buffer).decode('utf-8')
+            logger.debug("base64_frame_target: {}".format(base64_frame_target))
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_subject = cv2.cvtColor(frame_subject, cv2.COLOR_BGR2RGB)
+            frame_target = cv2.cvtColor(frame_target, cv2.COLOR_BGR2RGB)
+            inputs = self.clip_processor(images=[frame, frame_subject, frame_target], return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs = self.clip_model.get_image_features(**inputs)
+            outputs = outputs.reshape(-1)
+        return outputs
+
+    def _compute_new_box_after_crop(self, row, image_size):
+        o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
+        o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
+        x_offset = min(o1_x1, o2_x1)
+        y_offset = min(o1_y1, o2_y1)
+        h_ratio = 224.0 / (max(o1_y2, o2_y2) - y_offset)
+        w_ratio = 224.0 / (max(o1_x2, o2_x2) - x_offset)
+        return (row['o1_x1'] - x_offset) * w_ratio, (row['o1_y1'] - y_offset) * h_ratio, (row['o1_x2'] - x_offset) * w_ratio, (row['o1_y2'] - y_offset) * h_ratio, (row['o2_x1'] - x_offset) * w_ratio, (row['o2_y1'] - y_offset) * h_ratio, (row['o2_x2'] - x_offset) * w_ratio, (row['o2_y2'] - y_offset) * h_ratio
+
+
+class GQARelationshipLlavaThreeCLIPBalancedModelDistiller(GQARelationshipLlavaModelDistiller, GQARelationshipThreeCLIPBalancedModelDistiller):
+    llm_method = "balanced_llava_v1.6_mistral_7b"
+    mlp_method = "balanced_three_clip"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in *= 3
+
+class GQARelationshipLlava34bThreeCLIPBalancedModelDistiller(GQARelationshipLlava34bModelDistiller, GQARelationshipThreeCLIPBalancedModelDistiller):
+    llm_method = "balanced_llava-v1.6-34b-hf"
+    mlp_method = "balanced_three_clip"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in *= 3
+
+
+class GQARelationshipNormBboxOnlyBalancedModelDistiller(GQARelationshipBalancedModelDistiller):
+    llm_method = "balanced_gpt4v"
+    mlp_method = "balanced_norm_bbox_only"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.load_labeled_data
+        self.dim_in = 8
+
+    def extract_features(self, frame, row, image_size):
+        if self.n_obj == 2:
+            h, w = image_size
+            box_features = torch.tensor([row['o1_x1']*1.0/w, row['o1_y1']*1.0/h, row['o1_x2']*1.0/w, row['o1_y2']*1.0/h, row['o2_x1']*1.0/w, row['o2_y1']*1.0/h, row['o2_x2']*1.0/w, row['o2_y2']*1.0/h]).to(self.device)
+        return box_features
+
+
+class GQARelationshipLlavaNormBboxOnlyBalancedModelDistiller(GQARelationshipLlavaModelDistiller, GQARelationshipNormBboxOnlyBalancedModelDistiller):
+    llm_method = "balanced_llava_v1.6_mistral_7b"
+    mlp_method = "balanced_norm_bbox_only"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dim_in = 8
+
 
 if __name__ == "__main__":
     # python model_udf.py --run_id 0 --dataset "clevrer" --udf_class "color_red" --n_train 100 --load_labeled_data
