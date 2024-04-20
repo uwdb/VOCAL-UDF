@@ -15,7 +15,7 @@ logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
-    # python llm_labels_relationship.py --run_id 0 --dataset "gqa" --relationship "on" --n_train 10 --method "balanced" --save_labeled_data
+    # python llm_labels_relationship.py --run_id 0 --dataset "gqa" --relationship "on" --n_train 10 --method "active_learning_gpt4v_llava_three_clip" --save_labeled_data
     # python llm_labels_relationship.py --run_id 0 --dataset "gqa" --relationship "on" --n_train 100 --method "balanced_three_clip" --save_labeled_data --load_labeled_data
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -68,6 +68,8 @@ if __name__ == "__main__":
         model_distiller = GQARelationshipLlavaNormBboxOnlyBalancedModelDistiller
     elif method == "llava_34b_balanced_three_clip":
         model_distiller = GQARelationshipLlava34bThreeCLIPBalancedModelDistiller
+    elif method == "active_learning_gpt4v_llava_three_clip":
+        model_distiller = GQARelationshipActiveLearningModelDistiller
 
     """
     Set up logging
@@ -133,3 +135,5 @@ if __name__ == "__main__":
     #             }
     md.train()
     md.test()
+    # if method == "active_learning_gpt4v_llava_three_clip":
+    #     md.active_learning(n_rounds=10)

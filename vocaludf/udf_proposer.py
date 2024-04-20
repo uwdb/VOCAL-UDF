@@ -8,6 +8,7 @@ from vocaludf.utils import (
     parse_signature,
     transform_function
 )
+from vocaludf.pretrained_model_api import image_captioning, image_classification, visual_question_answering, object_detection, image_segmentation, optical_character_recognition, depth_estimation
 import time
 import duckdb
 import logging
@@ -258,15 +259,15 @@ class UDFProposer:
         generate_udfs_dict = self.prompt_config["generate_udfs"]
         if self.allow_kwargs_in_udf:
             if with_pixels:
-                generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels_and_optional_kwargs"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_with_optional_kwargs"]}'
-                verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels_and_optional_kwargs"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation_with_optional_kwargs"]}'
+                generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels_and_optional_kwargs"]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_with_optional_kwargs"]}'
+                verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels_and_optional_kwargs"]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation_with_optional_kwargs"]}'
             else:
                 generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_optional_kwargs"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_with_optional_kwargs"]}'
                 verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_optional_kwargs"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation_with_optional_kwargs"]}'
         else:
             if with_pixels:
-                generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output"]}'
-                verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation"]}'
+                generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels"]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output"]}'
+                verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs_with_pixels"]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation"]}'
             else:
                 generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output"]}'
                 verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["schema"]} {generate_udfs_dict["inputs"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation"]}'
@@ -455,6 +456,12 @@ class UDFProposer:
         u_t = np.max(u_t_list)
 
         return u_t
+
+    def distill(self):
+        md.llm_annotate_data()
+        md.mlp_prepare_data()
+        md.train()
+        md.test()
 
     def select_sample(
         self, udf_candidate_list, udf_name, df_train, n_obj, labeled_index, with_pixels

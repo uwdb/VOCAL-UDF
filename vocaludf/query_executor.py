@@ -6,6 +6,7 @@ from vocaludf.utils import (
     duckdb_execute_clevrer_cache_sequence,
     parse_signature,
 )
+from vocaludf.pretrained_model_api import image_captioning, image_classification, visual_question_answering, object_detection, image_segmentation, optical_character_recognition, depth_estimation
 import time
 import duckdb
 import logging

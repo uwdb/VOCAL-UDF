@@ -40,13 +40,20 @@ generate_udfs:
   inputs: >
     - The function should take {{n_obj}} as input, and return a boolean value.
   inputs_with_pixels: >
-    - The function should take an image and {{n_obj}} as input, and return a boolean value. The image is in the format of a NumPy array and in the RGB color space. Import all necessary libraries at the beginning of the function body. If solving the task requires a pre-trained machine learning model, load a pre-trained model that is available on Hugging Face, TensorFlow Hub, or PyTorch Hub. Implement the image preprocessing required by the chosen model. Remember to move the model to GPU if available.
+    - The function should take an image and {{n_obj}} as input, and return a boolean value. The image is in the format of a NumPy array and in the RGB color space. Import all necessary libraries at the beginning of the function body. You also have access to the following functions to use in your implementation:
   inputs_with_optional_kwargs: >
     - The function should take as input {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value.
     - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
   inputs_with_pixels_and_optional_kwargs: >
-    - The function should take as input an image, {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value. You can assume that the image is in the format of a NumPy array and in the RGB color space. Import all necessary libraries at the beginning of the function body. If solving the task requires a pre-trained machine learning model, load a pre-trained model that is available on Hugging Face, TensorFlow Hub, or PyTorch Hub. Implement the image preprocessing required by the chosen model. Remember to move the model to GPU if available.
-    - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
+    - The function should take as input an image, {{n_obj}} and, if applicable, additional numeric parameters that can be adjusted as needed (denoted by **kwargs), and return a boolean value. The image is in the format of a NumPy array and in the RGB color space. Import all necessary libraries at the beginning of the function body. Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`. You also have access to the following functions to use in your implementation:
+  pretrained_model_list: >
+    image_captioning(image: np.ndarray) -> str: It takes an image in NumPy array and generates a text caption of the image.
+    image_classification(image: np.ndarray) -> str: It takes an image in NumPy array and classifies the subject in the image into a category.
+    visual_question_answering(image: np.ndarray, question: str) -> str: It takes an image in NumPy array and a question about the image, and generates an answer to the question.
+    object_detection(image: np.ndarray) -> List[Dict]: It takes an image in NumPy array and outputs rectangular bounding boxes of objects detected in the image. Each object is represented by a dictionary containing the keys "label" and "bbox".
+    image_segmentation(image: np.ndarray) -> List[Dict]: It takes an image in NumPy array, segments it into different parts, and outputs segmentation masks of any shape for the parts. Each part is represented by a dictionary containing the keys "mask", "label", "bbox", and "inst_id".
+    optical_character_recognition(image: np.ndarray) -> str: It takes an image in NumPy array and outputs recognized texts in the image.
+    depth_estimation(image: np.ndarray) -> np.ndarray: It takes an image in NumPy array and generates a depth map of the image.
   comments: >
     - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
   output: >
