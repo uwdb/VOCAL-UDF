@@ -5,6 +5,32 @@ import torch.nn.functional as F
 import torchmetrics
 
 # From https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#starter-example
+
+class MLPProd(nn.Module):
+    def __init__(self, in_features, out_features, logger, weight=None):
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(in_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_features)
+            )
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        logits = self.model(x)
+        y_pred_probs = self.softmax(logits)
+        y_pred = torch.argmax(y_pred_probs, axis=1)
+        return y_pred
+        row, x = batch
+        logits = self(x)
+        y_pred_probs = self.softmax(logits)
+        y_pred = torch.argmax(y_pred_probs, axis=1)
+        return row, y_pred
+
 class MLP(pl.LightningModule):
     def __init__(self, in_features, out_features, logger, weight=None):
         super().__init__()
@@ -39,6 +65,7 @@ class MLP(pl.LightningModule):
         self.val_f1 = torchmetrics.classification.BinaryF1Score()
         self.test_acc = torchmetrics.classification.BinaryAccuracy()
         self.test_f1 = torchmetrics.classification.BinaryF1Score()
+        self.save_hyperparameters()
 
     def forward(self, x):
         x = self.model(x)
@@ -92,9 +119,11 @@ class MLP(pl.LightningModule):
         self.my_logger.info(f'test_acc: {test_acc}, test_f1: {test_f1}')
 
     def predict_step(self, batch, batch_idx):
-        x, y = batch
+        row, x = batch
         logits = self(x)
-        return self.softmax(logits)
+        y_pred_probs = self.softmax(logits)
+        y_pred = torch.argmax(y_pred_probs, axis=1)
+        return row, y_pred
 
     def configure_optimizers(self):
         # return torch.optim.AdamW(self.parameters(), lr=self.lr)

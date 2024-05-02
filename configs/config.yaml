@@ -24,12 +24,17 @@ clevrer:
   height: 320
   width: 480
   dataset_size: 10000
+  features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/clevrer_three_clips/
   input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/3_new_udfs_labels.json
+  onames:
+    - object
 clevr:
   height: 320
   width: 480
   dataset_size: 15000
   input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevr/3_new_udfs_labels.json
+  onames:
+    - object
 visprog:
   program_generator:
     temperature: 0.2

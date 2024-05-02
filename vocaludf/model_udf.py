@@ -158,8 +158,8 @@ class ModelDistiller():
             return df_filtered
 
     def frame_processing(self, row):
-        vid = row['vid'] if self.n_obj == 1 else row['o1_vid']
-        fid = row['fid'] if self.n_obj == 1 else row['o1_fid']
+        vid = row['o1']['vid']
+        fid = row['o1']['fid']
         cap = cv2.VideoCapture(
             os.path.join(
                 self.config['data_dir'],
@@ -264,7 +264,7 @@ class ModelDistiller():
         image_prompt = self._create_image_prompt(row, image_size)
         logger.debug("Image prompt: {}".format(image_prompt))
         response = completion_with_backoff(
-            model="gpt-4-vision-preview",
+            model="gpt-4-turbo-2024-04-09",
             messages=[
                 {
                     "role": "user",
@@ -1268,7 +1268,7 @@ class GQARelationshipActiveLearningModelDistiller(GQARelationshipModelDistiller)
         gpt4v_image_prompt = self._create_gpt4v_image_prompt(row, image_size)
         logger.debug("gpt4v image prompt: {}".format(gpt4v_image_prompt))
         response = completion_with_backoff(
-            model="gpt-4-vision-preview",
+            model="gpt-4-turbo-2024-04-09",
             messages=[
                 {
                     "role": "user",

@@ -48,6 +48,7 @@ if __name__ == "__main__":
     group.add_argument("--code_based", action="store_true", help="code-based UDF")
     group.add_argument("--model_based", action="store_true", help="model-based UDF")
     parser.add_argument("--n_train", type=int, help="number of training samples")
+    parser.add_argument("--cpus", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
     # parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
@@ -63,6 +64,7 @@ if __name__ == "__main__":
     dataset = args.dataset
     udf_class = args.udf_class
     n_train = args.n_train
+    num_workers = args.cpus
     save_labeled_data = args.save_labeled_data
     load_labeled_data = args.load_labeled_data
     code_based = args.code_based
@@ -131,7 +133,11 @@ if __name__ == "__main__":
     # registered_functions = json.load(
     #     open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r")
     # )["test"]
-    registered_functions = []
+    registered_functions = [{
+            "signature": "left_of(o0, o1)",
+            "description": "Whether o0 is on the left of o1.",
+            "python_function": "def left_of(o1, o2):\n    cx1 = (o1['x1'] + o1['x2']) / 2\n    cx2 = (o2['x1'] + o2['x2']) / 2\n    return cx1 < cx2"
+        }]
 
     name_map = {
         "color_brown": {"signature": "Color_Brown(o0)", "description": "Whether the color of o0 is brown."},
@@ -144,7 +150,8 @@ if __name__ == "__main__":
         "material_rubber": {"signature": "Material_Rubber(o0)", "description": "Whether the material of o0 is rubber."},
         "near": {"signature": "Near(o0, o1)", "description": "Whether o0 is near o1."},
         "far": {"signature": "Far(o0, o1)", "description": "Whether o0 is far away from o1."},
-        "rightof": {"signature": "RightOf(o0, o1)", "description": "Whether o0 is on the right of o1."},
+        "right_of": {"signature": "RightOf(o0, o1)", "description": "Whether o0 is on the right of o1."},
+        "front_of": {"signature": "FrontOf(o0, o1)", "description": "Whether o0 is in front of o1."},
         "behind": {"signature": "Behind(o0, o1)", "description": "Whether o0 is behind o1."},
         "location_right": {"signature": "Location_Right(o0)", "description": "Whether o0 is on the right of the frame."},
         "location_bottom": {"signature": "Location_Bottom(o0)", "description": "Whether o0 is at the bottom of the frame."},
@@ -168,13 +175,30 @@ if __name__ == "__main__":
             None,
             -1,
             run_id,
+            num_workers,
             save_generated_udf,
+            save_labeled_data,
+            load_labeled_data,
+            n_train,
             allow_kwargs_in_udf=False)
         udf_candidate_list = up.implement(udf_signature, udf_description)
-        up.compute_best_test_score(gt_udf_name, udf_candidate_list)
+        up.compute_best_test_score(udf_class, udf_candidate_list)
     else:
-        # md = ModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
-        md = BoundingBoxAnnotatedModelDistiller(config, prompt_config, dataset, udf_signature, udf_description, gt_udf_name, run_id, n_train, save_labeled_data, load_labeled_data)
-        md.prepare_data()
-        md.train()
-        md.test()
+        up = CodeUDFWithPixelsProposer(
+            config,
+            prompt_config,
+            None,
+            registered_functions,
+            dataset,
+            -1,
+            num_interpretations,
+            None,
+            -1,
+            run_id,
+            num_workers,
+            save_generated_udf,
+            save_labeled_data,
+            load_labeled_data,
+            n_train,
+            allow_kwargs_in_udf=False)
+        df_all = up.distill(udf_signature, udf_description, udf_class)

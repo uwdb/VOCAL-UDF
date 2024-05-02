@@ -29,6 +29,7 @@ duckdb_dir/*
 LLaVA/
 */.cache/*
 vocaludf/OAI_CONFIG_LIST
+experiments/lightning_logs/
 # Un-ignore the following
 !LICENSE.txt
 !data/clevr/vocab_clevrer.json

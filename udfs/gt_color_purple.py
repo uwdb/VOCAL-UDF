@@ -1,2 +1,2 @@
-def gt_0(o1):
-    return o1['color'] == 'purple'
+def gt_0(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):
+    return 'color_purple' in o1_anames
