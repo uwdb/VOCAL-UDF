@@ -154,9 +154,9 @@ def duckdb_execute_cache_sequence(conn, current_query, memo, inputs_table_name, 
         for var_pair in itertools.combinations(encountered_variables, 2):
             where_clauses.append("{}.oid <> {}.oid".format(var_pair[0], var_pair[1]))
         where_clauses = " and ".join(where_clauses)
-        sql_sring = """SELECT DISTINCT {}.fid as fid FROM {} WHERE {};""".format(encountered_variables[0], tables, where_clauses)
-        # print(sql_sring)
-        cur.execute(sql_sring)
+        sql_string = """SELECT DISTINCT {}.fid as fid FROM {} WHERE {};""".format(encountered_variables[0], tables, where_clauses)
+        # print(sql_string)
+        cur.execute(sql_string)
         res = cur.fetchall()
         output_vids = [row[0] for row in res]
         # # Store new cached results
@@ -264,9 +264,9 @@ def duckdb_execute_clevrer_dataframe(conn, current_query, memo, inputs_table_nam
             fields += ", ".join(["{v}.oid as {v}_oid".format(v=v) for v in encountered_variables_current_graph])
             oid_list = ["{}_oid".format(v) for v in encountered_variables_current_graph]
             oids = ", ".join(oid_list)
-            sql_sring = """SELECT {} FROM {} WHERE {};""".format(fields, tables, where_clauses)
-            print(sql_sring)
-            graph_df = cur.execute(sql_sring).fetchdf()
+            sql_string = """SELECT {} FROM {} WHERE {};""".format(fields, tables, where_clauses)
+            print(sql_string)
+            graph_df = cur.execute(sql_string).fetchdf()
             print("here2")
             # print("execute for unseen videos: ", time.time() - _start_execute)
             # print("Time for graph {}: {}".format(graph_idx, time.time() - _start))
@@ -439,9 +439,9 @@ def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_tabl
             fields += ", ".join(["{v}.oid as {v}_oid".format(v=v) for v in encountered_variables_current_graph])
             oid_list = ["{}_oid".format(v) for v in encountered_variables_current_graph]
             oids = ", ".join(oid_list)
-            sql_sring = """CREATE TEMPORARY TABLE g{} AS SELECT {} FROM {} WHERE {};""".format(graph_idx, fields, tables, where_clauses)
-            # print(sql_sring)
-            cur.execute(sql_sring)
+            sql_string = """CREATE TEMPORARY TABLE g{} AS SELECT {} FROM {} WHERE {};""".format(graph_idx, fields, tables, where_clauses)
+            # print(sql_string)
+            cur.execute(sql_string)
             temp_views.append("g{}".format(graph_idx))
             # print("execute for unseen videos: ", time.time() - _start_execute)
             # print("Time for graph {}: {}".format(graph_idx, time.time() - _start))
@@ -520,4 +520,221 @@ def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_tabl
         # cur.execute("DROP VIEW {}".format(", ".join(temp_views)))
         # Commit
         conn.commit()
+    return output_vids, new_memo
+
+
+def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, available_udf_names, materialized_udf_names, on_the_fly_udf_names):
+    """
+    There are three types of UDFs:
+    - available_udf_names: available UDFs
+    - materialized_udf_names: new UDFs, with results already materialized
+    - on_the_fly_udf_names: new UDFs, with results computed on-the-fly
+    """
+    # Duration((LeftOf(o2, o0), Color_Red(o0), FrontOf(o1, o2)), 15); Duration((FarFrom(o1, o2), LeftOf(o0, o2)), 5); (Behind(o2, o0), Material_Metal(o1))
+
+
+    new_memo = [{} for _ in range(len(memo))]
+
+    output_vids = []
+    # Prepare cache result
+    if isinstance(input_vids, int):
+        remaining_vids = set(range(input_vids))
+    else:
+        remaining_vids = set(input_vids)
+
+    signatures = []
+    for i in range(len(current_query)):
+        seq_signature = program_to_dsl(current_query[:(i+1)], True)
+        signatures.append(seq_signature)
+
+    filtered_vids = []
+    cached_output_vids = []
+    for vid in remaining_vids:
+        for i, seq_signature in enumerate(signatures):
+            if seq_signature not in memo[vid]:
+                filtered_vids.append(vid)
+            elif memo[vid][seq_signature] == 0:
+                break
+            elif i == len(signatures) - 1: # The full query predicates it as positive
+                cached_output_vids.append(vid)
+
+    # select input videos
+    parameters = ','.join('?' for _ in filtered_vids)
+    conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid < {input_vids};")
+    conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid < {input_vids};")
+    # Obj_filtered = conn.execute("SELECT * FROM {inputs_table_name} WHERE vid = ANY([{parameters}]);".format(inputs_table_name=inputs_table_name, parameters=parameters), filtered_vids).fetchdf()
+    # print("here1")
+    # conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_filtered ON Obj_filtered (vid, fid);")
+    # print("select input videos: ", time.time() - _start)
+    encountered_variables_prev_graphs = []
+    encountered_variables_current_graph = []
+    for graph_idx, dict in enumerate(current_query):
+        # Generate scene graph:
+        scene_graph = dict["scene_graph"]
+        duration_constraint = dict["duration_constraint"]
+        for p in scene_graph:
+            for v in p["variables"]:
+                if v not in encountered_variables_current_graph:
+                    encountered_variables_current_graph.append(v)
+
+        # Execute for unseen videos
+        encountered_variables_current_graph = sorted(encountered_variables_current_graph, key=lambda x: int(x[1:]))
+        table_list = ["obj_attr_filtered as {}".format(v) for v in encountered_variables_current_graph]
+        where_clauses = []
+        for i in range(len(encountered_variables_current_graph)-1):
+            # [where condition] All obj_attr_filtered tables should have same vid and fid
+            where_clauses.append("{v1}.vid = {v2}.vid and {v1}.fid = {v2}.fid".format(v1=encountered_variables_current_graph[i], v2=encountered_variables_current_graph[i+1])) # join variables
+        for p in scene_graph:
+            predicate = p["predicate"]
+            parameter = p.get("parameter", None) # Unused; should always be None
+            assert parameter is None
+            variables = p["variables"]
+            if predicate in available_udf_names:
+                if len(variables) == 1:
+                    # [where condition] available attribute UDFs
+                    where_clauses.append(f"'{predicate}' = ANY({variables[0]}.o1_anames)")
+                else:
+                    v0 = variables[0]
+                    v1 = variables[1]
+                    # [where condition] available relationship UDFs
+                    pred_table = f"{v0}_{predicate}_{v1}"
+                    table_list.append(f"rel_filtered as {pred_table}")
+                    where_clauses.append(f"""
+                        {v0}.vid = {pred_table}.vid
+                        and {v0}.fid = {pred_table}.fid
+                        and {v0}.o1_oid = {pred_table}.o1_oid
+                        and {v1}.o1_oid = {pred_table}.o2_oid
+                        and '{predicate}' = ANY({pred_table}.o1_o2_rnames)
+                    """)
+            elif predicate in materialized_udf_names:
+                if len(variables) == 1:
+                    # [where condition] new attribute UDFs (materialized)
+                    v0 = variables[0]
+                    pred_table = f"{v0}_{predicate}"
+                    table_list.append(f"{predicate} as {pred_table}")
+                    where_clauses.append(f"""
+                        {v0}.vid = {pred_table}.vid
+                        and {v0}.fid = {pred_table}.fid
+                        and {v0}.o1_oid = {pred_table}.o1_oid
+                        and {pred_table}.pred = 1
+                    """)
+                else:
+                    # [where condition] new relationship UDFs (materialized)
+                    v0 = variables[0]
+                    v1 = variables[1]
+                    pred_table = f"{v0}_{predicate}_{v1}"
+                    table_list.append(f"{predicate} as {pred_table}")
+                    where_clauses.append(f"""
+                        {v0}.vid = {pred_table}.vid
+                        and {v0}.fid = {pred_table}.fid
+                        and {v0}.o1_oid = {pred_table}.o1_oid
+                        and {v1}.o1_oid = {pred_table}.o2_oid
+                        and {pred_table}.pred = 1
+                    """)
+            elif predicate in on_the_fly_udf_names:
+                if len(variables) == 1:
+                    # [where condition] new attribute UDFs (on-the-fly)
+                    v0 = variables[0]
+                    where_clauses.append(f"""
+                        {predicate}({v0}.o1_oname, {v0}.o1_x1, {v0}.o1_y1, {v0}.o1_x2, {v0}.o1_y2, {v0}.o1_anames, {v0}.height, {v0}.width) = true
+                    """)
+                else:
+                    # [where condition] new relationship UDFs (on-the-fly)
+                    v0 = variables[0]
+                    v1 = variables[1]
+                    pred_table = f"{v0}_{predicate}_{v1}"
+                    table_list.append(f"rel_filtered as {pred_table}")
+                    where_clauses.append(f"""
+                        {v0}.vid = {pred_table}.vid
+                        and {v0}.fid = {pred_table}.fid
+                        and {v0}.o1_oid = {pred_table}.o1_oid
+                        and {v1}.o1_oid = {pred_table}.o2_oid
+                        and {predicate}({pred_table}.o1_oname, {pred_table}.o1_x1, {pred_table}.o1_y1, {pred_table}.o1_x2, {pred_table}.o1_y2, {pred_table}.o1_anames, {pred_table}.o2_oname, {pred_table}.o2_x1, {pred_table}.o2_y1, {pred_table}.o2_x2, {pred_table}.o2_y2, {pred_table}.o2_anames, {pred_table}.o1_o2_rnames, {pred_table}.o2_o1_rnames, {pred_table}.height, {pred_table}.width) = true
+                    """)
+            else:
+                raise ValueError("Unknown predicate: {}".format(predicate))
+                # TODO: for robustness, we should remove it from the query and continue execution
+        # [where condition] Different obj_attr_filtered tables should have different oids
+        for var_pair in itertools.combinations(encountered_variables_current_graph, 2):
+            where_clauses.append("{}.o1_oid <> {}.o1_oid".format(var_pair[0], var_pair[1]))
+        where_clauses = " and ".join(where_clauses)
+        fields = "{v}.vid as vid, {v}.fid as fid, ".format(v=encountered_variables_current_graph[0])
+        fields += ", ".join(["{v}.o1_oid as {v}_oid".format(v=v) for v in encountered_variables_current_graph])
+        table_str = ", ".join(table_list)
+        sql_string = f"""
+            CREATE TEMPORARY TABLE g{graph_idx} AS
+            SELECT {fields}
+            FROM {table_str}
+            WHERE {where_clauses};
+        """
+        logger.debug(sql_string)
+        conn.execute(sql_string)
+        # print("execute for unseen videos: ", time.time() - _start_execute)
+        # print("Time for graph {}: {}".format(graph_idx, time.time() - _start))
+
+        if graph_idx > 0:
+            obj_union = copy.deepcopy(encountered_variables_prev_graphs)
+            obj_union_fields = []
+            obj_intersection_fields = []
+            for v in encountered_variables_prev_graphs:
+                obj_union_fields.append("t0.{}_oid".format(v))
+            for v in encountered_variables_current_graph:
+                if v in encountered_variables_prev_graphs:
+                    obj_intersection_fields.append("t0.{v}_oid = t1.{v}_oid".format(v=v))
+                else:
+                    for u in encountered_variables_prev_graphs:
+                        obj_intersection_fields.append("t0.{u}_oid <> t1.{v}_oid".format(u=u, v=v))
+                    obj_union.append(v)
+                    obj_union_fields.append("t1.{}_oid".format(v))
+            obj_union_fields = ", ".join(obj_union_fields)
+            obj_intersection_fields = " and ".join(obj_intersection_fields)
+            sql_string = """
+            CREATE TEMPORARY TABLE g{graph_idx}_filtered AS (
+                SELECT t0.vid, t1.fid, {obj_union_fields}
+                FROM g{graph_idx_prev}_contiguous t0, g{graph_idx} t1
+                WHERE t0.vid = t1.vid AND {obj_intersection_fields} AND t0.fid < t1.fid
+            );
+            """.format(graph_idx=graph_idx, graph_idx_prev=graph_idx-1, obj_union_fields=obj_union_fields, obj_intersection_fields=obj_intersection_fields)
+            logger.debug(sql_string)
+            conn.execute(sql_string)
+        else:
+            obj_union = encountered_variables_current_graph
+
+        # Generate scene graph sequence:
+        table_name = "g{}_filtered".format(graph_idx) if graph_idx > 0 else "g{}".format(graph_idx)
+        obj_union_fields = ", ".join(["{}_oid".format(v) for v in obj_union])
+        sql_string = """
+            CREATE TEMPORARY TABLE g{graph_idx}_windowed AS (
+            SELECT vid, fid, {obj_union_fields},
+            lead(fid, {duration_constraint} - 1, 0) OVER (PARTITION BY vid, {obj_union_fields} ORDER BY fid) as fid_offset
+            FROM {table_name}
+        );
+        """.format(graph_idx=graph_idx, duration_constraint=duration_constraint, obj_union_fields=obj_union_fields, table_name=table_name)
+        logger.debug(sql_string)
+        conn.execute(sql_string)
+        # print("windowed: ", time.time() - _start_windowed)
+
+        sql_string = """
+            CREATE TEMPORARY TABLE g{graph_idx}_contiguous AS (
+            SELECT vid, {obj_union_fields}, min(fid_offset) AS fid
+            FROM g{graph_idx}_windowed
+            WHERE fid_offset = fid + ({duration_constraint} - 1)
+            GROUP BY vid, {obj_union_fields}
+        );
+        """.format(graph_idx=graph_idx, obj_union_fields=obj_union_fields, duration_constraint=duration_constraint)
+        logger.debug(sql_string)
+        conn.execute(sql_string)
+        conn.execute("SELECT DISTINCT vid FROM g{}_contiguous".format(graph_idx))
+        res = conn.fetchall()
+        output_vids = [row[0] for row in res]
+        # Store new cached results
+        for input_vid in filtered_vids:
+            if input_vid in output_vids:
+                new_memo[input_vid][signatures[graph_idx]] = 1
+            else:
+                new_memo[input_vid][signatures[graph_idx]] = 0
+        encountered_variables_prev_graphs = obj_union
+        encountered_variables_current_graph = []
+    output_vids.extend(cached_output_vids)
+
     return output_vids, new_memo
