@@ -6,6 +6,7 @@ from vocaludf.utils import (
     duckdb_execute_clevrer_cache_sequence,
     duckdb_execute_clevrer_materialize,
     parse_signature,
+    PredImageDataset,
 )
 from vocaludf.pretrained_model_api import image_captioning, image_classification, visual_question_answering, object_detection, depth_estimation
 import time
@@ -20,53 +21,11 @@ import math
 import pandas as pd
 from collections import defaultdict
 from tqdm import tqdm
+import numpy as np
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-
-# TODO: We can also support video loading and feature extraction on the fly, without creating the parquet files,
-# since writing parquet files is the bottleneck right now.
-class PredImageDataset(IterableDataset):
-    def __init__(self, conn, n_obj, attribute_features_dir, relationship_features_dir):
-        self.conn = conn
-        self.n_obj = n_obj
-        self.attribute_features_dir = attribute_features_dir
-        self.relationship_features_dir = relationship_features_dir
-
-        if self.n_obj == 1:
-            self.files = self._get_files(attribute_features_dir)
-        else:
-            self.files = self._get_files(relationship_features_dir)
-        self.num_files = len(self.files)
-        self.start = 0
-        self.end = self.num_files
-
-    def _get_files(self, features_dir, extension=".parquet") -> List[str]:
-        all_files = os.listdir(features_dir)
-        matched_files = sorted([os.path.join(features_dir, f) for f in all_files if f.endswith(extension)])
-        return matched_files
-
-    def __iter__(self):
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:  # single-process data loading, return the full iterator
-            iter_start = self.start
-            iter_end = self.end
-        else: # in a worker process
-            # split workload
-            per_worker = int(math.ceil((self.end - self.start) / float(worker_info.num_workers)))
-            worker_id = worker_info.id
-            iter_start = self.start + worker_id * per_worker
-            iter_end = min(iter_start + per_worker, self.end)
-        for file in self.files[iter_start:iter_end]:
-            df = pd.read_parquet(file)
-
-            feature_col = df["feature"].values
-            metadata = df.drop('feature', axis=1)
-
-            for (_, row), feature in zip(metadata.iterrows(), feature_col):
-                yield row.to_dict(), torch.tensor(feature, dtype=torch.float32)
 
 
 class QueryExecutor:
@@ -122,7 +81,7 @@ class QueryExecutor:
                             # relationship + img
                             types = ["np.ndarray", "str", "int", "int", "int", "int", "List[str]", "str", "int", "int", "int", "int", "List[str]", "List[str]", "List[str]", "int", "int"]
                         else:
-                            raise ValueError("Unknown number of arguments in the function header")
+                            raise ValueError("Unknown number of arguments in the function header: {}".format(len(python_func_args)))
                         python_arg_str = ", ".join([f"{arg}: {type}" for arg, type in zip(python_func_args, types)])
                         python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
                         lines[i] = python_header_type_annotated

@@ -7,7 +7,8 @@ import math
 from vocaludf.utils import (
     replace_slot,
     parse_signature,
-    transform_function
+    transform_function,
+    PredImageDataset
 )
 from vocaludf.pretrained_model_api import image_captioning, image_classification, visual_question_answering, object_detection, depth_estimation
 import time
@@ -86,7 +87,6 @@ class UDFCandidate:
 class UDFProposer:
     llm_method = "gpt4v"
     mlp_method = "three_clip"
-    program_with_pixels = False
     # Propose new UDFs and generate semantic interpretations
     def __init__(
         self,
@@ -98,6 +98,7 @@ class UDFProposer:
         labeling_budget,
         num_interpretations,
         num_parameter_search,
+        program_with_pixels,
         query_id,
         run_id,
         num_workers,
@@ -106,7 +107,9 @@ class UDFProposer:
         load_labeled_data,
         n_train_distill,
         selection_strategy,
-        allow_kwargs_in_udf=False,
+        selection_labels,
+        allow_kwargs_in_udf,
+        save_udf_base_dir,
     ):
         self.config = config
         self.prompt_config = prompt_config
@@ -116,11 +119,14 @@ class UDFProposer:
         self.labeling_budget = labeling_budget
         self.num_interpretations = num_interpretations
         self.num_parameter_search = num_parameter_search
+        self.program_with_pixels = program_with_pixels
         self.query_id = query_id
         self.run_id = run_id
         self.num_workers = num_workers
         self.save_generated_udf = save_generated_udf
+        self.save_udf_base_dir = save_udf_base_dir
         self.selection_strategy = selection_strategy
+        self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -135,26 +141,10 @@ class UDFProposer:
 
         # Create a train and test split
         # NOTE: probably put these values in the config file
-        self.n_train = 10000
-        self.n_test = 10000
-
-        self.udf_save_dir_lambda = lambda udf_name: os.path.join(
-            self.config["output_dir"],
-            "udf_generation",
-            self.dataset,
-            (
-                "budget-{}_ninterp-{}_nparams-{}_with_kwargs".format(
-                    self.labeling_budget, self.num_interpretations, self.num_parameter_search
-                )
-                if self.allow_kwargs_in_udf
-                else "budget-{}_ninterp-{}_without_kwargs".format(
-                    self.labeling_budget, self.num_interpretations
-                )
-            ),
-            f"qid-{self.query_id}",
-            f"run-{self.run_id}",
-            udf_name,
-        )
+        # self.n_train = 10000
+        # self.n_test = 10000
+        self.n_train = 1000
+        self.n_test = 1000
 
         # Initialization for model distillation
         self.n_train_distill = n_train_distill
@@ -353,46 +343,107 @@ class UDFProposer:
         return self.proposed_functions
 
 
+    def implement(self, udf_signature, udf_description):
+        # TODO: incorporate labels (maybe in the selection stage)
+        if self.selection_strategy == "program":
+            if self.selection_labels == "none" and self.allow_kwargs_in_udf:
+                self.allow_kwargs_in_udf = False
+                logger.info("Turning off allow_kwargs_in_udf since no labels are provided")
+            return self._generate_program(udf_signature, udf_description)
+        elif self.selection_strategy == "model":
+            return self._distill_model(udf_signature, udf_description)
+        elif self.selection_strategy == "llm":
+            if self.selection_labels == "none" and self.allow_kwargs_in_udf:
+                self.allow_kwargs_in_udf = False
+                logger.info("Turning off allow_kwargs_in_udf since no labels are provided")
+            llm_decision = self._llm_decides_udf_type(udf_signature, udf_description)
+            if llm_decision == "programUDF":
+                return self._generate_program(udf_signature, udf_description)
+            elif llm_decision == "modelUDF":
+                return self._distill_model(udf_signature, udf_description)
+            else:
+                raise NotImplementedError(f"llm_decision: {llm_decision} is not supported yet.")
+        elif self.selection_strategy == "both":
+            program_udf_candidates = self._generate_program(udf_signature, udf_description)
+            model_udf_candidates = self._distill_model(udf_signature, udf_description)
+            return program_udf_candidates + model_udf_candidates
+
+
+    def _llm_decides_udf_type(self, udf_signature, udf_description):
+        decide_udf_type_dict = self.prompt_config["decide_udf_type"]
+
+        if self.program_with_pixels:
+            decide_udf_type_base_prompt = f'{decide_udf_type_dict["overall"]} {decide_udf_type_dict["code_with_pixels"]} {decide_udf_type_dict["model"]} {decide_udf_type_dict["output"]}'
+        else:
+            decide_udf_type_base_prompt = f'{decide_udf_type_dict["overall"]} {decide_udf_type_dict["code_without_pixels"]} {decide_udf_type_dict["model"]} {decide_udf_type_dict["output"]}'
+
+        decide_udf_type_prompt = replace_slot(
+            decide_udf_type_base_prompt,
+            {
+                "udf_description": udf_description,
+                "available_concepts": self.object_domain + self.relationship_domain + self.attribute_domain,
+            },
+        )
+        logger.debug("decide_udf_type_prompt: {}".format(decide_udf_type_prompt))
+        for trial in range(3):  # Retry 3 times
+            response = None
+            try:
+                logger.debug(f"trial: {trial}")
+                response = self.client.chat.completions.create(
+                    model="gpt-4-turbo-2024-04-09",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert programming assistant.",
+                        },
+                        {"role": "user", "content": decide_udf_type_prompt},
+                    ],
+                    temperature=self.config["udf_generator"]["temperature"],
+                    top_p=self.config["udf_generator"]["top_p"],
+                    seed=self.run_id * 42 + trial,
+                )
+                llm_decision = response.choices[0].message.content
+                logger.debug(f"llm_decision: {llm_decision}")
+                if "programUDF" in llm_decision:
+                    return "programUDF"
+                elif "modelUDF" in llm_decision:
+                    return "modelUDF"
+            except Exception as e:
+                logger.debug("ERROR: failed to decide UDF type: {}".format(e))
+                logger.debug(response)
+
     ##############################################################
     #############                                    #############
     ############# UDF implementation (program-based) #############
     #############                                    #############
     ##############################################################
-    def implement(self, udf_signature, udf_description):
-        if self.selection_strategy == "program-only":
-            raise NotImplementedError("program-only strategy is not supported yet.")
-        elif self.selection_strategy == "program-only-with-labels":
-            raise NotImplementedError("program-only-with-labels strategy is not supported yet.")
-        elif self.selection_strategy == "model-only":
-            raise NotImplementedError("model-only strategy is not supported yet.")
-        elif self.selection_strategy == "model-only-with-labels":
-            raise NotImplementedError("model-only-with-labels strategy is not supported yet.")
-        elif self.selection_strategy == "llm-decides":
-            raise NotImplementedError("llm-decides strategy is not supported yet.")
-        elif self.selection_strategy == "llm-decides-with-labels":
-            raise NotImplementedError("llm-decides-with-labels strategy is not supported yet.")
-        elif self.selection_strategy == "both-with-labels":
-            raise NotImplementedError("both-with-labels strategy is not supported yet.")
+    def _generate_program(self, udf_signature, udf_description):
+        """
+        Implements the UDF program based on the given UDF signature and description.
 
-        return self._implement_program(udf_signature, udf_description, with_pixels=self.program_with_pixels)
+        Args:
+            udf_signature (str): The signature of the UDF.
+            udf_description (str): The description of the UDF.
 
-    def _implement_program(self, udf_signature, udf_description, with_pixels):
+        Returns:
+            list: A list of UDFCandidate objects representing the implemented UDFs.
+        """
         udf_name, udf_vars = parse_signature(udf_signature)
-        self.udf_save_dir = self.udf_save_dir_lambda(udf_name)
-        os.makedirs(self.udf_save_dir, exist_ok=True)
+        self.save_udf_dir = os.path.join(self.save_udf_base_dir, udf_name)
+        os.makedirs(self.save_udf_dir, exist_ok=True)
         # Step 3: generate semantic interpretations and implement the UDF. Results are saved to disk
         generate_udfs_dict = self.prompt_config["generate_udfs"]
         n_obj = len(udf_vars)
         attr_or_rel = "attribute" if n_obj == 1 else "relationship"
         if self.allow_kwargs_in_udf:
-            if with_pixels:
+            if self.program_with_pixels:
                 generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["inputs_with_pixels_and_optional_kwargs"][attr_or_rel]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_with_optional_kwargs"]}'
                 verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["inputs_with_pixels_and_optional_kwargs"][attr_or_rel]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation_with_optional_kwargs"]}'
             else:
                 generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["inputs_with_optional_kwargs"][attr_or_rel]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_with_optional_kwargs"]}'
                 verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["inputs_with_optional_kwargs"][attr_or_rel]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation_with_optional_kwargs"]}'
         else:
-            if with_pixels:
+            if self.program_with_pixels:
                 generate_udfs_base_prompt = f'{generate_udfs_dict["overall"]} {generate_udfs_dict["task"]} {generate_udfs_dict["details"]} {generate_udfs_dict["inputs_with_pixels"][attr_or_rel]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output"]}'
                 verify_syntax_correctness_base_prompt = f'{generate_udfs_dict["task"]} {generate_udfs_dict["semantic_interpretation"]} {generate_udfs_dict["inputs_with_pixels"][attr_or_rel]} {generate_udfs_dict["pretrained_model_list"]} {generate_udfs_dict["comments"]} {generate_udfs_dict["output_one_implementation"]}'
             else:
@@ -403,7 +454,7 @@ class UDFProposer:
             py_func_args = [f"{udf_vars[0]}_oname", f"{udf_vars[0]}_x1", f"{udf_vars[0]}_y1", f"{udf_vars[0]}_x2", f"{udf_vars[0]}_y2", f"{udf_vars[0]}_anames", "height", "width"]
         else:
             py_func_args = [f"{udf_vars[0]}_oname", f"{udf_vars[0]}_x1", f"{udf_vars[0]}_y1", f"{udf_vars[0]}_x2", f"{udf_vars[0]}_y2", f"{udf_vars[0]}_anames", f"{udf_vars[1]}_oname", f"{udf_vars[1]}_x1", f"{udf_vars[1]}_y1", f"{udf_vars[1]}_x2", f"{udf_vars[1]}_y2", f"{udf_vars[1]}_anames", f"{udf_vars[0]}_{udf_vars[1]}_rnames", f"{udf_vars[1]}_{udf_vars[0]}_rnames", "height", "width"]
-        if with_pixels:
+        if self.program_with_pixels:
             py_func_args.insert(0, "img")
         py_func_signature = f"{udf_name}({', '.join(py_func_args)})"
         logger.info(
@@ -453,7 +504,7 @@ class UDFProposer:
                 )["answer"][:self.num_interpretations]
                 for idx in range(len(implemented_udfs)):
                     implemented_udf = implemented_udfs[idx]
-                    implemented_udf = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, udf_description, n_obj, verify_syntax_correctness_base_prompt, with_pixels)
+                    implemented_udf = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, udf_description, n_obj, verify_syntax_correctness_base_prompt, self.program_with_pixels)
                     implemented_udf["udf_name"] = udf_name
                     implemented_udf["udf_signature"] = udf_signature
                     implemented_udf["udf_description"] = udf_description
@@ -463,7 +514,7 @@ class UDFProposer:
                     logger.info(f"[{idx}] function_implementation: {implemented_udf['function_implementation']}")
                     logger.info(f"[{idx}] kwargs: {implemented_udf.get('kwargs', {})}")
                     if self.save_generated_udf:
-                        with open(os.path.join(self.udf_save_dir, f"{udf_name}_{idx}.json"), "w") as f:
+                        with open(os.path.join(self.save_udf_dir, f"{udf_name}_{idx}.json"), "w") as f:
                             json.dump(implemented_udf, f)
                 break
             except Exception as e:
@@ -599,7 +650,7 @@ class UDFProposer:
     ############# UDF Distillation (distilled-model) #############
     #############                                    #############
     ##############################################################
-    def distill(self, udf_signature, udf_description, gt_udf_name=None):
+    def _distill_model(self, udf_signature, udf_description, gt_udf_name=None):
         """
         gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
         """
@@ -635,7 +686,7 @@ class UDFProposer:
         udf_dict["semantic_interpretation"] = 'model'
         udf_dict["function_implementation"] = best_ckpt
         new_udf_candidate = UDFCandidate(id='model', payload=udf_dict)
-        return new_udf_candidate
+        return [new_udf_candidate]
 
     def llm_annotate_data(self):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
@@ -968,6 +1019,143 @@ class UDFProposer:
     ###### UDF Selection ######
     ######               ######
     ###########################
+    def select(self, gt_udf_name, udf_candidate_list):
+        return self._select(gt_udf_name, udf_candidate_list, with_pixels=self.program_with_pixels)
+
+
+    def _select(self, gt_udf_name, udf_candidate_list, with_pixels):
+        if len(udf_candidate_list) == 1:
+            selected_udf_candidate = udf_candidate_list[0]
+        else:
+            udf_signature = udf_candidate_list[0].udf_signature
+            # Step 4: Select the best UDF
+            udf_name, udf_vars = parse_signature(udf_signature)
+            n_obj = len(udf_vars)
+
+            # Construct training data and test data
+            # TODO: determine if we always need to use with_images=True
+            # TODO: Too slow.
+            df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, with_images=with_pixels)
+
+            # Dynamically import the ground truth UDF
+            # TODO: I think we can remove this since we already materialized the ground truth UDF in database
+            # Example: gt_udf = gt_behind.gt_0
+            # module_name, function_name = gt_udf_name.split(".")
+            # module_name = "udfs.{}".format(module_name)
+            # module = importlib.import_module(module_name)
+            # gt_udf = getattr(module, function_name)
+
+            # Select new video segments to label
+            labeled_index = []
+            segment_selection_time = 0
+            _start_segment_selection_time = time.time()
+            # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
+            for iter in range(self.labeling_budget):
+                logger.info("iter {}".format(iter))
+                _start_segment_selection_time_per_iter = time.time()
+                new_labeled_index = self.select_sample(
+                    udf_candidate_list, udf_name, df_train, n_obj, labeled_index, with_pixels
+                )
+                logger.info("pick next segments {}".format(new_labeled_index))
+                labeled_index += new_labeled_index
+                logger.info("# labeled segments {}".format(len(labeled_index)))
+                if n_obj == 1:
+                    # y_true = df_train.loc[labeled_index].apply(
+                    #     lambda row: gt_udf(row["o1"]), axis=1
+                    # )
+                    y_true = pd.Series([gt_udf_name in anames for anames in df_train.loc[labeled_index]['o1_gt_anames']])
+                elif n_obj == 2:
+                    # y_true = df_train.loc[labeled_index].apply(
+                    #     lambda row: gt_udf(row["o1"], row["o2"]), axis=1
+                    # )
+                    y_true = pd.Series([gt_udf_name in rnames for rnames in df_train.loc[labeled_index]['o1_o2_gt_rnames']])
+                # log number of positive and negative samples
+                logger.info(
+                    "# positive: {}, # negative: {}".format(
+                        sum(y_true), len(y_true) - sum(y_true)
+                    )
+                )
+                # Update scores
+                for i in range(len(udf_candidate_list)):
+                    score, loss_t = self.compute_udf_score(
+                        gt_udf_name,
+                        udf_candidate_list[i],
+                        udf_name,
+                        n_obj,
+                        df_train.loc[labeled_index],
+                        df_train.loc[new_labeled_index],
+                        with_pixels=with_pixels
+                    )
+                    udf_candidate_list[i].score = score
+                    udf_candidate_list[i].loss_t += loss_t
+                # sort udf_candidate_list by score
+                udf_candidate_list = sorted(
+                    udf_candidate_list, key=lambda x: x.score, reverse=True
+                )
+                logger.debug("updated udf_candidate_list: {}".format("\n".join([str(e) for e in udf_candidate_list])))
+                logger.debug(
+                    "test segment_selection_time_per_iter time: {}".format(
+                        time.time() - _start_segment_selection_time_per_iter
+                    )
+                )
+            segment_selection_time += time.time() - _start_segment_selection_time
+            logger.debug(
+                "test segment_selection_time time: {}".format(segment_selection_time)
+            )
+
+            # compute test F1 score
+            logger.info("compute test F1 score")
+            for i in range(len(udf_candidate_list)):
+                udf_candidate_list[i].test_score = self.compute_udf_score(
+                    gt_udf_name,
+                    udf_candidate_list[i],
+                    udf_name,
+                    n_obj,
+                    df_test,
+                    with_pixels=with_pixels
+                )
+                logger.info(str(udf_candidate_list[i]))
+
+            # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
+            best_score = max(udf_candidate.score for udf_candidate in udf_candidate_list)
+            best_candidates = [
+                udf_candidate
+                for udf_candidate in udf_candidate_list
+                if udf_candidate.score == best_score
+            ]
+
+            f1_score_test_list = []
+            for best_candidate in best_candidates:
+                f1_score_test_list.append(best_candidate.test_score)
+            median_f1_score_test = np.median(f1_score_test_list)
+            logger.info("median test f1: {}".format(median_f1_score_test))
+            # TODO: If there are multiple best udfs, select the one with faster execution time?
+            selected_udf_candidate = best_candidates[0]
+
+        if selected_udf_candidate.id != "model":
+            # Transforms the function by removing **kwargs from the function signature and replacing the kwargs with the actual values
+            selected_udf_candidate.function_implementation = transform_function(
+                original_code=selected_udf_candidate.function_implementation,
+                instantiation_dict=selected_udf_candidate.kwargs,
+            )
+        if self.save_generated_udf:
+            with open(os.path.join(self.save_udf_dir, f"{udf_name}_selected.json"), "w") as f:
+                json.dump(
+                    {
+                        "udf_name": selected_udf_candidate.udf_name,
+                        "udf_signature": selected_udf_candidate.udf_signature,
+                        "udf_description": selected_udf_candidate.udf_description,
+                        "semantic_interpretation": selected_udf_candidate.semantic_interpretation,
+                        "function_implementation": selected_udf_candidate.function_implementation,
+                        "f1_score_train": selected_udf_candidate.score,
+                        "f1_score_test": selected_udf_candidate.test_score,
+                    },
+                    f,
+                )
+        logger.info(f"[Selected]: {str(selected_udf_candidate)}")
+        return selected_udf_candidate
+
+
     def select_sample(
         self, udf_candidate_list, udf_name, df_train, n_obj, labeled_index, with_pixels
     ):
@@ -992,30 +1180,40 @@ class UDFProposer:
         else:
             sampled_index = unlabeled_index
 
+        df_sampled = df_train.loc[sampled_index]
+
         indices_to_remove = []
         for i, udf_candidate in enumerate(udf_candidate_list):
-            try:
-                # For each sampled row in df_train, construct o1 and o2
-                kwargs = {}
-                for k, v in udf_candidate.kwargs.items():
-                    kwargs[k] = float(v)
-                py_func_name = "py_{}".format(udf_name)
-                exec(udf_candidate.function_implementation, globals())
-                udf_obj = globals()[py_func_name]
-                # TODO: may need to timeout if running for too long
-                result = self.exec_udf_with_data(df_train.loc[sampled_index], udf_obj, kwargs, n_obj, with_pixels)
-                contains_non_boolean = result.map(lambda x: not isinstance(x, bool)).any()
-                if contains_non_boolean:
-                    logger.debug(
-                        f"ERROR: UDFCandidate(id={udf_candidate.id}) returned non-boolean value"
-                    )
+            if udf_candidate.id == "model":
+                # distilled-model UDF
+                best_ckpt = udf_candidate.function_implementation
+                predictions = self.predict_with_data(df_sampled, best_ckpt, n_obj)
+                logger.debug("predictions: {}".format(predictions))
+                prediction_matrix.append(predictions)
+            else:
+                try:
+                    # program-based UDF
+                    # For each sampled row in df_train, construct o1 and o2
+                    kwargs = {}
+                    for k, v in udf_candidate.kwargs.items():
+                        kwargs[k] = float(v)
+                    py_func_name = "py_{}".format(udf_name)
+                    exec(udf_candidate.function_implementation, globals())
+                    udf_obj = globals()[py_func_name]
+                    # TODO: may need to timeout if running for too long
+                    result = self.exec_udf_with_data(df_sampled, udf_obj, kwargs, n_obj, with_pixels)
+                    contains_non_boolean = result.map(lambda x: not isinstance(x, bool)).any()
+                    if contains_non_boolean:
+                        logger.debug(
+                            f"ERROR: UDFCandidate(id={udf_candidate.id}) returned non-boolean value"
+                        )
+                        indices_to_remove.append(i)
+                        continue
+                except Exception as e:
+                    logger.debug(f"ERROR: failed to execute UDFCandidate(id={udf_candidate.id}): {e}")
                     indices_to_remove.append(i)
                     continue
-            except Exception as e:
-                logger.debug(f"ERROR: failed to execute UDFCandidate(id={udf_candidate.id}): {e}")
-                indices_to_remove.append(i)
-                continue
-            prediction_matrix.append(result.values)
+                prediction_matrix.append(result.values)
         # Remove UDFs that failed to execute
         for i in sorted(indices_to_remove, reverse=True):
             del udf_candidate_list[i]
@@ -1053,6 +1251,44 @@ class UDFProposer:
         max_entropy_index = sampled_index[np.argmax(entropy_list)]
         return [max_entropy_index]
 
+    def predict_with_data(self, df, ckpt, n_obj):
+        df = df.reset_index(drop=True)
+        # Predict the labels of all the data points
+        checkpoint = torch.load(ckpt)
+        hyper_parameters = checkpoint["hyper_parameters"]
+        mlp_model = mlp.MLPProd(**hyper_parameters)
+        mlp_model.load_state_dict(checkpoint["state_dict"])
+        mlp_model.eval()
+        mlp_model.to(self.device)
+
+        if n_obj == 1:
+            df_with_features = self.conn.execute(f"""
+                SELECT any_value(d.feature) as feature
+                FROM df,
+                    '{self.attribute_features_dir}/*.parquet' d
+                WHERE df.vid=d.vid AND df.fid=d.fid
+                    AND df.o1_oid=d.o1_oid
+                GROUP BY d.vid, d.fid, d.o1_oid
+                ORDER BY df.index
+            """).df()
+        else:
+            df_with_features = self.conn.execute(f"""
+                SELECT any_value(d.feature) as feature
+                FROM df,
+                    '{self.relationship_features_dir}/*.parquet' d
+                WHERE df.vid=d.vid AND df.fid=d.fid
+                    AND df.o1_oid=d.o1_oid AND df.o2_oid=d.o2_oid
+                GROUP BY d.vid, d.fid, d.o1_oid, d.o2_oid
+                ORDER BY df.index
+            """).df()
+        predictions = []
+        with torch.no_grad():
+            for _, row in tqdm(df_with_features.iterrows()):
+                feature = torch.tensor(row["feature"], dtype=torch.float32).to(self.device)
+                pred = mlp_model(feature)
+                predictions.append(bool(pred.item()))
+        return predictions
+
     def compute_udf_score(
         self,
         gt_udf_name,
@@ -1067,49 +1303,57 @@ class UDFProposer:
         Compute the F1 score of the UDF candidate on the data (train or test), using the ground truth UDF as the label
         if df_newly_labeled is provided, also compute the number of misclassified samples of them (which is used to compute loss_t)
         """
-        try:
-            # For each sampled row in df, construct o1 and o2
-            kwargs = {}
-            for k, v in udf_candidate.kwargs.items():
-                kwargs[k] = float(v)
-            py_func_name = "py_{}".format(udf_name)
-            exec(udf_candidate.function_implementation, globals())
-            udf_obj = globals()[py_func_name]
-            y_pred = self.exec_udf_with_data(df, udf_obj, kwargs, n_obj, with_pixels)
-            if df_newly_labeled is not None:
-                y_pred_new = self.exec_udf_with_data(df_newly_labeled, udf_obj, kwargs, n_obj, with_pixels)
-        except Exception as e:
-            logger.debug("ERROR: failed to execute udf_candidate {}: {}".format(udf_candidate.id, e))
-            # y_pred = df.apply(lambda row: False, axis=1)
-            y_pred = pd.Series([False] * len(df))
-            if df_newly_labeled is not None:
-                y_pred_new = df_newly_labeled.apply(lambda row: False, axis=1)
+        if udf_candidate.id == "model":
+                best_ckpt = udf_candidate.function_implementation
+                y_pred = self.predict_with_data(df, best_ckpt, n_obj)
+                if df_newly_labeled is not None:
+                    y_pred_new = self.predict_with_data(df_newly_labeled, best_ckpt, n_obj)
+        else:
+            try:
+                # For each sampled row in df, construct o1 and o2
+                kwargs = {}
+                for k, v in udf_candidate.kwargs.items():
+                    kwargs[k] = float(v)
+                py_func_name = "py_{}".format(udf_name)
+                exec(udf_candidate.function_implementation, globals())
+                udf_obj = globals()[py_func_name]
+                y_pred = self.exec_udf_with_data(df, udf_obj, kwargs, n_obj, with_pixels)
+                if df_newly_labeled is not None:
+                    y_pred_new = self.exec_udf_with_data(df_newly_labeled, udf_obj, kwargs, n_obj, with_pixels).reset_index(drop=True)
+            except Exception as e:
+                logger.debug("ERROR: failed to execute udf_candidate {}: {}".format(udf_candidate.id, e))
+                # y_pred = df.apply(lambda row: False, axis=1)
+                y_pred = pd.Series([False] * len(df))
+                if df_newly_labeled is not None:
+                    y_pred_new = pd.Series([False] * len(df_newly_labeled))
 
+        # Compute y_true and f1 score
         if n_obj == 1:
             # y_true = df.apply(lambda row: gt_udf_name in row["o1_gt_anames"], axis=1)
-            y_true = pd.Series([gt_udf_name in anames for anames in df['o1_gt_anames']])
+            y_true = pd.Series([gt_udf_name in o1_gt_anames for o1_gt_anames in df['o1_gt_anames']])
         elif n_obj == 2:
             # y_true = df.apply(lambda row: gt_udf_name in row["o1_o2_gt_rnames"], axis=1)
-            y_true = pd.Series([gt_udf_name in rnames for rnames in df['o1_o2_gt_rnames']])
+            y_true = pd.Series([gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df['o1_o2_gt_rnames']])
         # logger.debug(f"y_true: {y_true}, y_pred: {y_pred}")
         score = f1_score(y_true, y_pred, zero_division=1.0)
-
         logger.info(
             "positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true))
         )
 
+        # Compute y_true_new and num_misclassified
         if df_newly_labeled is not None:
             if n_obj == 1:
                 # y_true_new = df_newly_labeled.apply(
                 #     lambda row: gt_udf(row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["height"], row["width"]), axis=1
                 # )
-                y_true_new = pd.Series([gt_udf_name in anames for anames in df_newly_labeled['o1_gt_anames']])
+                y_true_new = pd.Series([gt_udf_name in o1_gt_anames for o1_gt_anames in df_newly_labeled['o1_gt_anames']])
             elif n_obj == 2:
                 # y_true_new = df_newly_labeled.apply(
                 #     lambda row: gt_udf(row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["o2_oname"], row["o2_x1"], row["o2_y1"], row["o2_x2"], row["o2_y2"], row["o2_anames"], row["o1_o2_rnames"], row["o2_o1_rnames"], row["height"], row["width"]), axis=1
                 # )
-                y_true_new = pd.Series([gt_udf_name in rnames for rnames in df_newly_labeled['o1_o2_gt_rnames']])
+                y_true_new = pd.Series([gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df_newly_labeled['o1_o2_gt_rnames']])
             # Count the number of misclassifications for the new samples
+            # logger.debug(f"y_true_new: {y_true_new}, y_pred_new: {y_pred_new}")
             num_misclassified = np.sum(np.array(y_true_new != y_pred_new) * 1)
             return score, num_misclassified
         else:
@@ -1173,12 +1417,12 @@ class UDFProposer:
                 raise ValueError("Number of objects not supported: {}".format(n_obj))
         if n_test:
             df_train = df_filtered[:n_train]
-            df_train = df_train.reset_index()
+            df_train = df_train.reset_index(drop=True)
             df_test = df_filtered[n_train:]
-            df_test = df_test.reset_index()
+            df_test = df_test.reset_index(drop=True)
             return df_train, df_test
         else:
-            df_filtered = df_filtered.reset_index()
+            df_filtered = df_filtered.reset_index(drop=True)
             return df_filtered
 
     def _construct_train_and_test_data_with_images(self, n_obj, n_train=None, n_test=None):
@@ -1194,6 +1438,24 @@ class UDFProposer:
             df = self._construct_train_and_test_data_without_images(n_obj, n_train)
             df["img"] = df.progress_apply(self.frame_processing_for_program, axis=1)
             return df
+
+    def frame_processing_for_program(self, row):
+        vid = row.vid
+        cap = cv2.VideoCapture(
+            os.path.join(
+                self.config['data_dir'],
+                self.dataset,
+                f'video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}',
+                f"video_{str(vid).zfill(5)}.mp4"
+            )
+        )
+        cap.set(cv2.CAP_PROP_POS_FRAMES, row.fid)
+        ret, frame = cap.read()
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if not ret:
+            raise ValueError("Failed to read the frame")
+        cap.release()
+        return frame
 
     def _append_features(self, df, n_obj):
         if n_obj == 1:
@@ -1220,136 +1482,8 @@ class UDFProposer:
             """).df()
         return df
 
-
-    def select(self, gt_udf_name, udf_candidate_list):
-        return self._select(gt_udf_name, udf_candidate_list, with_pixels=False)
-
-    def _select(self, gt_udf_name, udf_candidate_list, with_pixels):
-        udf_signature = udf_candidate_list[0].udf_signature
-        # Step 4: Select the best UDF
-        udf_name, udf_vars = parse_signature(udf_signature)
-        n_obj = len(udf_vars)
-
-        # Construct training data and test data
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, with_images=True)
-
-        # Dynamically import the ground truth UDF
-        # Example: gt_udf = gt_behind.gt_0
-        # module_name, function_name = gt_udf_name.split(".")
-        # module_name = "udfs.{}".format(module_name)
-        # module = importlib.import_module(module_name)
-        # gt_udf = getattr(module, function_name)
-
-        # Select new video segments to label
-        labeled_index = []
-        segment_selection_time = 0
-        _start_segment_selection_time = time.time()
-        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
-        for iter in range(self.labeling_budget):
-            logger.info("iter {}".format(iter))
-            _start_segment_selection_time_per_iter = time.time()
-            new_labeled_index = self.select_sample(
-                udf_candidate_list, udf_name, df_train, n_obj, labeled_index, with_pixels
-            )
-            logger.info("pick next segments {}".format(new_labeled_index))
-            labeled_index += new_labeled_index
-            logger.info("# labeled segments {}".format(len(labeled_index)))
-            if n_obj == 1:
-                # y_true = df_train.loc[labeled_index].apply(
-                #     lambda row: gt_udf(row["o1"]), axis=1
-                # )
-                y_true = pd.Series([gt_udf_name in anames for anames in df_train.loc[labeled_index]['o1_gt_anames']])
-            elif n_obj == 2:
-                # y_true = df_train.loc[labeled_index].apply(
-                #     lambda row: gt_udf(row["o1"], row["o2"]), axis=1
-                # )
-                y_true = pd.Series([gt_udf_name in rnames for rnames in df_train.loc[labeled_index]['o1_o2_gt_rnames']])
-            # log number of positive and negative samples
-            logger.info(
-                "# positive: {}, # negative: {}".format(
-                    sum(y_true), len(y_true) - sum(y_true)
-                )
-            )
-            # Update scores
-            for i in range(len(udf_candidate_list)):
-                score, loss_t = self.compute_udf_score(
-                    gt_udf_name,
-                    udf_candidate_list[i],
-                    udf_name,
-                    n_obj,
-                    df_train.loc[labeled_index],
-                    df_train.loc[new_labeled_index],
-                    with_pixels=with_pixels
-                )
-                udf_candidate_list[i].score = score
-                udf_candidate_list[i].loss_t += loss_t
-            # sort udf_candidate_list by score
-            udf_candidate_list = sorted(
-                udf_candidate_list, key=lambda x: x.score, reverse=True
-            )
-            logger.debug("updated udf_candidate_list: {}".format("\n".join([str(e) for e in udf_candidate_list])))
-            logger.debug(
-                "test segment_selection_time_per_iter time: {}".format(
-                    time.time() - _start_segment_selection_time_per_iter
-                )
-            )
-        segment_selection_time += time.time() - _start_segment_selection_time
-        logger.debug(
-            "test segment_selection_time time: {}".format(segment_selection_time)
-        )
-
-        # compute test F1 score
-        logger.info("compute test F1 score")
-        for i in range(len(udf_candidate_list)):
-            udf_candidate_list[i].test_score = self.compute_udf_score(
-                gt_udf_name,
-                udf_candidate_list[i],
-                udf_name,
-                n_obj,
-                df_test,
-                with_pixels=with_pixels
-            )
-            logger.info(str(udf_candidate_list[i]))
-
-        # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
-        best_score = max(udf_candidate.score for udf_candidate in udf_candidate_list)
-        best_candidates = [
-            udf_candidate
-            for udf_candidate in udf_candidate_list
-            if udf_candidate.score == best_score
-        ]
-
-        f1_score_test_list = []
-        for best_candidate in best_candidates:
-            f1_score_test_list.append(best_candidate.test_score)
-        median_f1_score_test = np.median(f1_score_test_list)
-        logger.info("median test f1: {}".format(median_f1_score_test))
-        # TODO: If there are multiple best udfs, select the one with faster execution time?
-        selected_udf_candidate = best_candidates[0]
-        # Transforms the function by removing **kwargs from the function signature and replacing the kwargs with the actual values
-        selected_udf_candidate.function_implementation = transform_function(
-            original_code=selected_udf_candidate.function_implementation,
-            instantiation_dict=selected_udf_candidate.kwargs,
-        )
-        if self.save_generated_udf:
-            with open(os.path.join(self.udf_save_dir, f"{udf_name}_selected.json"), "w") as f:
-                json.dump(
-                    {
-                        "udf_name": selected_udf_candidate.udf_name,
-                        "udf_signature": selected_udf_candidate.udf_signature,
-                        "udf_description": selected_udf_candidate.udf_description,
-                        "semantic_interpretation": selected_udf_candidate.semantic_interpretation,
-                        "function_implementation": selected_udf_candidate.function_implementation,
-                        "f1_score_train": selected_udf_candidate.score,
-                        "f1_score_test": selected_udf_candidate.test_score,
-                    },
-                    f,
-                )
-        logger.info(f"[Selected]: {str(selected_udf_candidate)}")
-        return selected_udf_candidate
-
     def compute_best_test_score(self, gt_udf_name, udf_candidate_list):
-        return self._compute_best_test_score(gt_udf_name, udf_candidate_list, with_pixels=False)
+        return self._compute_best_test_score(gt_udf_name, udf_candidate_list, with_pixels=self.program_with_pixels)
 
     def _compute_best_test_score(self, gt_udf_name, udf_candidate_list, with_pixels):
         udf_signature = udf_candidate_list[0].udf_signature
@@ -1386,89 +1520,72 @@ class UDFProposer:
         logger.info(f"[best_test_score]: {best_test_score}")
         return best_test_score
 
-class CodeUDFWithPixelsProposer(UDFProposer):
-    llm_method = "gpt4v"
-    mlp_method = "three_clip"
-    program_with_pixels = True
-    def __init__(
-        self,
-        config,
-        prompt_config,
-        config_list,
-        registered_functions,
-        dataset,
-        labeling_budget,
-        num_interpretations,
-        num_parameter_search,
-        query_id,
-        run_id,
-        num_workers,
-        save_generated_udf,
-        save_labeled_data,
-        load_labeled_data,
-        n_train_distill,
-        selection_strategy,
-        allow_kwargs_in_udf=False,
-    ):
-        super().__init__(
-            config,
-            prompt_config,
-            config_list,
-            registered_functions,
-            dataset,
-            labeling_budget,
-            num_interpretations,
-            num_parameter_search,
-            query_id,
-            run_id,
-            num_workers,
-            save_generated_udf,
-            save_labeled_data,
-            load_labeled_data,
-            n_train_distill,
-            selection_strategy,
-            allow_kwargs_in_udf,
-        )
-        self.n_train = 1000
-        self.n_test = 1000
+# class CodeUDFWithPixelsProposer(UDFProposer):
+#     llm_method = "gpt4v"
+#     mlp_method = "three_clip"
+#     program_with_pixels = True
+#     def __init__(
+#         self,
+#         config,
+#         prompt_config,
+#         config_list,
+#         registered_functions,
+#         dataset,
+#         labeling_budget,
+#         num_interpretations,
+#         num_parameter_search,
+#         program_with_pixels,
+#         query_id,
+#         run_id,
+#         num_workers,
+#         save_generated_udf,
+#         save_labeled_data,
+#         load_labeled_data,
+#         n_train_distill,
+#         selection_strategy,
+#         allow_kwargs_in_udf=False,
+#     ):
+#         super().__init__(
+#             config,
+#             prompt_config,
+#             config_list,
+#             registered_functions,
+#             dataset,
+#             labeling_budget,
+#             num_interpretations,
+#             num_parameter_search,
+#             query_id,
+#             run_id,
+#             num_workers,
+#             save_generated_udf,
+#             save_labeled_data,
+#             load_labeled_data,
+#             n_train_distill,
+#             selection_strategy,
+#             allow_kwargs_in_udf,
+#         )
+#         self.n_train = 1000
+#         self.n_test = 1000
 
-        self.udf_save_dir_lambda = lambda udf_name: os.path.join(
-            self.config["output_dir"],
-            "compare_code_and_model_udf",
-            self.dataset,
-            (
-                "budget-{}_ninterp-{}_nparams-{}_with_kwargs".format(
-                    self.labeling_budget, self.num_interpretations, self.num_parameter_search
-                )
-                if self.allow_kwargs_in_udf
-                else "budget-{}_ninterp-{}_without_kwargs".format(
-                    self.labeling_budget, self.num_interpretations
-                )
-            ),
-            f"run-{self.run_id}",
-            udf_name,
-        )
+#         self.save_udf_dir_lambda = lambda udf_name: os.path.join(
+#             self.config["output_dir"],
+#             "compare_code_and_model_udf",
+#             self.dataset,
+#             (
+#                 "budget-{}_ninterp-{}_nparams-{}_with_kwargs".format(
+#                     self.labeling_budget, self.num_interpretations, self.num_parameter_search
+#                 )
+#                 if self.allow_kwargs_in_udf
+#                 else "budget-{}_ninterp-{}_without_kwargs".format(
+#                     self.labeling_budget, self.num_interpretations
+#                 )
+#             ),
+#             f"run-{self.run_id}",
+#             udf_name,
+#         )
 
-    def frame_processing_for_program(self, row):
-        vid = row.vid
-        cap = cv2.VideoCapture(
-            os.path.join(
-                self.config['data_dir'],
-                self.dataset,
-                f'video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}',
-                f"video_{str(vid).zfill(5)}.mp4"
-            )
-        )
-        cap.set(cv2.CAP_PROP_POS_FRAMES, row.fid)
-        ret, frame = cap.read()
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        if not ret:
-            raise ValueError("Failed to read the frame")
-        cap.release()
-        return frame
+#     def select(self, gt_udf_name, udf_candidate_list):
+#         return self._select(gt_udf_name, udf_candidate_list, with_pixels=True)
 
-    def select(self, gt_udf_name, udf_candidate_list):
-        return self._select(gt_udf_name, udf_candidate_list, with_pixels=True)
-
-    def compute_best_test_score(self, gt_udf_name, udf_candidate_list):
-        return self._compute_best_test_score(gt_udf_name, udf_candidate_list, with_pixels=True)
+#     def compute_best_test_score(self, gt_udf_name, udf_candidate_list):
+#         return self._compute_best_test_score(gt_udf_name, udf_candidate_list, with_pixels=True)

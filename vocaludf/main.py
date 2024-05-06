@@ -33,12 +33,14 @@ if __name__ == "__main__":
     parser.add_argument("--budget", type=int, help="labeling budget")
     parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
+    parser.add_argument("--program_with_pixels", action="store_true", help="program with pixels")
     parser.add_argument("--save_generated_udf", action="store_true", help="save generated UDF to file")
     parser.add_argument("--cpus", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
-    parser.add_argument("--selection_strategy", type=str, choices=["program-only", "program-only-with-labels", "model-only", "model-only-with-labels", "llm-decides", "llm-decides-with-labels", "both-with-labels"], default="model", help="strategy for UDF selection")
+    parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
+    parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
 
     args = parser.parse_args()
     query_id = args.query_id
@@ -49,12 +51,37 @@ if __name__ == "__main__":
     labeling_budget = args.budget
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
+    program_with_pixels = args.program_with_pixels
     save_generated_udf = args.save_generated_udf
     num_workers = args.cpus
     save_labeled_data = args.save_labeled_data
     load_labeled_data = args.load_labeled_data
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
+    selection_labels = args.selection_labels
+    if selection_strategy == "both":
+        assert selection_labels != "none"
+    elif selection_strategy == "model":
+        assert selection_labels == "none"
+
+    save_udf_base_dir = os.path.join(
+        config["output_dir"],
+        "udf_generation",
+        dataset,
+        "ninterp={}-nparams={}-kwargs={}-pixels={}-ntrain_distill={}-selection={}-labels={}-budget={}".format(
+            num_interpretations,
+            num_parameter_search,
+            allow_kwargs_in_udf,
+            program_with_pixels,
+            n_train_distill,
+            selection_strategy,
+            selection_labels,
+            labeling_budget,
+        ),
+        f"qid={query_id}",
+        f"run={run_id}",
+    )
+    os.makedirs(save_udf_base_dir, exist_ok=True)
 
     random.seed(run_id)
     np.random.seed(run_id)
@@ -123,18 +150,18 @@ if __name__ == "__main__":
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r")
     )["test"]
     # add "BEHIND", "RIGHTOF"
-    registered_functions.extend(
-        [{
-            "signature": "right_of(o0, o1)",
-            "description": "Whether o0 is on the right of o1.",
-            "function_implementation": "def right_of(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    cx_o1 = (o1_x1 + o1_x2) / 2\n    cx_o2 = (o2_x1 + o2_x2) / 2\n    return cx_o1 > cx_o2"
-        },
-        {
-            "signature": "behind(o0, o1)",
-            "description": "Whether o0 is behind o1.",
-            "function_implementation": "def behind(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    center_y_o1 = (o1_y1 + o1_y2) / 2\n    center_y_o2 = (o2_y1 + o2_y2) / 2\n    return center_y_o1 < center_y_o2"
-        }]
-    )
+    # registered_functions.extend(
+    #     [{
+    #         "signature": "right_of(o0, o1)",
+    #         "description": "Whether o0 is on the right of o1.",
+    #         "function_implementation": "def right_of(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    cx_o1 = (o1_x1 + o1_x2) / 2\n    cx_o2 = (o2_x1 + o2_x2) / 2\n    return cx_o1 > cx_o2"
+    #     },
+    #     {
+    #         "signature": "behind(o0, o1)",
+    #         "description": "Whether o0 is behind o1.",
+    #         "function_implementation": "def behind(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    center_y_o1 = (o1_y1 + o1_y2) / 2\n    center_y_o2 = (o2_y1 + o2_y2) / 2\n    return center_y_o1 < center_y_o2"
+    #     }]
+    # )
     available_udf_names = [parse_signature(func["signature"])[0] for func in registered_functions]
     materialized_df_names = []
     on_the_fly_udf_names = []
@@ -146,8 +173,7 @@ if __name__ == "__main__":
     flag = qp.parse(user_query)
     if 'no' in flag:
         # Step 1: propose new UDFs
-        # TODO: right now UDFProposer won't work for distilled-model UDFs
-        up = CodeUDFWithPixelsProposer(
+        up = UDFProposer(
             config,
             prompt_config,
             config_list,
@@ -156,6 +182,7 @@ if __name__ == "__main__":
             labeling_budget,
             num_interpretations,
             num_parameter_search,
+            program_with_pixels,
             query_id,
             run_id,
             num_workers,
@@ -164,79 +191,81 @@ if __name__ == "__main__":
             load_labeled_data,
             n_train_distill,
             selection_strategy,
+            selection_labels,
             allow_kwargs_in_udf,
+            save_udf_base_dir,
         )
         object_domain, relationship_domain, attribute_domain = up.get_active_domain()
         proposed_functions = up.propose(user_query)
         for udf_signature, udf_description in proposed_functions.items():
             # Step 2.a: generate semantic interpretations and implementations. Save the generated UDFs to disk
-            # udf_candidate_list = up.implement(udf_signature, udf_description)
-
             # Step 2.b: Distilled-model UDFs
-            model_udf = up.distill(udf_signature, udf_description) # one_object/two_objects with additional 'pred' column
+            # udf_candidate_list = up.implement(udf_signature, udf_description)
+            udf_candidate_list = up.implement(udf_signature, udf_description)
+            # TODO: remove **kwargs from the final implementation
+            # TODO: UDF with pixels needs to be materialized before being used in the query
 
             # # Step 3: Select the best UDF (determine the best UDF between model-based and program-based)
-            # TODO: always model-based for now
-            selected_udf_candidate = model_udf
-            # # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
-            # # First, retrieve the ground truth UDF
-            # if ask_for_gt_udf:
-            #     # Ask the user for gt_udf name
-            #     gt_udf_name = input(
-            #         'Please enter gt_udf_name (options: "gt_near.gt_x", "gt_far.gt_x", "gt_rightof.gt_x", "gt_behind.gt_x", "gt_location_right.gt_x", "gt_location_bottom.gt_x", "gt_color_brown.gt_x", "gt_color_purple.gt_x", "gt_color_cyan.gt_x", "gt_color_yellow.gt_x", "gt_shape_cylinder.gt_x", "gt_material_metal.gt_x", where x is a non-negative integer): '
-            #     )
-            # else:
-            #     # HACK: Use a LM to automatically resolve the ground truth UDF
-            #     # NOTE: Correctness is not guaranteed
-            #     udf_name, udf_vars = parse_signature(udf_signature)
-            #     if len(udf_vars) == 2:
-            #         gt_udf_candidates = ["near", "far", "rightof", "behind"]
-            #     else:
-            #         gt_udf_candidates = [
-            #             "location_right",
-            #             "location_bottom",
-            #             "color_brown",
-            #             "color_purple",
-            #             "color_cyan",
-            #             "color_yellow",
-            #             "shape_cylinder",
-            #             "material_metal",
-            #         ]
-            #     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-            #     gt_udf_embeddings = model.encode(gt_udf_candidates)
-            #     implemented_udf_embedding = model.encode([udf_name])
-            #     similarities = util.pytorch_cos_sim(
-            #         implemented_udf_embedding, gt_udf_embeddings
-            #     )[0]
-            #     gt_udf_name = "gt_{}.gt_0".format(gt_udf_candidates[similarities.argmax()])
-            #     logger.debug(
-            #         "similarities: {}".format(
-            #             [
-            #                 f"{gt_udf_candidate}: {similarity}"
-            #                 for gt_udf_candidate, similarity in zip(
-            #                     gt_udf_candidates, similarities
-            #                 )
-            #             ]
-            #         )
-            #     )
-            #     logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-            # selected_udf_candidate = up.select(gt_udf_name, udf_candidate_list)
+            # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
+            # First, retrieve the ground truth UDF
+            if ask_for_gt_udf:
+                # Ask the user for gt_udf name
+                gt_udf_name = input(
+                    'Please enter gt_udf_name (options: "near", "far", "right_of", "behind", "location_right", "location_bottom", "color_brown", "color_purple", "color_cyan", "color_yellow", "shape_cylinder", "material_metal"): '
+                )
+            else:
+                # HACK: Use a LM to automatically resolve the ground truth UDF
+                # NOTE: Correctness is not guaranteed
+                udf_name, udf_vars = parse_signature(udf_signature)
+                if len(udf_vars) == 2:
+                    gt_udf_candidates = ["near", "far", "right_of", "behind"]
+                else:
+                    gt_udf_candidates = [
+                        "location_right",
+                        "location_bottom",
+                        "color_brown",
+                        "color_purple",
+                        "color_cyan",
+                        "color_yellow",
+                        "shape_cylinder",
+                        "material_metal",
+                    ]
+                model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+                gt_udf_embeddings = model.encode(gt_udf_candidates)
+                implemented_udf_embedding = model.encode([udf_name])
+                similarities = util.pytorch_cos_sim(
+                    implemented_udf_embedding, gt_udf_embeddings
+                )[0]
+                gt_udf_name = gt_udf_candidates[similarities.argmax()]
+                logger.debug(
+                    "similarities: {}".format(
+                        [
+                            f"{gt_udf_candidate}: {similarity}"
+                            for gt_udf_candidate, similarity in zip(
+                                gt_udf_candidates, similarities
+                            )
+                        ]
+                    )
+                )
+                logger.info(f"Selected gt_udf_name: {gt_udf_name}")
+            # TODO: since we already precomputed the UDF results, we can directly retrieve them from the database
+            selected_udf_candidate = up.select(gt_udf_name, udf_candidate_list)
 
             semantic_interpretation = selected_udf_candidate.semantic_interpretation
             function_implementation = selected_udf_candidate.function_implementation
 
             # Assume now that the best UDF is the first one
             # best_impl = implemented_udfs[0]
-            # logger.info(
-            #     "Best: {}, implementation: {}".format(
-            #         udf_signature, selected_udf_candidate.function_implementation
-            #     )
-            # )
             logger.info(
                 "Best: {}, implementation: {}".format(
-                    udf_signature, "distilled model"
+                    udf_signature, selected_udf_candidate.function_implementation
                 )
             )
+            # logger.info(
+            #     "Best: {}, implementation: {}".format(
+            #         udf_signature, "distilled model"
+            #     )
+            # )
             # Step 5: Register the UDF
             new_udf = {
                 "signature": udf_signature,

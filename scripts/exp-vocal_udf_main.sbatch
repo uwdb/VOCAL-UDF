@@ -3,9 +3,10 @@
 #SBATCH --partition=gpu-a40
 #SBATCH --account=balazinska
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=10G
-#SBATCH --time=4:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:1
+#SBATCH --mem=100G
+#SBATCH --time=10:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"
 
 cat $0
@@ -33,7 +34,10 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --budget $budget \
         --num_interpretations $num_interpretations \
         --allow_kwargs_in_udf \
-        --num_parameter_search 20
+        --cpus 4 \
+        --save_labeled_data \
+        --n_train_distill 100 \
+        --selection_strategy "llm-decides"
 
 # --allow_kwargs_in_udf \
 # --num_parameter_search 20

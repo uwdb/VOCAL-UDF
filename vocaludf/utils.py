@@ -6,10 +6,59 @@ from vocaludf.parser import parse, parse_udf
 import json
 import logging
 import os
+from torch.utils.data import IterableDataset
+import torch
+import pandas as pd
+import math
+from typing import List
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+
+# TODO: We can also support video loading and feature extraction on the fly, without creating the parquet files,
+# since writing parquet files is the bottleneck right now.
+class PredImageDataset(IterableDataset):
+    def __init__(self, conn, n_obj, attribute_features_dir, relationship_features_dir):
+        self.conn = conn
+        self.n_obj = n_obj
+        self.attribute_features_dir = attribute_features_dir
+        self.relationship_features_dir = relationship_features_dir
+
+        if self.n_obj == 1:
+            self.files = self._get_files(attribute_features_dir)
+        else:
+            self.files = self._get_files(relationship_features_dir)
+        self.num_files = len(self.files)
+        self.start = 0
+        self.end = self.num_files
+
+    def _get_files(self, features_dir, extension=".parquet") -> List[str]:
+        all_files = os.listdir(features_dir)
+        matched_files = sorted([os.path.join(features_dir, f) for f in all_files if f.endswith(extension)])
+        return matched_files
+
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:  # single-process data loading, return the full iterator
+            iter_start = self.start
+            iter_end = self.end
+        else: # in a worker process
+            # split workload
+            per_worker = int(math.ceil((self.end - self.start) / float(worker_info.num_workers)))
+            worker_id = worker_info.id
+            iter_start = self.start + worker_id * per_worker
+            iter_end = min(iter_start + per_worker, self.end)
+        for file in self.files[iter_start:iter_end]:
+            df = pd.read_parquet(file)
+
+            feature_col = df["feature"].values
+            metadata = df.drop('feature', axis=1)
+
+            for (_, row), feature in zip(metadata.iterrows(), feature_col):
+                yield row.to_dict(), torch.tensor(feature, dtype=torch.float32)
+
 
 def parse_signature(signature):
     """

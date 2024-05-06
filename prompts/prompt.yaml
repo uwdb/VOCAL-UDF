@@ -25,11 +25,29 @@ verify_udfs: |
   ```json
   {"function(args)": "description"}
   ```
+decide_udf_type:
+  overall: |
+    You are tasked with creating a solution to determine ``{{udf_description}}''. You can choose to use either a python function or a computer vision model.
+  code_without_pixels: |
+    1. Python function: This approach is suitable for tasks that can be determined based on any of the following:
+        - Existing concepts of objects. You can only leverage concepts from the following predefined list: {{available_concepts}}. These concepts are pre-extracted for each object in the image. Concepts not listed are not available.
+        - Bounding box coordinates of objects.
+        - However, you cannot utilize pixel values in the image for this task.
+  code_with_pixels: |
+    1. Python function: This approach is suitable for tasks that can be determined based on any of the following:
+        - Existing concepts of objects. You can only leverage concepts from the following predefined list: {{available_concepts}}. These concepts are pre-extracted for each object in the image. Concepts not listed are not available.
+        - Bounding box coordinates of objects.
+        - Statistical analysis of pixel values in the image using computer vision libraries.
+        - Predefined models for image captioning, visual question answering, and depth estimation.
+  model: |
+    2. Computer vision model: This approach is suitable for tasks that require understanding the visual content and contextual interpretation of the image.
+  output: |
+    Please specify your choice by responding with 'programUDF' to use the Python function or 'modelUDF' to use the computer vision model. Choose the approach that you believe will achieve the highest accuracy for the task. Consider only the effectiveness of each approach without concern for computational resources, time, or other constraints. Please respond with the answer only, and do not output any other responses or any explanations.
 generate_udfs:
   overall: |
     Generate {{num_interpretations}} Python functions with different, diverse semantic interpretations for the following Python task. Each generation should include the semantic interpretation and the Python function implementation, formatted as a dictionary. The response should strictly adhere to the formats described below:
   task: |
-    - Task: Write a python function called `py_{{udf_signature}}` that determines {{udf_description}}.
+    - Task: Write a python function called `py_{{udf_signature}}` that determines ``{{udf_description}}''.
   details: |
     - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
     - Prioritize generating functions that are likely to see frequent use, starting with the most common.
@@ -164,6 +182,7 @@ generate_udfs:
   inputs_with_pixels_and_optional_kwargs:
     attribute: |
       - The input to the function contains the following parameters:
+          - img: np.ndarray. The image in the RGB color space.
           - {{o1}}_oname: str. The class name of the object.
           - {{o1}}_x1: int. The x-coordinate of the top-left corner of the bounding box of the object.
           - {{o1}}_y1: int. The y-coordinate of the top-left corner of the bounding box of the object.
@@ -178,8 +197,11 @@ generate_udfs:
       - Available attribute names: {{attribute_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
+      - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
+      - You also have access to the following functions to use in your implementation (use them only when needed):
     relationship: |
       - The input to the function contains the following parameters:
+          - img: np.ndarray. The image in the RGB color space.
           - {{o1}}_oname: str. The class name of object {{o1}}.
           - {{o1}}_x1: int. The x-coordinate of the top-left corner of the bounding box of object {{o1}}.
           - {{o1}}_y1: int. The y-coordinate of the top-left corner of the bounding box of object {{o1}}.
@@ -203,6 +225,8 @@ generate_udfs:
       - Available relationship names: {{relationship_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
+      - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
+      - You also have access to the following functions to use in your implementation (use them only when needed):
   pretrained_model_list: |
           - image_captioning(image: np.ndarray) -> str: It takes an image in NumPy array and generates a text caption of the image.
           - visual_question_answering(image: np.ndarray, question: str) -> str: It takes an image in NumPy array and a question about the image, and generates an answer to the question.
