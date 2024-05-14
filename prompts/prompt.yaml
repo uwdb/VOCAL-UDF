@@ -15,7 +15,7 @@ parse_query: |
 force_parse_query: |
   For text-to-DSL translation tasks, only use the functions you have been provided with. Reply TERMINATE when the text is successfully translated into the DSL and verified by the provided function. The predicates MUST be selected from the provided functions. Think step by step to resolve the user's request. If you think the user's request cannot be resolved using the provided functions, try your best to translate it into the DSL that best approximates the user's intent.
 propose_udfs: |
-  For function proposal tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done. Please propose the new functions that are necessary to parse the user query.
+  For function proposal tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done. Please propose the new functions that are necessary to parse the user query, and also include a brief description for each proposed function that explains its purpose and context as described in the query.
   Let's think step by step. Based on the existing functions, determine what new functions are needed. The proposed function must follow the format. Don't propose functions that contain changes in states. If you have those, propose a separate function for each state instead. For example, do not propose a function MergeFromAIntoB(o0) that checks whether an object o0 merges from lane A to lane B because it contains two states: o0 is in lane A and o0 is in lane B. Instead, replace it with two separate functions: InLane_A(o0) and InLane_B(o0). Propose as few functions as possible while ensuring that the user's intent can be precisely captured.
 verify_udfs: |
   You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
@@ -34,6 +34,11 @@ decide_udf_type:
         - Bounding box coordinates of objects.
         - However, you cannot utilize pixel values in the image for this task.
   code_with_pixels: |
+    1. Python function: This approach is suitable for tasks that can be determined based on any of the following:
+        - Existing concepts of objects. You can only leverage concepts from the following predefined list: {{available_concepts}}. These concepts are pre-extracted for each object in the image. Concepts not listed are not available.
+        - Bounding box coordinates of objects.
+        - Statistical analysis of pixel values in the image using computer vision libraries.
+  code_with_pixels_and_pretrained_models: |
     1. Python function: This approach is suitable for tasks that can be determined based on any of the following:
         - Existing concepts of objects. You can only leverage concepts from the following predefined list: {{available_concepts}}. These concepts are pre-extracted for each object in the image. Concepts not listed are not available.
         - Bounding box coordinates of objects.
@@ -96,7 +101,7 @@ generate_udfs:
   inputs_with_pixels:
     attribute: |
       - The input to the function contains the following parameters:
-          - img: np.ndarray. The image in the RGB color space.
+          - img: np.ndarray of shape (H, W, C). The image is in the RGB color space, where H is the height, W is the width, and C is the number of channels.
           - {{o1}}_oname: str. The class name of the object.
           - {{o1}}_x1: int. The x-coordinate of the top-left corner of the bounding box of the object.
           - {{o1}}_y1: int. The y-coordinate of the top-left corner of the bounding box of the object.
@@ -110,10 +115,9 @@ generate_udfs:
       - Available attribute names: {{attribute_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
-      - You also have access to the following functions to use in your implementation (use them only when needed):
     relationship: |
       - The input to the function contains the following parameters:
-          - img: np.ndarray. The image in the RGB color space.
+          - img: np.ndarray of shape (H, W, C). The image is in the RGB color space, where H is the height, W is the width, and C is the number of channels.
           - {{o1}}_oname: str. The class name of object {{o1}}.
           - {{o1}}_x1: int. The x-coordinate of the top-left corner of the bounding box of object {{o1}}.
           - {{o1}}_y1: int. The y-coordinate of the top-left corner of the bounding box of object {{o1}}.
@@ -136,7 +140,6 @@ generate_udfs:
       - Available relationship names: {{relationship_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
-      - You also have access to the following functions to use in your implementation (use them only when needed):
   inputs_with_optional_kwargs:
     attribute: |
       - The input to the function contains the following parameters:
@@ -182,7 +185,7 @@ generate_udfs:
   inputs_with_pixels_and_optional_kwargs:
     attribute: |
       - The input to the function contains the following parameters:
-          - img: np.ndarray. The image in the RGB color space.
+          - img: np.ndarray of shape (H, W, C). The image is in the RGB color space, where H is the height, W is the width, and C is the number of channels.
           - {{o1}}_oname: str. The class name of the object.
           - {{o1}}_x1: int. The x-coordinate of the top-left corner of the bounding box of the object.
           - {{o1}}_y1: int. The y-coordinate of the top-left corner of the bounding box of the object.
@@ -198,10 +201,9 @@ generate_udfs:
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
       - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
-      - You also have access to the following functions to use in your implementation (use them only when needed):
     relationship: |
       - The input to the function contains the following parameters:
-          - img: np.ndarray. The image in the RGB color space.
+          - img: np.ndarray of shape (H, W, C). The image is in the RGB color space, where H is the height, W is the width, and C is the number of channels.
           - {{o1}}_oname: str. The class name of object {{o1}}.
           - {{o1}}_x1: int. The x-coordinate of the top-left corner of the bounding box of object {{o1}}.
           - {{o1}}_y1: int. The y-coordinate of the top-left corner of the bounding box of object {{o1}}.
@@ -226,11 +228,11 @@ generate_udfs:
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
       - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
-      - You also have access to the following functions to use in your implementation (use them only when needed):
   pretrained_model_list: |
-          - image_captioning(image: np.ndarray) -> str: It takes an image in NumPy array and generates a text caption of the image.
-          - visual_question_answering(image: np.ndarray, question: str) -> str: It takes an image in NumPy array and a question about the image, and generates an answer to the question.
-          - depth_estimation(image: np.ndarray) -> np.ndarray: It takes an image in NumPy array and generates a depth map of the image.
+      - You also have access to the following functions to use in your implementation (use them only when needed):
+          - image_captioning(image: np.ndarray) -> str: It takes an image in NumPy array with shape (H, W, C) and generates a text caption of the image. The image is in the RGB color space, and H is the height, W is the width, and C is the number of channels.
+          - visual_question_answering(image: np.ndarray, question: str) -> str: It takes an image in NumPy array with shape (H, W, C) and a question about the image, and generates an answer to the question. The image is in the RGB color space, and H is the height, W is the width, and C is the number of channels.
+          - depth_estimation(image: np.ndarray) -> np.ndarray: It takes an image in NumPy array with shape (H, W, C) and generates a depth map of the image. The image is in the RGB color space, and H is the height, W is the width, and C is the number of channels.
   comments: |
     - The function should only contain the implementation itself, with no other comments, inline comments, syntax highlighter, explanations, reasoning, or dialogue.
   output: |

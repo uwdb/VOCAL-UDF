@@ -9,17 +9,40 @@ import argparse
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
 from vocaludf.query_parser import QueryParser
-from vocaludf.udf_proposer import UDFProposer, CodeUDFWithPixelsProposer
+from vocaludf.udf_proposer import UDFProposer
 from vocaludf.query_executor import QueryExecutor
 import duckdb
+import sys
+import resource
 
 # logging.basicConfig()
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+class StreamToLogger(object):
+    """
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
+    def __init__(self, logger, level):
+       self.logger = logger
+       self.level = level
+       self.linebuf = ''
+
+    def write(self, buf):
+       for line in buf.rstrip().splitlines():
+          self.logger.log(self.level, line.rstrip())
+
+    def flush(self):
+        pass
+
+def exception_hook(exc_type, exc_value, exc_traceback, logger=logger):
+    logger.error(
+        "Uncaught exception",
+        exc_info=(exc_type, exc_value, exc_traceback)
+    )
+
 if __name__ == "__main__":
-    # python main.py --query_id 0 --run_id 0 --dataset "clevrer" --budget 10 --num_interpretations 10
-    # python main.py --query_id 1 --run_id 0 --dataset "clevrer" --budget 10 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 10 --cpus 8 --save_labeled_data --n_train_distill 20
+    # python main.py --query_id 3 --run_id 0 --dataset "clevrer" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --cpus 4 --save_labeled_data --n_train_distill 100 --selection_strategy "llm" --selection_labels "user"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -34,6 +57,7 @@ if __name__ == "__main__":
     parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
     parser.add_argument("--program_with_pixels", action="store_true", help="program with pixels")
+    parser.add_argument("--program_with_pretrained_models", action="store_true", help="program with pretrained models")
     parser.add_argument("--save_generated_udf", action="store_true", help="save generated UDF to file")
     parser.add_argument("--cpus", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
@@ -52,6 +76,9 @@ if __name__ == "__main__":
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
     program_with_pixels = args.program_with_pixels
+    program_with_pretrained_models = args.program_with_pretrained_models
+    if program_with_pretrained_models:
+        assert program_with_pixels, "program_with_pretrained_models requires program_with_pixels"
     save_generated_udf = args.save_generated_udf
     num_workers = args.cpus
     save_labeled_data = args.save_labeled_data
@@ -64,20 +91,23 @@ if __name__ == "__main__":
     elif selection_strategy == "model":
         assert selection_labels == "none"
 
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}".format(
+        num_interpretations,
+        num_parameter_search,
+        allow_kwargs_in_udf,
+        program_with_pixels,
+        program_with_pretrained_models,
+        n_train_distill,
+        selection_strategy,
+        selection_labels,
+        labeling_budget,
+    )
+
     save_udf_base_dir = os.path.join(
         config["output_dir"],
         "udf_generation",
         dataset,
-        "ninterp={}-nparams={}-kwargs={}-pixels={}-ntrain_distill={}-selection={}-labels={}-budget={}".format(
-            num_interpretations,
-            num_parameter_search,
-            allow_kwargs_in_udf,
-            program_with_pixels,
-            n_train_distill,
-            selection_strategy,
-            selection_labels,
-            labeling_budget,
-        ),
+        config_name,
         f"qid={query_id}",
         f"run={run_id}",
     )
@@ -100,36 +130,32 @@ if __name__ == "__main__":
         config["log_dir"],
         "udf_generation",
         dataset,
-        (
-            "budget-{}_ninterp-{}_nparams-{}_with_kwargs".format(
-                labeling_budget, num_interpretations, num_parameter_search
-            )
-            if allow_kwargs_in_udf
-            else "budget-{}_ninterp-{}_without_kwargs".format(
-                labeling_budget, num_interpretations
-            )
-        )
+        config_name,
     )
     os.makedirs(log_dir, exist_ok=True)
 
     # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid-{}_run-{}.log".format(query_id, run_id)), mode="w")
+    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
     file_handler.setLevel(logging.DEBUG)
 
     # Create a console handler with a higher log level
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
+    # console_handler = logging.StreamHandler()
+    # console_handler.setLevel(logging.DEBUG)
 
     # Create formatters and add them to the handlers
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
+    # console_handler.setFormatter(formatter)
 
     # Add the handlers to the logger
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+
+    # logger.addHandler(console_handler)
+    sys.stdout = StreamToLogger(logger, logging.INFO)
+    sys.stderr = StreamToLogger(logger, logging.ERROR)
+    sys.excepthook = exception_hook
 
     # Load LLM inference endpoints from an env variable or a file
     # See https://microsoft.github.io/autogen/docs/FAQ#set-your-api-endpoints
@@ -183,6 +209,7 @@ if __name__ == "__main__":
             num_interpretations,
             num_parameter_search,
             program_with_pixels,
+            program_with_pretrained_models,
             query_id,
             run_id,
             num_workers,
@@ -293,9 +320,9 @@ if __name__ == "__main__":
     try:
         parsed_program = qp.get_parsed_program()
         parsed_dsl = qp.get_parsed_query()
-        qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, num_workers)
+        qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers)
         qe.run(parsed_program, y_true, debug=False)
-        # TODO: Only register UDFs that are actually used in the query and when the F1 score is above a certain threshold
     except Exception as e:
-        logger.error("QueryExecutor Error: {}".format(e))
+        logger.exception("QueryExecutor Error: {}".format(e))
         logger.info("F1 score: 0")
+    logger.info("Peak memory usuage (in KB): {}".forma(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))

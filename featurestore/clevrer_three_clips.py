@@ -162,7 +162,7 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
         # (B, T, H, W, C) -> (B * T, C, H, W)
         # (B, T, H, W, C) -> (B * T, C, H, W)
         _B, _T, _H, _W, _C = batch['frames'].shape
-        frames = batch['frames'].permute(0, 1, 4, 2, 3).reshape(-1, _C, _H, _W).to(device)
+        frames = batch['frames'].permute(0, 1, 4, 2, 3).reshape(-1, _C, _H, _W).to(device) # Shape: (B', C, H, W)
         non_zero_mask = frames.sum(dim=(1, 2, 3)) != 0
         frames = frames[non_zero_mask]
         vids = torch.repeat_interleave(batch['vid'], _T)[non_zero_mask].tolist()

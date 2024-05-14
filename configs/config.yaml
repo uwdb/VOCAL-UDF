@@ -25,6 +25,7 @@ clevrer:
   width: 480
   dataset_size: 10000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/clevrer_three_clips/
+  video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/video_frames
   input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/3_new_udfs_labels.json
   onames:
     - object

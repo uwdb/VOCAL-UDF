@@ -11,6 +11,7 @@ import torch
 import pandas as pd
 import math
 from typing import List
+import numpy as np
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -23,21 +24,22 @@ class PredImageDataset(IterableDataset):
     def __init__(self, conn, n_obj, attribute_features_dir, relationship_features_dir):
         self.conn = conn
         self.n_obj = n_obj
-        self.attribute_features_dir = attribute_features_dir
-        self.relationship_features_dir = relationship_features_dir
+        self.features_dir = attribute_features_dir if n_obj == 1 else relationship_features_dir
 
-        if self.n_obj == 1:
-            self.files = self._get_files(attribute_features_dir)
-        else:
-            self.files = self._get_files(relationship_features_dir)
+        self.files = self._get_files(self.features_dir)
+
         self.num_files = len(self.files)
         self.start = 0
         self.end = self.num_files
-
+        self.len = duckdb.sql(f"SELECT COUNT(*) FROM '{self.features_dir}/*.parquet';").fetchall()[0][0]
+        self.columns = ['vid', 'fid', 'o1_oid', 'feature'] if n_obj == 1 else ['vid', 'fid', 'o1_oid', 'o2_oid', 'feature']
     def _get_files(self, features_dir, extension=".parquet") -> List[str]:
         all_files = os.listdir(features_dir)
         matched_files = sorted([os.path.join(features_dir, f) for f in all_files if f.endswith(extension)])
         return matched_files
+
+    def __len__(self):
+        return self.len
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -51,13 +53,13 @@ class PredImageDataset(IterableDataset):
             iter_start = self.start + worker_id * per_worker
             iter_end = min(iter_start + per_worker, self.end)
         for file in self.files[iter_start:iter_end]:
-            df = pd.read_parquet(file)
+            df = pd.read_parquet(file, columns=self.columns)
 
             feature_col = df["feature"].values
             metadata = df.drop('feature', axis=1)
 
             for (_, row), feature in zip(metadata.iterrows(), feature_col):
-                yield row.to_dict(), torch.tensor(feature, dtype=torch.float32)
+                yield np.array(row.to_numpy(dtype=int)), torch.tensor(feature, dtype=torch.float32)
 
 
 def parse_signature(signature):
@@ -607,10 +609,17 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
             elif i == len(signatures) - 1: # The full query predicates it as positive
                 cached_output_vids.append(vid)
 
+    temp_tables = []
     # select input videos
-    parameters = ','.join('?' for _ in filtered_vids)
-    conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid < {input_vids};")
-    conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid < {input_vids};")
+    if isinstance(input_vids, int):
+        conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid < {input_vids};")
+        conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid < {input_vids};")
+    else:
+        parameters = ','.join('?' for _ in filtered_vids)
+        conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid = ANY([{parameters}]);", filtered_vids)
+        conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid = ANY([{parameters}]);", filtered_vids)
+    temp_tables.append("obj_attr_filtered")
+    temp_tables.append("rel_filtered")
     # Obj_filtered = conn.execute("SELECT * FROM {inputs_table_name} WHERE vid = ANY([{parameters}]);".format(inputs_table_name=inputs_table_name, parameters=parameters), filtered_vids).fetchdf()
     # print("here1")
     # conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_filtered ON Obj_filtered (vid, fid);")
@@ -693,6 +702,7 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
                     v1 = variables[1]
                     pred_table = f"{v0}_{predicate}_{v1}"
                     table_list.append(f"rel_filtered as {pred_table}")
+                    # TODO: add "img" to the input of the UDF, or materialize the UDF
                     where_clauses.append(f"""
                         {v0}.vid = {pred_table}.vid
                         and {v0}.fid = {pred_table}.fid
@@ -706,66 +716,89 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
         # [where condition] Different obj_attr_filtered tables should have different oids
         for var_pair in itertools.combinations(encountered_variables_current_graph, 2):
             where_clauses.append("{}.o1_oid <> {}.o1_oid".format(var_pair[0], var_pair[1]))
-        where_clauses = " and ".join(where_clauses)
-        fields = "{v}.vid as vid, {v}.fid as fid, ".format(v=encountered_variables_current_graph[0])
-        fields += ", ".join(["{v}.o1_oid as {v}_oid".format(v=v) for v in encountered_variables_current_graph])
-        table_str = ", ".join(table_list)
-        sql_string = f"""
-            CREATE TEMPORARY TABLE g{graph_idx} AS
-            SELECT {fields}
-            FROM {table_str}
-            WHERE {where_clauses};
-        """
-        logger.debug(sql_string)
-        conn.execute(sql_string)
         # print("execute for unseen videos: ", time.time() - _start_execute)
         # print("Time for graph {}: {}".format(graph_idx, time.time() - _start))
 
         if graph_idx > 0:
+            fields = "{v}.vid as vid, {v}.fid as fid".format(v=encountered_variables_current_graph[0])
+            # fields += ", ".join(["{v}.o1_oid as {v}_oid".format(v=v) for v in encountered_variables_current_graph])
             obj_union = copy.deepcopy(encountered_variables_prev_graphs)
             obj_union_fields = []
             obj_intersection_fields = []
             for v in encountered_variables_prev_graphs:
-                obj_union_fields.append("t0.{}_oid".format(v))
+                obj_union_fields.append(f"t0.{v}_oid as {v}_oid")
             for v in encountered_variables_current_graph:
                 if v in encountered_variables_prev_graphs:
-                    obj_intersection_fields.append("t0.{v}_oid = t1.{v}_oid".format(v=v))
+                    obj_intersection_fields.append(f"t0.{v}_oid = {v}.o1_oid")
                 else:
                     for u in encountered_variables_prev_graphs:
-                        obj_intersection_fields.append("t0.{u}_oid <> t1.{v}_oid".format(u=u, v=v))
+                        obj_intersection_fields.append(f"t0.{u}_oid <> {v}.o1_oid")
                     obj_union.append(v)
-                    obj_union_fields.append("t1.{}_oid".format(v))
+                    obj_union_fields.append(f"{v}.o1_oid as {v}_oid")
             obj_union_fields = ", ".join(obj_union_fields)
             obj_intersection_fields = " and ".join(obj_intersection_fields)
-            sql_string = """
-            CREATE TEMPORARY TABLE g{graph_idx}_filtered AS (
-                SELECT t0.vid, t1.fid, {obj_union_fields}
-                FROM g{graph_idx_prev}_contiguous t0, g{graph_idx} t1
-                WHERE t0.vid = t1.vid AND {obj_intersection_fields} AND t0.fid < t1.fid
-            );
-            """.format(graph_idx=graph_idx, graph_idx_prev=graph_idx-1, obj_union_fields=obj_union_fields, obj_intersection_fields=obj_intersection_fields)
+            where_clauses.append(f"""
+                t0.vid = {encountered_variables_current_graph[0]}.vid
+                AND {obj_intersection_fields}
+                AND t0.fid < {encountered_variables_current_graph[0]}.fid
+            """)
+            where_clauses = " and ".join(where_clauses)
+            table_list.append(f"g{graph_idx-1}_contiguous t0")
+            table_str = ", ".join(table_list)
+            sql_string = f"""
+                CREATE TEMPORARY TABLE g{graph_idx} AS
+                SELECT DISTINCT {fields}, {obj_union_fields}
+                FROM {table_str}
+                WHERE {where_clauses};
+            """
             logger.debug(sql_string)
             conn.execute(sql_string)
+            temp_tables.append(f"g{graph_idx}")
+            # sql_string = """
+            # CREATE TEMPORARY TABLE g{graph_idx}_filtered AS (
+            #     SELECT DISTINCT t0.vid, t1.fid, {obj_union_fields}
+            #     FROM g{graph_idx_prev}_contiguous t0, g{graph_idx} t1
+            #     WHERE t0.vid = t1.vid AND {obj_intersection_fields} AND t0.fid < t1.fid
+            # );
+            # """.format(graph_idx=graph_idx, graph_idx_prev=graph_idx-1, obj_union_fields=obj_union_fields, obj_intersection_fields=obj_intersection_fields)
+            # logger.debug(sql_string)
+            # conn.execute(sql_string)
+            # temp_tables.append(f"g{graph_idx}_filtered")
         else:
+            fields = "{v}.vid as vid, {v}.fid as fid, ".format(v=encountered_variables_current_graph[0])
+            fields += ", ".join(["{v}.o1_oid as {v}_oid".format(v=v) for v in encountered_variables_current_graph])
+            where_clauses = " and ".join(where_clauses)
+            table_str = ", ".join(table_list)
+            sql_string = f"""
+                CREATE TEMPORARY TABLE g{graph_idx} AS
+                SELECT DISTINCT {fields}
+                FROM {table_str}
+                WHERE {where_clauses};
+            """
+            logger.debug(sql_string)
+            conn.execute(sql_string)
+            temp_tables.append(f"g{graph_idx}")
             obj_union = encountered_variables_current_graph
 
         # Generate scene graph sequence:
-        table_name = "g{}_filtered".format(graph_idx) if graph_idx > 0 else "g{}".format(graph_idx)
+        # table_name = "g{}_filtered".format(graph_idx) if graph_idx > 0 else "g{}".format(graph_idx)
+        table_name = f"g{graph_idx}"
         obj_union_fields = ", ".join(["{}_oid".format(v) for v in obj_union])
         sql_string = """
             CREATE TEMPORARY TABLE g{graph_idx}_windowed AS (
-            SELECT vid, fid, {obj_union_fields},
+            SELECT DISTINCT vid, fid, {obj_union_fields},
             lead(fid, {duration_constraint} - 1, 0) OVER (PARTITION BY vid, {obj_union_fields} ORDER BY fid) as fid_offset
             FROM {table_name}
         );
         """.format(graph_idx=graph_idx, duration_constraint=duration_constraint, obj_union_fields=obj_union_fields, table_name=table_name)
         logger.debug(sql_string)
         conn.execute(sql_string)
+        temp_tables.append(f"g{graph_idx}_windowed")
         # print("windowed: ", time.time() - _start_windowed)
 
         sql_string = """
             CREATE TEMPORARY TABLE g{graph_idx}_contiguous AS (
-            SELECT vid, {obj_union_fields}, min(fid_offset) AS fid
+            SELECT DISTINCT vid, {obj_union_fields}, min(fid_offset) AS fid
             FROM g{graph_idx}_windowed
             WHERE fid_offset = fid + ({duration_constraint} - 1)
             GROUP BY vid, {obj_union_fields}
@@ -773,6 +806,7 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
         """.format(graph_idx=graph_idx, obj_union_fields=obj_union_fields, duration_constraint=duration_constraint)
         logger.debug(sql_string)
         conn.execute(sql_string)
+        temp_tables.append(f"g{graph_idx}_contiguous")
         conn.execute("SELECT DISTINCT vid FROM g{}_contiguous".format(graph_idx))
         res = conn.fetchall()
         output_vids = [row[0] for row in res]
@@ -785,5 +819,7 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
         encountered_variables_prev_graphs = obj_union
         encountered_variables_current_graph = []
     output_vids.extend(cached_output_vids)
-
+    # Drop tables
+    for temp_table in temp_tables:
+        conn.execute(f"DROP TABLE {temp_table}")
     return output_vids, new_memo

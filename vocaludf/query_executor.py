@@ -8,7 +8,7 @@ from vocaludf.utils import (
     parse_signature,
     PredImageDataset,
 )
-from vocaludf.pretrained_model_api import image_captioning, image_classification, visual_question_answering, object_detection, depth_estimation
+from vocaludf.pretrained_model_api import image_captioning, visual_question_answering, depth_estimation
 import time
 import duckdb
 import logging
@@ -21,15 +21,71 @@ import math
 import pandas as pd
 from collections import defaultdict
 from tqdm import tqdm
+import sys
 import numpy as np
+from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from itertools import repeat
+from nvidia.dali import pipeline_def
+import nvidia.dali.fn as fn
+import nvidia.dali.types as types
+from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
+
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+def VideoFrameDaliDataloader(
+    vids,
+    sequence_length=64,
+    video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/",
+    device='gpu',
+    batch_size=None,
+    num_threads=None,
+):
+    assert device == 'gpu', 'dali video_resize only supports gpu backend'
+
+    video_files = [
+        os.path.join(
+            video_directory,
+            f"video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}",
+            f"video_{str(vid).zfill(5)}.mp4",
+        )
+        for vid in vids
+    ]
+
+    @pipeline_def
+    def video_pipe(filenames, vids):
+        videos, labels, start_frame_num = fn.readers.video(
+            device="gpu",
+            filenames=filenames,
+            # the only "boosting parameter" is the sequence_length: https://github.com/NVIDIA/DALI/issues/4498
+            sequence_length=sequence_length,
+            pad_sequences=True,
+            # shard_id=0,
+            # num_shards=1,
+            dtype=types.UINT8,
+            random_shuffle=False,
+            initial_fill=None, # Only relevant when shuffle=True
+            file_list_include_preceding_frame=False, # Quiet warning about default changing
+            dont_use_mmap=True,
+            skip_vfr_check=True,
+            enable_frame_num=True,
+            labels=vids,
+            name='reader',
+        )
+        return videos, labels, start_frame_num
+
+    pipe = video_pipe(batch_size=batch_size, num_threads=num_threads, device_id=0, filenames=video_files, vids=vids)
+    pipe.build()
+    return pipe
+
+
 class QueryExecutor:
-    def __init__(self, config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_udf_names, on_the_fly_udf_names, num_workers):
+    def __init__(self, config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_udf_names, on_the_fly_udf_names, program_with_pixels, num_workers):
         self.config = config
         self.dataset = dataset
         self.object_domain = object_domain
@@ -46,15 +102,24 @@ class QueryExecutor:
         logger.info(f"available_udf_names: {self.available_udf_names}")
         logger.info(f"materialized_udf_names: {self.materialized_udf_names}")
         logger.info(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")
+        self.program_with_pixels = program_with_pixels
         self.attribute_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "attribute")
         self.relationship_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "relationship")
         self.num_workers = num_workers
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
+        self.init_table()
         self.materialized_udfs = {}
         for func in self.registered_functions:
             signature = func["signature"]
-            udf_name, _ = parse_signature(signature)
-            if func.get("semantic_interpretation", "") == "model":
+            udf_name, udf_vars = parse_signature(signature)
+            if func.get("semantic_interpretation", "") == "dummy":
+                if len(udf_vars) == 1:
+                    df = self.conn.execute(f"SELECT vid, fid, o1_oid, 1 as pred FROM one_object").df()
+                else:
+                    df = self.conn.execute(f"SELECT vid, fid, o1_oid, o2_oid, 1 as pred FROM two_objects").df()
+                self.materialized_udfs[udf_name] = df
+            elif func.get("semantic_interpretation", "") == "model":
                 df = self.get_materialized_df(func)
                 self.materialized_udfs[udf_name] = df
             else:
@@ -84,6 +149,7 @@ class QueryExecutor:
                             raise ValueError("Unknown number of arguments in the function header: {}".format(len(python_func_args)))
                         python_arg_str = ", ".join([f"{arg}: {type}" for arg, type in zip(python_func_args, types)])
                         python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
+                        # python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
                         lines[i] = python_header_type_annotated
                         break
                 # Rejoin the modified lines into a single string
@@ -93,7 +159,7 @@ class QueryExecutor:
                     f"self.conn.create_function('{udf_name}', {python_func_name}_{suffix})"
                 )
             logger.debug(f"Registered function: {signature}")
-        self.init_table()
+
 
     def init_table(self):
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
@@ -163,21 +229,18 @@ class QueryExecutor:
         n_obj = len(udf_vars)
 
         pred_dataset = PredImageDataset(self.conn, n_obj, self.attribute_features_dir, self.relationship_features_dir)
-        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=256, num_workers=self.num_workers, shuffle=False)
+        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=262144, num_workers=self.num_workers, shuffle=False)
 
-        rows = defaultdict(list)
+        rows = []
         predictions = []
         with torch.no_grad():
-            for row, feature in tqdm(pred_loader):
+            for row, feature in tqdm(pred_loader, file=sys.stdout):
                 feature = feature.to(self.device)
                 pred = best_mlp_model(feature)
-                for k, v in row.items():
-                    rows[k].extend(v.tolist())
+                rows.extend(row.tolist())
                 predictions.extend(pred.cpu().tolist())
-                # logger.debug(using("profile"))
-                # print("row: {}, pred: {}".format(row, pred.cpu().tolist()))
-        # convert to tensor
-        df_with_pred = pd.DataFrame(rows)
+        columns = ['vid', 'fid', 'o1_oid'] if n_obj == 1 else ['vid', 'fid', 'o1_oid', 'o2_oid']
+        df_with_pred = pd.DataFrame(rows, columns=columns)
         df_with_pred['pred'] = predictions
 
         return df_with_pred
@@ -203,20 +266,55 @@ class QueryExecutor:
                 "Unknown dataset: {}".format(self.dataset)
             )
         logger.info("Running query: {}".format(program["query"]))
-        _start = time.time()
         memo = [{} for _ in range(72159)]  # Not used
 
-        result, new_memo = exec_func(
-            self.conn,
-            program["query"],
-            memo,
-            input_vids,
-            available_udf_names=self.available_udf_names,
-            materialized_udf_names=self.materialized_udf_names,
-            on_the_fly_udf_names=self.on_the_fly_udf_names
-        )
-        logger.info("Time to execute query: {}".format(time.time() - _start))
-        result = sorted(result)
+        if self.program_with_pixels:
+            _start = time.time()
+            # First, execute the query with all on-the-fly UDFs removed
+            query_program = self.remove_on_the_fly_udfs(program["query"])
+            result, new_memo = exec_func(
+                self.conn,
+                query_program,
+                memo,
+                input_vids,
+                available_udf_names=self.available_udf_names,
+                materialized_udf_names=self.materialized_udf_names,
+                on_the_fly_udf_names=[]
+            )
+            logger.info("Time to execute first query: {}".format(time.time() - _start))
+            result = sorted(result)
+            logger.info("output vids: {}".format(result))
+            self.materialize_on_the_fly_udfs(result)
+            for udf_name, df in self.materialized_udfs.items():
+                exec(f"{udf_name} = df")
+            _start = time.time()
+            # Then, execute the query with all on-the-fly UDFs over the result of the previous query
+            result, new_memo = exec_func(
+                self.conn,
+                program["query"],
+                memo,
+                result, # matching vids from the previous query
+                available_udf_names=self.available_udf_names,
+                materialized_udf_names=self.materialized_udf_names,
+                on_the_fly_udf_names=self.on_the_fly_udf_names
+            )
+            logger.info("Time to execute second query: {}".format(time.time() - _start))
+            result = sorted(result)
+            logger.info("output vids: {}".format(result))
+        else:
+            _start = time.time()
+            result, new_memo = exec_func(
+                self.conn,
+                program["query"],
+                memo,
+                input_vids,
+                available_udf_names=self.available_udf_names,
+                materialized_udf_names=self.materialized_udf_names,
+                on_the_fly_udf_names=self.on_the_fly_udf_names
+            )
+            logger.info("Time to execute query: {}".format(time.time() - _start))
+            result = sorted(result)
+            logger.info("output vids: {}".format(result))
         # logger.info("output vids: {}".format(result))
         y_pred = [1 if i in result else 0 for i in range(input_vids)]
 
@@ -225,3 +323,118 @@ class QueryExecutor:
         f1 = f1_score(y_true[:input_vids], y_pred)
         logger.info("F1 score: {}".format(f1))
         return y_pred
+
+    def remove_on_the_fly_udfs(self, query):
+        target_query = []
+        for q in query:
+            target_scene_graph = []
+            for sg in q["scene_graph"]:
+                if sg["predicate"] not in self.on_the_fly_udf_names:
+                    target_scene_graph.append(sg)
+            if len(target_scene_graph) > 0:
+                target_query.append({"scene_graph": target_scene_graph, "duration_constraint": q["duration_constraint"]})
+        return target_query
+
+    def materialize_on_the_fly_udfs(self, vids):
+        logger.info("Start materializing on-the-fly UDFs")
+
+        # Filter on-the-fly UDFs
+        on_the_fly_udfs = [func for func in self.registered_functions if parse_signature(func["signature"])[0] in self.on_the_fly_udf_names]
+
+        logger.info("filtering tables by matching vids")
+        # Group one_object and two_objects tables by vid and fid
+        parameters = ','.join('?' for _ in vids)
+        df_one_object = self.conn.execute(f"SELECT * FROM one_object WHERE vid = ANY([{parameters}])", vids).df()
+        df_one_object_grouped = df_one_object.groupby(['vid', 'fid'], as_index=False, sort=False)
+        df_two_objects = self.conn.execute(f"SELECT * FROM two_objects WHERE vid = ANY([{parameters}])", vids).df()
+        df_two_objects_grouped = df_two_objects.groupby(['vid', 'fid'], as_index=False, sort=False)
+        logger.info(f"df_one_object shape: {df_one_object.shape}")
+        logger.info(f"df_two_objects shape: {df_two_objects.shape}")
+        udf_map = {}
+        for func in on_the_fly_udfs:
+            udf_name, udf_vars = parse_signature(func["signature"])
+            n_obj = len(udf_vars)
+            py_func_name = "py_{}".format(udf_name)
+            exec(func["function_implementation"], globals())
+            udf_obj = globals()[py_func_name]
+            udf_map[udf_name] = (udf_obj, n_obj)
+
+        logger.info("building video dataloader")
+        # Create DALI pipeline for loading video frames
+        pipe = VideoFrameDaliDataloader(vids, sequence_length=128, batch_size=16, num_threads=1)
+        video_iterator = DALIGenericIterator(
+                [pipe],
+                ['frames', 'vid', 'fid'],
+                last_batch_policy=LastBatchPolicy.PARTIAL,
+                # Required or iterator loops indefinitely (https://github.com/NVIDIA/DALI/issues/2873)
+                # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
+                reader_name='reader'
+            )
+
+        udf_to_df_map = defaultdict(list)
+        udf_to_pred_map = defaultdict(list)
+
+        logger.info("executing on-the-fly UDFs")
+        loading_time = 0
+        transform_time = 0
+        udf_execution_time = 0
+        execution_time = 0
+        _start = time.time()
+        for batch in tqdm(video_iterator, file=sys.stdout, desc="load frames and materialize UDFs"):
+            loading_time += time.time() - _start
+            _start = time.time()
+            batch = batch[0]
+            _B, _T, _H, _W, _C = batch['frames'].shape
+            # logger.debug(f"batch['frames'].shape: {_B, _T, _H, _W, _C}")
+            frames = batch['frames'].reshape(-1, _H, _W, _C) # Shape: (B', H, W, C)
+            non_zero_mask = frames.sum(dim=(1, 2, 3)) != 0
+            frames = frames[non_zero_mask]
+            vids = torch.repeat_interleave(batch['vid'], _T)[non_zero_mask].tolist()
+            fids = (batch['fid'][:, None] + torch.arange(_T).to(self.device)).flatten()[non_zero_mask].tolist()
+            # logger.debug(f"frames.shape: {frames.shape}, len(vids): {len(vids)}, len(fids): {len(fids)}")
+            frames = frames.cpu().numpy()
+            transform_time += time.time() - _start
+            _start = time.time()
+            for udf_name, (udf_obj, n_obj) in udf_map.items():
+                for i in range(len(vids)):
+                    df_grouped = df_one_object_grouped if n_obj == 1 else df_two_objects_grouped
+                    if (vids[i], fids[i]) not in df_grouped.groups:
+                        continue
+                    df = df_grouped.get_group((vids[i], fids[i]))
+                    # Execute UDF and append results
+                    # NOTE: Due to data noise, multiple objects can have the same oid
+                    frames_broadcast = np.broadcast_to(frames[i], (len(df), *frames[i].shape))
+                    # logger.debug(f"frames[i].shape: {frames[i].shape}, frames_broadcast.shape: {frames_broadcast.shape}, df.shape: {df.shape}")
+                    _udf_exec_start = time.time()
+                    if n_obj == 1:
+                        udf_to_pred_map[udf_name].extend(list(self.executor.map(udf_obj, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"])))
+                        # df = df[["vid", "fid", "o1_oid", "pred"]]
+                    elif n_obj == 2:
+                        udf_to_pred_map[udf_name].extend(list(self.executor.map(udf_obj, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"])))
+                        # df = df[["vid", "fid", "o1_oid", "o2_oid", "pred"]]
+                    udf_execution_time += time.time() - _udf_exec_start
+                    udf_to_df_map[udf_name].append(df)
+            execution_time += time.time() - _start
+            _start = time.time()
+        logger.info(f"loading_time: {loading_time}")
+        logger.info(f"transform_time: {transform_time}")
+        logger.info(f"udf_execution_time: {udf_execution_time}")
+        logger.info(f"execution_time: {execution_time}")
+        # Concatenate and store materialized UDFs
+        for udf_name, dfs in udf_to_df_map.items():
+            n_obj = udf_map[udf_name][1]
+            df = pd.concat(dfs, ignore_index=True)
+            df["pred"] = udf_to_pred_map[udf_name]
+            if n_obj == 1:
+                df = df[["vid", "fid", "o1_oid", "pred"]]
+            elif n_obj == 2:
+                df = df[["vid", "fid", "o1_oid", "o2_oid", "pred"]]
+            self.materialized_udfs[udf_name] = df
+            self.materialized_udf_names.append(udf_name)
+            logger.info(f"Materialized UDF: {udf_name}, shape: {df.shape}")
+
+        self.on_the_fly_udf_names = []
+        logger.info("Finish materializing on-the-fly UDFs")
+        logger.info(f"available_udf_names: {self.available_udf_names}")
+        logger.info(f"materialized_udf_names: {self.materialized_udf_names}")
+        logger.info(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")
