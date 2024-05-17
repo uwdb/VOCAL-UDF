@@ -20,6 +20,8 @@ outputs/*
 data/clevr/*/*
 data/clevrer/*/*
 data/charades/*/*
+data/charades/object_bbox_and_relationship*
+data/charades/person_bbox*
 data/models/*
 data/gqa/*
 *.pt
