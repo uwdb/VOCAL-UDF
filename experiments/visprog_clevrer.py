@@ -7,6 +7,7 @@ if module_path not in sys.path:
 from PIL import Image
 from functools import partial
 
+from vocaludf.utils import StreamToLogger, exception_hook
 from visprog.engine.utils import ProgramGenerator, ProgramInterpreter
 from visprog.prompts.clevrer import create_prompt
 import argparse
@@ -18,6 +19,10 @@ import yaml
 import cv2
 import random
 
+
+logger = logging.getLogger("vocaludf")
+logger.setLevel(logging.DEBUG)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--use_precomputed', action='store_true', help='use precomputed object detection results')
@@ -26,7 +31,7 @@ if __name__ == "__main__":
     parser.add_argument('--run_id', type=int, help='run id')
     parser.add_argument('--question_id', type=int, help='question id')
     parser.add_argument('--task_name', type=str, help='task name')
-    parser.add_argument('--llm_model', type=str, default="gpt-3.5-turbo-instruct", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-1106-preview'])
+    parser.add_argument('--llm_model', type=str, default="gpt-3.5-turbo-instruct", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-turbo-2024-04-09'])
     args = parser.parse_args()
     use_precomputed = args.use_precomputed
     save_output = args.save_output
@@ -36,10 +41,42 @@ if __name__ == "__main__":
     task_name = args.task_name
     llm_model = args.llm_model
 
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-
     config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+
+    """
+    Set up logging
+    """
+    # Create a directory if it doesn't already exist
+    log_dir = os.path.join(
+        config["log_dir"],
+        "visprog",
+        'clevrer',
+        llm_model,
+    )
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Create a file handler that logs even debug messages
+    file_handler = logging.FileHandler(os.path.join(log_dir, f"task_{task_name}_run_{run_id}_question_{question_id}.log"), mode="w")
+    file_handler.setLevel(logging.DEBUG)
+
+    # Create a console handler with a higher log level
+    # console_handler = logging.StreamHandler()
+    # console_handler.setLevel(logging.DEBUG)
+
+    # Create formatters and add them to the handlers
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    file_handler.setFormatter(formatter)
+    # console_handler.setFormatter(formatter)
+
+    # Add the handlers to the logger
+    logger.addHandler(file_handler)
+
+    # logger.addHandler(console_handler)
+    sys.stdout = StreamToLogger(logger, logging.INFO)
+    sys.stderr = StreamToLogger(logger, logging.ERROR)
+    sys.excepthook = exception_hook
 
     # read json file
     with open(os.path.join(config['data_dir'], "clevrer", "3_new_udfs_labels.json"), "r") as f:
@@ -47,8 +84,8 @@ if __name__ == "__main__":
     question = data['questions'][question_id]['question']
     gt_positive_videos = data['questions'][question_id]['positive_videos']
     new_modules = data['questions'][question_id]['new_modules']
-    print(question)
-    print(new_modules)
+    logger.info(f"question: {question}")
+    logger.info(f"new_modules: {new_modules}")
 
     # Base modules
     module_list = ["LOC", "TRACK", "GRAY", "RED", "BLUE", "GREEN", "CUBE", "SPHERE", "RUBBER", "LEFTOF", "FRONTOF", "LEFT", "TOP", "EVENT", "BEFORE", "EVAL", "RESULT"]
@@ -61,7 +98,7 @@ if __name__ == "__main__":
         module_list = module_list + random.sample(new_modules, 1)
     elif "3" in task_name: # VisProg doesn't have access to 3 UDFs
         module_list = module_list
-    print("module_list", module_list)
+    logger.info(f"module_list: {module_list}")
     interpreter = ProgramInterpreter(dataset='clevrer', use_precomputed=use_precomputed, module_list=module_list)
 
     prompt_modules = '\n'.join(module_list)
@@ -79,7 +116,7 @@ if __name__ == "__main__":
 
     for retry in range(5):
         prog,_ = generator.generate(dict(question=question),retry)
-        print(prog)
+        logger.info(f"prog: {prog}")
 
         pred_positive_videos = []
         failed = 0
@@ -115,10 +152,10 @@ if __name__ == "__main__":
                 result, prog_state = interpreter.execute(prog,init_state,inspect=False)
                 if result == 'yes':
                     pred_positive_videos.append(vid)
-            print(pred_positive_videos)
+            logger.info(f"pred_positive_videos: {pred_positive_videos}")
             break
         except Exception as e:
-            print(e)
+            logger.exception(e)
             failed += 1
 
     pred_labels = []
@@ -133,27 +170,17 @@ if __name__ == "__main__":
     f1 = f1_score(gt_labels, pred_labels)
     precision = precision_score(gt_labels, pred_labels)
     recall = recall_score(gt_labels, pred_labels)
-    print("Accuracy: ", accuracy)
-    print("F1: ", f1)
-    print("Precision: ", precision)
-    print("Recall: ", recall)
-    print("# Failures: ", failed)
-    if save_output:
-        # Save the output
-        output = {
-            "question": question,
-            "prog": prog,
-            "gt_positive_videos": gt_positive_videos,
-            "pred_positive_videos": pred_positive_videos,
-            "accuracy": accuracy,
-            "f1": f1,
-            "precision": precision,
-            "recall": recall,
-            "failed": failed
-        }
-        # create output directory if not exists
-        if not os.path.exists(os.path.join(output_dir, 'clevrer', llm_model)):
-            os.makedirs(os.path.join(output_dir, 'clevrer', llm_model))
 
-        with open(os.path.join(output_dir, 'clevrer', llm_model, f"task_{task_name}_run_{run_id}_question_{question_id}.json"), "w") as f:
-            json.dump(output, f)
+    output = {
+        "question": question,
+        "prog": prog,
+        "gt_positive_videos": gt_positive_videos,
+        "pred_positive_videos": pred_positive_videos,
+        "accuracy": accuracy,
+        "f1": f1,
+        "precision": precision,
+        "recall": recall,
+        "failed": failed
+    }
+
+    logger.info(output)

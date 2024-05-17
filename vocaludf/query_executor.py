@@ -229,7 +229,7 @@ class QueryExecutor:
         n_obj = len(udf_vars)
 
         pred_dataset = PredImageDataset(self.conn, n_obj, self.attribute_features_dir, self.relationship_features_dir)
-        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=262144, num_workers=self.num_workers, shuffle=False)
+        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
 
         rows = []
         predictions = []
@@ -336,6 +336,13 @@ class QueryExecutor:
         return target_query
 
     def materialize_on_the_fly_udfs(self, vids):
+        def safe_udf(udf, *args, **kwargs):
+            try:
+                return udf(*args, **kwargs)
+            except Exception as e:
+                logger.exception(f"exec_udf_with_data Error: {e}")
+                return False  # Default value in case of error
+
         logger.info("Start materializing on-the-fly UDFs")
 
         # Filter on-the-fly UDFs
@@ -406,11 +413,12 @@ class QueryExecutor:
                     frames_broadcast = np.broadcast_to(frames[i], (len(df), *frames[i].shape))
                     # logger.debug(f"frames[i].shape: {frames[i].shape}, frames_broadcast.shape: {frames_broadcast.shape}, df.shape: {df.shape}")
                     _udf_exec_start = time.time()
+                    func = partial(safe_udf, udf_obj)
                     if n_obj == 1:
-                        udf_to_pred_map[udf_name].extend(list(self.executor.map(udf_obj, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"])))
+                        udf_to_pred_map[udf_name].extend(list(self.executor.map(func, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"])))
                         # df = df[["vid", "fid", "o1_oid", "pred"]]
                     elif n_obj == 2:
-                        udf_to_pred_map[udf_name].extend(list(self.executor.map(udf_obj, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"])))
+                        udf_to_pred_map[udf_name].extend(list(self.executor.map(func, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"])))
                         # df = df[["vid", "fid", "o1_oid", "o2_oid", "pred"]]
                     udf_execution_time += time.time() - _udf_exec_start
                     udf_to_df_map[udf_name].append(df)

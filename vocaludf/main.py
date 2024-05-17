@@ -3,7 +3,7 @@ import yaml
 import random
 import json
 import os
-from vocaludf.utils import parse_signature
+from vocaludf.utils import parse_signature, StreamToLogger, exception_hook
 import logging
 import argparse
 from sentence_transformers import SentenceTransformer, util
@@ -18,28 +18,6 @@ import resource
 # logging.basicConfig()
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
-
-class StreamToLogger(object):
-    """
-    Fake file-like stream object that redirects writes to a logger instance.
-    """
-    def __init__(self, logger, level):
-       self.logger = logger
-       self.level = level
-       self.linebuf = ''
-
-    def write(self, buf):
-       for line in buf.rstrip().splitlines():
-          self.logger.log(self.level, line.rstrip())
-
-    def flush(self):
-        pass
-
-def exception_hook(exc_type, exc_value, exc_traceback, logger=logger):
-    logger.error(
-        "Uncaught exception",
-        exc_info=(exc_type, exc_value, exc_traceback)
-    )
 
 if __name__ == "__main__":
     # python main.py --query_id 3 --run_id 0 --dataset "clevrer" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --cpus 4 --save_labeled_data --n_train_distill 100 --selection_strategy "llm" --selection_labels "user"
@@ -86,6 +64,9 @@ if __name__ == "__main__":
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
     selection_labels = args.selection_labels
+    if selection_strategy != "program":
+        assert program_with_pixels, "selection_strategy != 'program' requires program_with_pixels"
+
     if selection_strategy == "both":
         assert selection_labels != "none"
     elif selection_strategy == "model":
@@ -325,4 +306,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.exception("QueryExecutor Error: {}".format(e))
         logger.info("F1 score: 0")
-    logger.info("Peak memory usuage (in KB): {}".forma(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+    logger.info("Peak memory usuage (in KB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))

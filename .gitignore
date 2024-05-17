@@ -19,6 +19,7 @@ outputs/*
 *.so
 data/clevr/*/*
 data/clevrer/*/*
+data/charades/*/*
 data/models/*
 data/gqa/*
 *.pt

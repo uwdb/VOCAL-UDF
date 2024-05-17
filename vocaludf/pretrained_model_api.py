@@ -31,7 +31,7 @@ image_captioning_pipe = pipeline("image-to-text", model=MODEL_SELECTION["image_c
 # image_classification_processor = ViTImageProcessor.from_pretrained(MODEL_SELECTION["image_classification"])
 # image_classification_model = ViTForImageClassification.from_pretrained(MODEL_SELECTION["image_classification"])
 visual_question_answering_processor = BlipProcessor.from_pretrained(MODEL_SELECTION["visual_question_answering"])
-visual_question_answering_model = BlipForQuestionAnswering.from_pretrained(MODEL_SELECTION["visual_question_answering"], torch_dtype=torch.float16).to("cuda")
+visual_question_answering_model = BlipForQuestionAnswering.from_pretrained(MODEL_SELECTION["visual_question_answering"], torch_dtype=torch.float16).to(device)
 # object_detection_processor = DetrImageProcessor.from_pretrained(MODEL_SELECTION["object_detection"], revision="no_timm")
 # object_detection_model = DetrForObjectDetection.from_pretrained(MODEL_SELECTION["object_detection"], revision="no_timm")
 # image_segmentation_feature_extractor = transformers.MaskFormerFeatureExtractor.from_pretrained(MODEL_SELECTION["image_segmentation"])
@@ -85,7 +85,7 @@ def visual_question_answering(image: np.ndarray, question: str):  # alternative:
     raw_image = image
 
     inputs = processor(raw_image, question, return_tensors="pt").to(
-        "cuda", torch.float16
+        device, torch.float16
     )
     out = model.generate(**inputs)
     result = processor.decode(out[0], skip_special_tokens=True)

@@ -469,6 +469,8 @@ class UDFProposer:
             py_func_args = [f"{udf_vars[0]}_oname", f"{udf_vars[0]}_x1", f"{udf_vars[0]}_y1", f"{udf_vars[0]}_x2", f"{udf_vars[0]}_y2", f"{udf_vars[0]}_anames", "height", "width"]
         else:
             py_func_args = [f"{udf_vars[0]}_oname", f"{udf_vars[0]}_x1", f"{udf_vars[0]}_y1", f"{udf_vars[0]}_x2", f"{udf_vars[0]}_y2", f"{udf_vars[0]}_anames", f"{udf_vars[1]}_oname", f"{udf_vars[1]}_x1", f"{udf_vars[1]}_y1", f"{udf_vars[1]}_x2", f"{udf_vars[1]}_y2", f"{udf_vars[1]}_anames", f"{udf_vars[0]}_{udf_vars[1]}_rnames", f"{udf_vars[1]}_{udf_vars[0]}_rnames", "height", "width"]
+        if self.allow_kwargs_in_udf:
+            py_func_args.append("**kwargs")
         if self.program_with_pixels:
             py_func_args.insert(0, "img")
         py_func_signature = f"{udf_name}({', '.join(py_func_args)})"
@@ -519,7 +521,7 @@ class UDFProposer:
                 )["answer"][:self.num_interpretations]
                 for idx in range(len(implemented_udfs)):
                     implemented_udf = implemented_udfs[idx]
-                    implemented_udf = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, udf_description, n_obj, verify_syntax_correctness_base_prompt, self.program_with_pixels)
+                    implemented_udf = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, self.program_with_pixels)
                     implemented_udf["udf_name"] = udf_name
                     implemented_udf["udf_signature"] = udf_signature
                     implemented_udf["udf_description"] = udf_description
@@ -568,7 +570,7 @@ class UDFProposer:
 
         return udf_candidate_list
 
-    def verify_syntax_correctness(self, implemented_udf, udf_vars, udf_name, py_func_signature, udf_description, n_obj, verify_syntax_correctness_base_prompt, with_pixels, n_verify_samples=10):
+    def verify_syntax_correctness(self, implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, with_pixels, n_verify_samples=10):
         df_samples = self.construct_train_and_test_data(n_obj, n_verify_samples, with_images=self.program_with_pixels)
         verify_syntax_correctness_prompt = replace_slot(
             verify_syntax_correctness_base_prompt,
@@ -609,27 +611,16 @@ class UDFProposer:
                     )
                 # Verify if the function has the correct number of arguments
                 lines = implemented_udf["function_implementation"].split("\n")
-                for i, line in enumerate(lines):
+                for _, line in enumerate(lines):
                     if line.startswith('def '):
-                        python_func_args = line.split("(")[1].split(")")[0].split(",")
-                        if n_obj == 1 and not self.program_with_pixels and not self.allow_kwargs_in_udf:
-                            allowable_nargs = [8]
-                        elif n_obj == 1 and self.program_with_pixels and not self.allow_kwargs_in_udf:
-                            allowable_nargs = [9]
-                        elif n_obj == 1 and not self.program_with_pixels and self.allow_kwargs_in_udf:
-                            allowable_nargs = [8, 9]
-                        elif n_obj == 1 and self.program_with_pixels and self.allow_kwargs_in_udf:
-                            allowable_nargs = [9, 10]
-                        elif n_obj == 2 and not self.program_with_pixels and not self.allow_kwargs_in_udf:
-                            allowable_nargs = [16]
-                        elif n_obj == 2 and self.program_with_pixels and not self.allow_kwargs_in_udf:
-                            allowable_nargs = [17]
-                        elif n_obj == 2 and not self.program_with_pixels and self.allow_kwargs_in_udf:
-                            allowable_nargs = [16, 17]
-                        elif n_obj == 2 and self.program_with_pixels and self.allow_kwargs_in_udf:
-                            allowable_nargs = [17, 18]
-                        if len(python_func_args) not in allowable_nargs:
-                            messages.append({"role": "user", "content": "The function should contain {} arguments, but it contains {} arguments. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'.".format(allowable_nargs[0] if len(allowable_nargs) == 1 else f"either {allowable_nargs[0]} or {allowable_nargs[1]}", len(python_func_args))})
+                        generated_py_func_args = [arg.strip() for arg in line.split("(")[1].split(")")[0].split(",")]
+                        if len(generated_py_func_args) != len(py_func_args):
+                            messages.append({"role": "user", "content": f"Expected {len(py_func_args)} arguments, but got {len(generated_py_func_args)}. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
+                            break
+                        for i, (gt_arg, generated_arg) in enumerate(zip(py_func_args, generated_py_func_args)):
+                            if gt_arg != generated_arg:
+                                messages.append({"role": "user", "content": f"Expected {gt_arg} as argument #{i+1}, but got {generated_arg}. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
+                                break
                         break
                 py_func_name = "py_{}".format(udf_name)
                 exec(implemented_udf["function_implementation"], globals())
@@ -846,7 +837,12 @@ class UDFProposer:
         train_dataset, valid_dataset = torch.utils.data.random_split(train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id))
 
         class_counts = [sum(data["llm_label"] == i for data in self.labeled_data['train']) for i in range(2)]
-        self.class_weights = torch.tensor([1.0 / count for count in class_counts]).to(self.device)
+        try:
+            self.class_weights = torch.tensor([1.0 / count for count in class_counts]).to(self.device)
+        except ZeroDivisionError as e:
+            logger.exception("Error: {}\nclass_counts: {}".format(e, class_counts))
+            self.class_weights = torch.tensor([1.0, 1.0]).to(self.device)
+
         logger.debug("class_counts: {}, class_weights: {}".format(class_counts, self.class_weights))
 
         self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
@@ -1351,6 +1347,7 @@ class UDFProposer:
         mlp_model.eval()
         mlp_model.to(self.device)
 
+        logger.info("extracting features...")
         # extract image features
         transforms = T.Compose([
             # T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
@@ -1361,13 +1358,13 @@ class UDFProposer:
                 std=[0.26862954, 0.26130258, 0.27577711],
             ),
         ])
-        batch_size = 1024
+        batch_size = 256
         if n_obj == 1:
             features, idxs_to_predict = self.extract_features_batch_one_object(df, transforms, batch_size)
         else:
             features, idxs_to_predict = self.extract_features_batch_two_objects(df, transforms, batch_size)
-
-        batch_size = 262144
+        logger.info("predicting...")
+        batch_size = 65536
         predictions = []
         with torch.no_grad():
             for i in range(0, len(features), batch_size):
@@ -1394,9 +1391,7 @@ class UDFProposer:
 
             # Process each batch
             for i, (_, row) in enumerate(df.iloc[batch_start:batch_end].iterrows()):
-                vid = row["vid"]
-                fid = row["fid"]
-                frame = self.frame_processing_for_program(vid, fid)
+                frame = row["img"]
                 frames.append(frame)
                 idxs_to_predict.append(batch_start + i)
                 rois.append([i, row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"]])
@@ -1433,9 +1428,7 @@ class UDFProposer:
             batch_boxes = []
 
             for i, (_, row) in enumerate(df.iloc[batch_start:batch_end].iterrows()):
-                vid = row["vid"]
-                fid = row["fid"]
-                frame = self.frame_processing_for_program(vid, fid)
+                frame = row["img"]
                 frames.append(frame)
                 o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (320, 480))
                 o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], (320, 480))

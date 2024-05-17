@@ -1926,7 +1926,7 @@ class EventClevrInterpreter():
 class LocClevrerInterpreter(LocInterpreter):
     def __init__(self, use_precomputed):
         print(f'Registering {self.step_name} step')
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         with open(os.path.join(config['data_dir'], 'clevr', 'vocab_clevrer.json'), 'r') as f:
             vocab = json.load(f)
             obj2idx = vocab['object_name_to_idx']
