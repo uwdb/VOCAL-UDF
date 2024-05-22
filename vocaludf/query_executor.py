@@ -85,7 +85,7 @@ def VideoFrameDaliDataloader(
 
 
 class QueryExecutor:
-    def __init__(self, config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_udf_names, on_the_fly_udf_names, program_with_pixels, num_workers):
+    def __init__(self, config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_udf_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size):
         self.config = config
         self.dataset = dataset
         self.object_domain = object_domain
@@ -106,6 +106,8 @@ class QueryExecutor:
         self.attribute_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "attribute")
         self.relationship_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "relationship")
         self.num_workers = num_workers
+        self.pred_batch_size = pred_batch_size
+        self.dali_batch_size = dali_batch_size
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
         self.init_table()
@@ -229,7 +231,7 @@ class QueryExecutor:
         n_obj = len(udf_vars)
 
         pred_dataset = PredImageDataset(self.conn, n_obj, self.attribute_features_dir, self.relationship_features_dir)
-        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
+        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=self.pred_batch_size, num_workers=self.num_workers, shuffle=False)
 
         rows = []
         predictions = []
@@ -284,23 +286,24 @@ class QueryExecutor:
             logger.info("Time to execute first query: {}".format(time.time() - _start))
             result = sorted(result)
             logger.info("output vids: {}".format(result))
-            self.materialize_on_the_fly_udfs(result)
-            for udf_name, df in self.materialized_udfs.items():
-                exec(f"{udf_name} = df")
-            _start = time.time()
-            # Then, execute the query with all on-the-fly UDFs over the result of the previous query
-            result, new_memo = exec_func(
-                self.conn,
-                program["query"],
-                memo,
-                result, # matching vids from the previous query
-                available_udf_names=self.available_udf_names,
-                materialized_udf_names=self.materialized_udf_names,
-                on_the_fly_udf_names=self.on_the_fly_udf_names
-            )
-            logger.info("Time to execute second query: {}".format(time.time() - _start))
-            result = sorted(result)
-            logger.info("output vids: {}".format(result))
+            if len(self.on_the_fly_udf_names) > 0:
+                self.materialize_on_the_fly_udfs(result)
+                for udf_name, df in self.materialized_udfs.items():
+                    exec(f"{udf_name} = df")
+                _start = time.time()
+                # Then, execute the query with all on-the-fly UDFs over the result of the previous query
+                result, new_memo = exec_func(
+                    self.conn,
+                    program["query"],
+                    memo,
+                    result, # matching vids from the previous query
+                    available_udf_names=self.available_udf_names,
+                    materialized_udf_names=self.materialized_udf_names,
+                    on_the_fly_udf_names=self.on_the_fly_udf_names
+                )
+                logger.info("Time to execute second query: {}".format(time.time() - _start))
+                result = sorted(result)
+                logger.info("output vids: {}".format(result))
         else:
             _start = time.time()
             result, new_memo = exec_func(
@@ -368,7 +371,7 @@ class QueryExecutor:
 
         logger.info("building video dataloader")
         # Create DALI pipeline for loading video frames
-        pipe = VideoFrameDaliDataloader(vids, sequence_length=128, batch_size=16, num_threads=1)
+        pipe = VideoFrameDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
         video_iterator = DALIGenericIterator(
                 [pipe],
                 ['frames', 'vid', 'fid'],

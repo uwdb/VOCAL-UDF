@@ -100,6 +100,9 @@ class UDFProposer:
         prompt_config,
         config_list,
         registered_functions,
+        object_domain,
+        relationship_domain,
+        attribute_domain,
         dataset,
         labeling_budget,
         num_interpretations,
@@ -109,19 +112,20 @@ class UDFProposer:
         query_id,
         run_id,
         num_workers,
-        save_generated_udf,
         save_labeled_data,
         load_labeled_data,
         n_train_distill,
         selection_strategy,
         selection_labels,
         allow_kwargs_in_udf,
-        save_udf_base_dir,
     ):
         self.config = config
         self.prompt_config = prompt_config
         self.config_list = config_list
         self.registered_functions = registered_functions
+        self.object_domain = object_domain
+        self.relationship_domain = relationship_domain
+        self.attribute_domain = attribute_domain
         self.dataset = dataset
         self.labeling_budget = labeling_budget
         self.num_interpretations = num_interpretations
@@ -131,14 +135,11 @@ class UDFProposer:
         self.query_id = query_id
         self.run_id = run_id
         self.num_workers = num_workers
-        self.save_generated_udf = save_generated_udf
-        self.save_udf_base_dir = save_udf_base_dir
         self.selection_strategy = selection_strategy
         self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.set_active_domain()
 
         self.conn = duckdb.connect(
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
@@ -170,27 +171,6 @@ class UDFProposer:
         # self.clip_processor.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
 
         self.dim_in = self.clip_model.config.projection_dim
-
-    def set_active_domain(self):
-        object_domain = self.config[self.dataset]['onames']
-        relationship_domain = []
-        attribute_domain = []
-
-        for registered_function in self.registered_functions:
-            signature = registered_function["signature"]
-            registered_function_name, registered_function_vars = parse_signature(signature)
-            if len(registered_function_vars) == 2:
-                # Relationship UDF
-                relationship_domain.append(registered_function_name.lower())
-            else:
-                # Attribute UDF
-                attribute_domain.append(registered_function_name.lower())
-        self.object_domain = object_domain
-        self.relationship_domain = relationship_domain
-        self.attribute_domain = attribute_domain
-
-    def get_active_domain(self):
-        return self.object_domain, self.relationship_domain, self.attribute_domain
 
     def init_table(self):
         # TODO: use object_domain to filter out objects that are not in the domain
@@ -306,7 +286,7 @@ class UDFProposer:
         def verify_syntax(
             proposed_functions: Annotated[
                 List[List[str]],
-                "A list of proposed functions where proposed_functions[i] = [signature_i, description_i]. 'signature_i' represents the function signature 'function(args)', and 'description_i' contains the function description that captures any context or specific definition as mentioned in the user query.",
+                "A list of proposed functions where proposed_functions[i] = [signature_i, description_i]. 'signature_i' represents the function signature 'function(args)', and 'description_i' contains the function description that starts with the word 'whether' and captures any specific definition as mentioned in the user query.",
             ]
         ) -> str:
             try:
@@ -438,8 +418,6 @@ class UDFProposer:
             list: A list of UDFCandidate objects representing the implemented UDFs.
         """
         udf_name, udf_vars = parse_signature(udf_signature)
-        self.save_udf_dir = os.path.join(self.save_udf_base_dir, udf_name)
-        os.makedirs(self.save_udf_dir, exist_ok=True)
         # Step 3: generate semantic interpretations and implement the UDF. Results are saved to disk
         generate_udfs_dict = self.prompt_config["generate_udfs"]
         n_obj = len(udf_vars)
@@ -519,20 +497,18 @@ class UDFProposer:
                         )
                     )
                 )["answer"][:self.num_interpretations]
+                verifed_implemented_udfs = []
                 for idx in range(len(implemented_udfs)):
                     implemented_udf = implemented_udfs[idx]
-                    implemented_udf = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, self.program_with_pixels)
-                    implemented_udf["udf_name"] = udf_name
-                    implemented_udf["udf_signature"] = udf_signature
-                    implemented_udf["udf_description"] = udf_description
-                    implemented_udfs[idx] = implemented_udf
-                    # implemented_udfs[idx] = copy.deepcopy(implemented_udf)
-                    logger.info(f"[{idx}] semantic_interpretation: {implemented_udf['semantic_interpretation']}")
-                    logger.info(f"[{idx}] function_implementation: {implemented_udf['function_implementation']}")
-                    logger.info(f"[{idx}] kwargs: {implemented_udf.get('kwargs', {})}")
-                    if self.save_generated_udf:
-                        with open(os.path.join(self.save_udf_dir, f"{udf_name}_{idx}.json"), "w") as f:
-                            json.dump(implemented_udf, f)
+                    implemented_udf, success = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, self.program_with_pixels)
+                    if success:
+                        implemented_udf["udf_name"] = udf_name
+                        implemented_udf["udf_signature"] = udf_signature
+                        implemented_udf["udf_description"] = udf_description
+                        verifed_implemented_udfs.append(implemented_udf)
+                        logger.info(f"[{idx}] semantic_interpretation: {implemented_udf['semantic_interpretation']}")
+                        logger.info(f"[{idx}] function_implementation: {implemented_udf['function_implementation']}")
+                        logger.info(f"[{idx}] kwargs: {implemented_udf.get('kwargs', {})}")
                 break
             except Exception as e:
                 logger.exception("ERROR: failed to implement UDF: {}".format(e))
@@ -540,9 +516,9 @@ class UDFProposer:
 
         # Read UDF candidates from json files
         udf_candidate_list = []  # List[UDFCandidate]
-        for i in range(self.num_interpretations):
+        for i in range(len(verifed_implemented_udfs)):
             try:
-                udf_dict = implemented_udfs[i]
+                udf_dict = verifed_implemented_udfs[i]
                 if self.allow_kwargs_in_udf and udf_dict.get("kwargs", {}):
                     # Instantiate the kwargs with default values
                     udf_variant_dict = copy.deepcopy(udf_dict)
@@ -589,6 +565,7 @@ class UDFProposer:
         messages = [
             {"role": "user", "content": verify_syntax_correctness_prompt},
             {"role": "assistant", "content": "```json\n{}\n```".format(implemented_udf_json)}]
+        success = False
         for retry in range(5):
             try:
                 if retry != 0:
@@ -610,45 +587,62 @@ class UDFProposer:
                         )
                     )
                 # Verify if the function has the correct number of arguments
+                is_header_correct = True
                 lines = implemented_udf["function_implementation"].split("\n")
                 for _, line in enumerate(lines):
                     if line.startswith('def '):
                         generated_py_func_args = [arg.strip() for arg in line.split("(")[1].split(")")[0].split(",")]
                         if len(generated_py_func_args) != len(py_func_args):
                             messages.append({"role": "user", "content": f"Expected {len(py_func_args)} arguments, but got {len(generated_py_func_args)}. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
+                            is_header_correct = False
                             break
                         for i, (gt_arg, generated_arg) in enumerate(zip(py_func_args, generated_py_func_args)):
                             if gt_arg != generated_arg:
                                 messages.append({"role": "user", "content": f"Expected {gt_arg} as argument #{i+1}, but got {generated_arg}. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
+                                is_header_correct = False
                                 break
                         break
+                if not is_header_correct:
+                    continue
                 py_func_name = "py_{}".format(udf_name)
                 exec(implemented_udf["function_implementation"], globals())
                 udf_obj = globals()[py_func_name]
+                is_kwargs_correct = True
                 kwargs = {}
                 for k, v in implemented_udf.get("kwargs", {}).items():
                     if v["default"] is not None:
-                        kwargs[k] = float(v["default"])
+                        try:
+                            kwargs[k] = float(v["default"])
+                            v["min"] = float(v["min"])
+                            v["max"] = float(v["max"])
+                        except Exception as e:
+                            messages.append({"role": "user", "content": f"Failed to parse kwargs due to the error: {type(e).__name__}: {e}. Please fix it and regenerate 'kwargs' using the same 'semantic_interpretation' and 'function_implementation'."})
+                            is_kwargs_correct = False
+                            break
+                if not is_kwargs_correct:
+                    continue
                 result = self.exec_udf_with_data(df_samples, udf_obj, kwargs, n_obj, with_pixels)
                 contains_non_boolean = False
                 for r in result:
-                    if not isinstance(r, bool):
+                    if r != 1 and r != 0:
                         contains_non_boolean = True
                         break
                 if contains_non_boolean:
+                    logger.debug(f"The function returned non-boolean value: {result}")
                     messages.append({"role": "user", "content": f"The function returned non-boolean value, but it should return a boolean value. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
                     continue
+                success = True
                 break
             except Exception as e:
                 messages.append({"role": "user", "content": f"Failed to execute the function due to the error: {type(e).__name__}: {e}. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
         if retry != 0:
             logger.debug("verify_syntax_correctness:\n" + "\n".join([f"{message['role']}: {message['content']}" for message in messages]))
-        return implemented_udf
+        return implemented_udf, success
 
     def exec_udf_with_data(self, df, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=True):
         def safe_udf(udf, *args, **kwargs):
             try:
-                return udf(*args, **kwargs)
+                return bool(udf(*args, **kwargs))
             except Exception as e:
                 logger.exception(f"exec_udf_with_data Error: {e}")
                 return False  # Default value in case of error
@@ -661,25 +655,13 @@ class UDFProposer:
         if n_obj == 1:
             if with_pixels:
                 result = list(tqdm(self.executor.map(func, df["img"], df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
-                # result = df.apply(
-                #     lambda row: udf_obj(row["img"], row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["height"], row["width"], **kwargs), axis=1
-                # )
             else:
                 result = list(tqdm(self.executor.map(func, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
-                # result = df.apply(
-                #     lambda row: udf_obj(row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["height"], row["width"], **kwargs), axis=1
-                # )
         elif n_obj == 2:
             if with_pixels:
                 result = list(tqdm(self.executor.map(func, df["img"], df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
-                # result = df.apply(
-                #     lambda row: udf_obj(row["img"], row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["o2_oname"], row["o2_x1"], row["o2_y1"], row["o2_x2"], row["o2_y2"], row["o2_anames"], row["o1_o2_rnames"], row["o2_o1_rnames"], row["height"], row["width"], **kwargs), axis=1
-                # )
             else:
                 result = list(tqdm(self.executor.map(func, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
-                # result = df.apply(
-                #     lambda row: udf_obj(row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["o2_oname"], row["o2_x1"], row["o2_y1"], row["o2_x2"], row["o2_y2"], row["o2_anames"], row["o1_o2_rnames"], row["o2_o1_rnames"], row["height"], row["width"], **kwargs), axis=1
-                # )
         return result
 
     def _compute_u_t(self, posterior_t, predictions_c):
@@ -1005,7 +987,7 @@ class UDFProposer:
         h, w = image_size
         if len(sorted_objects) == 1:
             new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]}")
-        elif len(sorted_objects) == 2:
+        elif len(sorted_objects) == 2 and self.n_obj == 2:
             o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
             new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {int(o1x1), int(o1y1), int(o1x2), int(o1y2)}")
             new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {int(o2x1), int(o2y1), int(o2x2), int(o2y2)}")
@@ -1111,15 +1093,15 @@ class UDFProposer:
             labeled_index += new_labeled_index
             logger.info("# labeled segments {}".format(len(labeled_index)))
             if n_obj == 1:
-                # y_true = df_train.loc[labeled_index].apply(
+                # y_true = df_train.iloc[labeled_index].apply(
                 #     lambda row: gt_udf(row["o1"]), axis=1
                 # )
-                y_true = pd.Series([gt_udf_name in anames for anames in df_train.loc[labeled_index]['o1_gt_anames']])
+                y_true = pd.Series([gt_udf_name in anames for anames in df_train.iloc[labeled_index]['o1_gt_anames']])
             elif n_obj == 2:
-                # y_true = df_train.loc[labeled_index].apply(
+                # y_true = df_train.iloc[labeled_index].apply(
                 #     lambda row: gt_udf(row["o1"], row["o2"]), axis=1
                 # )
-                y_true = pd.Series([gt_udf_name in rnames for rnames in df_train.loc[labeled_index]['o1_o2_gt_rnames']])
+                y_true = pd.Series([gt_udf_name in rnames for rnames in df_train.iloc[labeled_index]['o1_o2_gt_rnames']])
             # log number of positive and negative samples
             logger.info(
                 "# positive: {}, # negative: {}".format(
@@ -1134,8 +1116,8 @@ class UDFProposer:
                     udf_candidate_list[i],
                     udf_name,
                     n_obj,
-                    df_train.loc[labeled_index],
-                    df_train.loc[new_labeled_index],
+                    df_train.iloc[labeled_index],
+                    df_train.iloc[new_labeled_index],
                     with_pixels=with_pixels,
                     add_one=True, # add one to avoid zero f1 score
                 )
@@ -1181,7 +1163,7 @@ class UDFProposer:
                     udf_candidate_list[i],
                     udf_name,
                     n_obj,
-                    df_train.loc[labeled_index],
+                    df_train.iloc[labeled_index],
                     with_pixels=with_pixels,
                 )
             best_score = max(udf_candidate.score for udf_candidate in udf_candidate_list)
@@ -1199,26 +1181,18 @@ class UDFProposer:
             # TODO: If there are multiple best udfs, select the one with faster execution time?
             selected_udf_candidate = best_candidates[0]
 
+        logger.debug("labeled_index: {}".format(labeled_index))
+        if n_obj == 1:
+            logger.debug("df_train.iloc[labeled_index]: {}".format(df_train.iloc[labeled_index][['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o1_gt_anames']].to_string()))
+        elif n_obj == 2:
+            logger.debug("df_train.iloc[labeled_index]: {}".format(df_train.iloc[labeled_index][['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o2_oid', 'o2_x1', 'o2_y1', 'o2_x2', 'o2_y2', 'o1_o2_gt_rnames']].to_string()))
+
         if selected_udf_candidate.id not in ["model", "dummy"]:
             # Transforms the function by removing **kwargs from the function signature and replacing the kwargs with the actual values
             selected_udf_candidate.function_implementation = transform_function(
                 original_code=selected_udf_candidate.function_implementation,
                 instantiation_dict=selected_udf_candidate.kwargs,
             )
-        if self.save_generated_udf:
-            with open(os.path.join(self.save_udf_dir, f"{udf_name}_selected.json"), "w") as f:
-                json.dump(
-                    {
-                        "udf_name": selected_udf_candidate.udf_name,
-                        "udf_signature": selected_udf_candidate.udf_signature,
-                        "udf_description": selected_udf_candidate.udf_description,
-                        "semantic_interpretation": selected_udf_candidate.semantic_interpretation,
-                        "function_implementation": selected_udf_candidate.function_implementation,
-                        "f1_score_train": selected_udf_candidate.score,
-                        "f1_score_test": selected_udf_candidate.test_score,
-                    },
-                    f,
-                )
         logger.info(f"[Selected]: {str(selected_udf_candidate)}")
         return selected_udf_candidate
 
@@ -1247,7 +1221,7 @@ class UDFProposer:
         else:
             sampled_index = unlabeled_index
 
-        df_sampled = df_train.loc[sampled_index]
+        df_sampled = df_train.iloc[sampled_index]
 
         indices_to_remove = []
         for i, udf_candidate in enumerate(udf_candidate_list):
@@ -1270,15 +1244,15 @@ class UDFProposer:
                     udf_obj = globals()[py_func_name]
                     # TODO: may need to timeout if running for too long
                     logger.debug(f"udf_name: {udf_name}")
-                    result = self.exec_udf_with_data(df_sampled, udf_obj, kwargs, n_obj, with_pixels)
+                    result = self.exec_udf_with_data(df_sampled, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=False)
                     contains_non_boolean = False
                     for r in result:
-                        if not isinstance(r, bool):
+                        if r != 1 and r != 0:
                             contains_non_boolean = True
                             break
                     if contains_non_boolean:
                         logger.debug(
-                            f"ERROR: UDFCandidate(id={udf_candidate.id}) returned non-boolean value"
+                            f"ERROR: UDFCandidate(id={udf_candidate.id}) returned non-boolean value: {result}"
                         )
                         indices_to_remove.append(i)
                         continue
@@ -1347,7 +1321,6 @@ class UDFProposer:
         mlp_model.eval()
         mlp_model.to(self.device)
 
-        logger.info("extracting features...")
         # extract image features
         transforms = T.Compose([
             # T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
@@ -1363,7 +1336,6 @@ class UDFProposer:
             features, idxs_to_predict = self.extract_features_batch_one_object(df, transforms, batch_size)
         else:
             features, idxs_to_predict = self.extract_features_batch_two_objects(df, transforms, batch_size)
-        logger.info("predicting...")
         batch_size = 65536
         predictions = []
         with torch.no_grad():
@@ -1394,7 +1366,8 @@ class UDFProposer:
                 frame = row["img"]
                 frames.append(frame)
                 idxs_to_predict.append(batch_start + i)
-                rois.append([i, row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"]])
+                o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (320, 480))
+                rois.append([i, o1_x1, o1_y1, o1_x2, o1_y2])
             frames = np.array(frames)
             frames = torch.tensor(frames, dtype=torch.float32).permute(0, 3, 1, 2).to(self.device) # Shape: (B, C, H, W)
 
@@ -1556,9 +1529,9 @@ class UDFProposer:
                 py_func_name = "py_{}".format(udf_name)
                 exec(udf_candidate.function_implementation, globals())
                 udf_obj = globals()[py_func_name]
-                y_pred = self.exec_udf_with_data(df, udf_obj, kwargs, n_obj, with_pixels)
+                y_pred = self.exec_udf_with_data(df, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=False)
                 if df_newly_labeled is not None:
-                    y_pred_new = self.exec_udf_with_data(df_newly_labeled, udf_obj, kwargs, n_obj, with_pixels)
+                    y_pred_new = self.exec_udf_with_data(df_newly_labeled, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=False)
             except Exception as e:
                 logger.exception("ERROR: failed to execute udf_candidate {}: {}".format(udf_candidate.id, e))
                 y_pred = [False] * len(df)
@@ -1578,9 +1551,10 @@ class UDFProposer:
             y_true.append(True)
             y_pred.append(True)
         score = f1_score(y_true, y_pred, zero_division=0.0)
-        logger.info(
-            "positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true))
-        )
+        logger.info("udf_candidate: {}, score: {}".format(udf_candidate.id, score))
+        logger.info("y_true: {}, y_pred: {}".format(y_true, y_pred))
+        logger.info("predicted positive: {}, predicted negative: {}".format(sum(y_pred), len(y_pred) - sum(y_pred)))
+        logger.info("positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true)))
 
         # Compute y_true_new and num_misclassified
         if df_newly_labeled is not None:

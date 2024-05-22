@@ -1,7 +1,7 @@
 import yaml
 import random
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook
+from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
 import logging
 import numpy as np
 from vocaludf.query_executor import QueryExecutor
@@ -16,12 +16,18 @@ logger.setLevel(logging.DEBUG)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
     parser.add_argument('--query_id', type=int, help='question id')
     parser.add_argument("--cpus", type=int, default=4, help="Maximum number of tasks to execute at once")
     parser.add_argument("--dataset", type=str, help="dataset name")
+    parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
+    parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
     args = parser.parse_args()
+    num_missing_udfs = args.num_missing_udfs
     query_id = args.query_id
     dataset = args.dataset
+    pred_batch_size = args.pred_batch_size
+    dali_batch_size = args.dali_batch_size
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -35,8 +41,9 @@ if __name__ == '__main__':
     # Create a directory if it doesn't already exist
     log_dir = os.path.join(
         config["log_dir"],
-        "udf_generation",
+        "query_execution",
         dataset,
+        "num_missing_udfs={}".format(num_missing_udfs),
         "queries_unavailable_udfs_removed",
     )
     os.makedirs(log_dir, exist_ok=True)
@@ -71,14 +78,15 @@ if __name__ == '__main__':
     positive_videos = input_query["positive_videos"]
     y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
 
-    # Available UDFs
-    object_domain = ['object']
-    relationship_domain = ['left_of', 'front_of']
-    attribute_domain = ['location_left', 'location_top', 'color_gray', 'color_red', 'color_blue', 'color_green', 'shape_cube', 'shape_sphere', 'material_rubber', 'shape_cylinder']
-
-    registered_functions = json.load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r")
-    )["test"]
+    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_functions = registered_udfs_json[f"{dataset}_base"]
+    new_modules = input_query["new_modules"]
+    assert num_missing_udfs >= 0 and num_missing_udfs <= 3, "num_missing_udfs must be between 0 and 3"
+    for new_module in new_modules[:(3-num_missing_udfs)]:
+        registered_functions.append(registered_udfs_json[dataset][new_module])
+    logger.info("Registered functions: {}".format(registered_functions))
+    object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
+    logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
     available_udf_names = [parse_signature(func["signature"])[0] for func in registered_functions]
     materialized_df_names = []
     on_the_fly_udf_names = []
@@ -96,5 +104,5 @@ if __name__ == '__main__':
     logger.info(f"parsed_program: {parsed_program}")
     parsed_dsl = program_to_dsl(parsed_program['query'], rewrite_variables=False, sort_variables=False)
     logger.info(f"parsed_dsl: {parsed_dsl}")
-    qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers)
+    qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size)
     qe.run(parsed_program, y_true, debug=False)

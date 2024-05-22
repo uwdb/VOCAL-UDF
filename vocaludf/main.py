@@ -3,7 +3,7 @@ import yaml
 import random
 import json
 import os
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook
+from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
 import logging
 import argparse
 from sentence_transformers import SentenceTransformer, util
@@ -19,6 +19,10 @@ import resource
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+def using(point=""):
+    usage=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
+
 if __name__ == "__main__":
     # python main.py --query_id 3 --run_id 0 --dataset "clevrer" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --cpus 4 --save_labeled_data --n_train_distill 100 --selection_strategy "llm" --selection_labels "user"
     config = yaml.safe_load(
@@ -26,6 +30,7 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
     parser.add_argument("--query_id", type=int, help="query id")
     parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
@@ -36,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
     parser.add_argument("--program_with_pixels", action="store_true", help="program with pixels")
     parser.add_argument("--program_with_pretrained_models", action="store_true", help="program with pretrained models")
-    parser.add_argument("--save_generated_udf", action="store_true", help="save generated UDF to file")
+    parser.add_argument('--generate', action='store_true', help="only run the UDF generation step instead of actually executing the final query.")
     parser.add_argument("--cpus", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
@@ -45,6 +50,7 @@ if __name__ == "__main__":
     parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
 
     args = parser.parse_args()
+    num_missing_udfs = args.num_missing_udfs
     query_id = args.query_id
     run_id = args.run_id
     dataset = args.dataset
@@ -57,7 +63,7 @@ if __name__ == "__main__":
     program_with_pretrained_models = args.program_with_pretrained_models
     if program_with_pretrained_models:
         assert program_with_pixels, "program_with_pretrained_models requires program_with_pixels"
-    save_generated_udf = args.save_generated_udf
+    generate = args.generate
     num_workers = args.cpus
     save_labeled_data = args.save_labeled_data
     load_labeled_data = args.load_labeled_data
@@ -83,16 +89,12 @@ if __name__ == "__main__":
         selection_labels,
         labeling_budget,
     )
-
-    save_udf_base_dir = os.path.join(
-        config["output_dir"],
+    base_dir = os.path.join(
         "udf_generation",
         dataset,
+        "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
-        f"qid={query_id}",
-        f"run={run_id}",
     )
-    os.makedirs(save_udf_base_dir, exist_ok=True)
 
     random.seed(run_id)
     np.random.seed(run_id)
@@ -109,9 +111,7 @@ if __name__ == "__main__":
     # Create a directory if it doesn't already exist
     log_dir = os.path.join(
         config["log_dir"],
-        "udf_generation",
-        dataset,
-        config_name,
+        base_dir
     )
     os.makedirs(log_dir, exist_ok=True)
 
@@ -152,23 +152,15 @@ if __name__ == "__main__":
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
-
-    registered_functions = json.load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r")
-    )["test"]
-    # add "BEHIND", "RIGHTOF"
-    # registered_functions.extend(
-    #     [{
-    #         "signature": "right_of(o0, o1)",
-    #         "description": "Whether o0 is on the right of o1.",
-    #         "function_implementation": "def right_of(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    cx_o1 = (o1_x1 + o1_x2) / 2\n    cx_o2 = (o2_x1 + o2_x2) / 2\n    return cx_o1 > cx_o2"
-    #     },
-    #     {
-    #         "signature": "behind(o0, o1)",
-    #         "description": "Whether o0 is behind o1.",
-    #         "function_implementation": "def behind(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    center_y_o1 = (o1_y1 + o1_y2) / 2\n    center_y_o2 = (o2_y1 + o2_y2) / 2\n    return center_y_o1 < center_y_o2"
-    #     }]
-    # )
+    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_functions = registered_udfs_json[f"{dataset}_base"]
+    new_modules = input_query["new_modules"]
+    assert num_missing_udfs >= 0 and num_missing_udfs <= 3, "num_missing_udfs must be between 0 and 3"
+    for new_module in new_modules[:(3-num_missing_udfs)]:
+        registered_functions.append(registered_udfs_json[dataset][new_module])
+    logger.info("Registered functions: {}".format(registered_functions))
+    object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
+    logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
     available_udf_names = [parse_signature(func["signature"])[0] for func in registered_functions]
     materialized_df_names = []
     on_the_fly_udf_names = []
@@ -185,6 +177,9 @@ if __name__ == "__main__":
             prompt_config,
             config_list,
             registered_functions,
+            object_domain,
+            relationship_domain,
+            attribute_domain,
             dataset,
             labeling_budget,
             num_interpretations,
@@ -194,24 +189,19 @@ if __name__ == "__main__":
             query_id,
             run_id,
             num_workers,
-            save_generated_udf,
             save_labeled_data,
             load_labeled_data,
             n_train_distill,
             selection_strategy,
             selection_labels,
             allow_kwargs_in_udf,
-            save_udf_base_dir,
         )
-        object_domain, relationship_domain, attribute_domain = up.get_active_domain()
         proposed_functions = up.propose(user_query)
         for udf_signature, udf_description in proposed_functions.items():
             # Step 2.a: generate semantic interpretations and implementations. Save the generated UDFs to disk
             # Step 2.b: Distilled-model UDFs
             # udf_candidate_list = up.implement(udf_signature, udf_description)
             udf_candidate_list = up.implement(udf_signature, udf_description)
-            # TODO: remove **kwargs from the final implementation
-            # TODO: UDF with pixels needs to be materialized before being used in the query
 
             # # Step 3: Select the best UDF (determine the best UDF between model-based and program-based)
             # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
@@ -262,18 +252,12 @@ if __name__ == "__main__":
             semantic_interpretation = selected_udf_candidate.semantic_interpretation
             function_implementation = selected_udf_candidate.function_implementation
 
-            # Assume now that the best UDF is the first one
-            # best_impl = implemented_udfs[0]
             logger.info(
                 "Best: {}, implementation: {}".format(
                     udf_signature, selected_udf_candidate.function_implementation
                 )
             )
-            # logger.info(
-            #     "Best: {}, implementation: {}".format(
-            #         udf_signature, "distilled model"
-            #     )
-            # )
+
             # Step 5: Register the UDF
             new_udf = {
                 "signature": udf_signature,
@@ -298,12 +282,38 @@ if __name__ == "__main__":
             allow_new_udfs=False,
         )
         qp.parse(user_query)
-    try:
+    if generate:
+        output_dir = os.path.join(
+            config["output_dir"],
+            base_dir
+        )
+        os.makedirs(output_dir, exist_ok=True)
         parsed_program = qp.get_parsed_program()
         parsed_dsl = qp.get_parsed_query()
-        qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers)
-        qe.run(parsed_program, y_true, debug=False)
-    except Exception as e:
-        logger.exception("QueryExecutor Error: {}".format(e))
-        logger.info("F1 score: 0")
-    logger.info("Peak memory usuage (in KB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+        generation_output = dict(
+            dataset=dataset,
+            object_domain=object_domain,
+            relationship_domain=relationship_domain,
+            attribute_domain=attribute_domain,
+            parsed_program=parsed_program,
+            parsed_dsl=parsed_dsl,
+            registered_functions=registered_functions,
+            available_udf_names=available_udf_names,
+            materialized_df_names=materialized_df_names,
+            on_the_fly_udf_names=on_the_fly_udf_names,
+            program_with_pixels=program_with_pixels,
+        )
+        logger.info(generation_output)
+        # Save the generation output to disk
+        with open(os.path.join(output_dir, "qid={}-run={}.json".format(query_id, run_id)), "w") as f:
+            json.dump(generation_output, f)
+    else:
+        try:
+            parsed_program = qp.get_parsed_program()
+            parsed_dsl = qp.get_parsed_query()
+            qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers)
+            qe.run(parsed_program, y_true, debug=False)
+        except Exception as e:
+            logger.exception("QueryExecutor Error: {}".format(e))
+            logger.info("F1 score: 0")
+    logger.info("Peak memory usuage (in GB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024.0/1024.0))

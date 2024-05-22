@@ -36,6 +36,45 @@ clevr:
   input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevr/3_new_udfs_labels.json
   onames:
     - object
+charades:
+  dataset_size: 9601
+  onames:
+    - person
+    - bag
+    - bed
+    - blanket
+    - book
+    - box
+    - broom
+    - chair
+    - closet/cabinet
+    - clothes
+    - cup/glass/bottle
+    - dish
+    - door
+    - doorknob
+    - doorway
+    - floor
+    - food
+    - groceries
+    - laptop
+    - light
+    - medicine
+    - mirror
+    - paper/notebook
+    - phone/camera
+    - picture
+    - pillow
+    - refrigerator
+    - sandwich
+    - shelf
+    - shoe
+    - sofa/couch
+    - table
+    - television
+    - towel
+    - vacuum
+    - window
 visprog:
   program_generator:
     temperature: 0.2

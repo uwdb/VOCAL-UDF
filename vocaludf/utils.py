@@ -138,6 +138,27 @@ def replace_slot(text, entries):
         text = text.replace("{{" + key +"}}", value.replace('"', "'"))
     return text
 
+
+def get_active_domain(config, dataset, registered_functions):
+    object_domain = config[dataset]['onames']
+    relationship_domain = []
+    attribute_domain = []
+
+    for registered_function in registered_functions:
+        signature = registered_function["signature"]
+        registered_function_name, registered_function_vars = parse_signature(signature)
+        if len(registered_function_vars) == 2:
+            # Relationship UDF
+            relationship_domain.append(registered_function_name.lower())
+        else:
+            # Attribute UDF
+            attribute_domain.append(registered_function_name.lower())
+    object_domain = object_domain
+    relationship_domain = relationship_domain
+    attribute_domain = attribute_domain
+    return object_domain, relationship_domain, attribute_domain
+
+
 def duckdb_execute_cache_sequence(conn, current_query, memo, inputs_table_name, input_vids, table_as_input_to_udf=False):
     """
     This method uses temp views and only caches binary query predictions.
@@ -665,10 +686,14 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
             where_clauses.append("{v1}.vid = {v2}.vid and {v1}.fid = {v2}.fid".format(v1=encountered_variables_current_graph[i], v2=encountered_variables_current_graph[i+1])) # join variables
         for p in scene_graph:
             predicate = p["predicate"]
-            parameter = p.get("parameter", None) # Unused; should always be None
-            assert parameter is None
+            parameter = p.get("parameter", None) # only object predicates have parameters, which are class names
             variables = p["variables"]
-            if predicate in available_udf_names:
+            if predicate != "object":
+                assert parameter is None
+            if predicate == "object":
+                # [where condition] object
+                where_clauses.append(f"{variables[0]}.o1_oname = '{parameter}'")
+            elif predicate in available_udf_names:
                 if len(variables) == 1:
                     # [where condition] available attribute UDFs
                     where_clauses.append(f"'{predicate}' = ANY({variables[0]}.o1_anames)")

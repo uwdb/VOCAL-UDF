@@ -24,7 +24,14 @@
         "Material(o0, 'rubber')": "Whether the material of o0 is rubber.",
         "Material(o0, 'metal')": "Whether the material of o0 is metal."
     },
-    "test": [
+    "charades_base": [
+        {
+            "signature": "object(o0, name)",
+            "description": "Whether o0 is an object with the given name.",
+            "function_implementation": "def object(name, o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n    return name == o1_oname"
+        }
+    ],
+    "clevrer_base": [
         {
             "signature": "left_of(o0, o1)",
             "description": "Whether o0 is on the left of o1.",
@@ -43,7 +50,7 @@
         {
             "signature": "location_top(o0)",
             "description": "Whether o0 is at the top of the frame.",
-            "function_implementation": "def top(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 160 and cy1 <= 320"
+            "function_implementation": "def top(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 0 and cy1 < 160"
         },
         {
             "signature": "color_gray(o0)",
@@ -198,121 +205,66 @@
             "function_implementation": "def size_small(o1):\n  area=(o1['x2']-o1['x1'])*(o1['y2']-o1['y1'])\n  return area <= 2400"
         }
     ],
-    "clevrer": [
-        {
-            "signature": "Near(o0, o1)",
-            "description": "Whether o0 is near o1.",
-            "function_implementation": "def near(o1, o2):\n  import math\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n  distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1['x2'] - o1['x1'] + o2['x2'] - o2['x1']) / 2)\n  return distance < 1.0"
-        },
-        {
-            "signature": "Far(o0, o1)",
+    "clevrer": {
+        "FAR": {
+            "signature": "far(o0, o1)",
             "description": "Whether o0 is far away from o1.",
-            "function_implementation": "def far(o1, o2):\n  import math\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n\n  distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1['x2'] - o1['x1'] + o2['x2'] - o2['x1']) / 2)\n  return distance > 3.0"
+            "function_implementation": "def far(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    import math\n    cx1 = (o1_x1 + o1_x2) / 2\n    cy1 = (o1_y1 + o1_y2) / 2\n    cx2 = (o2_x1 + o2_x2) / 2\n    cy2 = (o2_y1 + o2_y2) / 2\n    distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)\n    threshold = 3.0\n    return distance >= threshold"
         },
-        {
-            "signature": "LeftOf(o0, o1)",
-            "description": "Whether o0 is on the left of o1.",
-            "function_implementation": "def left_of(o1, o2):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  return cx1 < cx2"
+        "NEAR": {
+            "signature": "near(o0, o1)",
+            "description": "Whether o0 is near o1.",
+            "function_implementation": "def near(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    import math\n    cx1 = (o1_x1 + o1_x2) / 2\n    cy1 = (o1_y1 + o1_y2) / 2\n    cx2 = (o2_x1 + o2_x2) / 2\n    cy2 = (o2_y1 + o2_y2) / 2\n    distance = math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2)\n    threshold = 1.0\n    return distance < threshold"
         },
-        {
-            "signature": "RightOf(o0, o1)",
-            "description": "Whether o0 is on the right of o1.",
-            "function_implementation": "def right_of(o1, o2):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  cx2 = (o2['x1'] + o2['x2']) / 2\n  return cx1 > cx2"
+        "RIGHTOF": {
+            "signature": "right_of(o0, o1)",
+            "description": "Whether o0 is to the right of o1.",
+            "function_implementation": "def right_of(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    cx_o1 = (o1_x1 + o1_x2) / 2\n    cx_o2 = (o2_x1 + o2_x2) / 2\n    return cx_o1 > cx_o2"
         },
-        {
-            "signature": "Behind(o0, o1)",
+        "BEHIND": {
+            "signature": "behind(o0, o1)",
             "description": "Whether o0 is behind o1.",
-            "function_implementation": "def behind(o1, o2):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n  return cy1 < cy2"
+            "function_implementation": "def behind(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width):\n    center_y_o1 = (o1_y1 + o1_y2) / 2\n    center_y_o2 = (o2_y1 + o2_y2) / 2\n    return center_y_o1 < center_y_o2"
         },
-        {
-            "signature": "FrontOf(o0, o1)",
-            "description": "Whether o0 is in front of o1.",
-            "function_implementation": "def front_of(o1, o2):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  cy2 = (o2['y1'] + o2['y2']) / 2\n  return cy1 > cy2"
-        },
-        {
-            "signature": "Location_Left(o0)",
-            "description": "Whether o0 is on the left of the frame.",
-            "function_implementation": "def left(o1):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  return cx1 >= 0 and cx1 < 240"
-        },
-        {
-            "signature": "Location_Right(o0)",
-            "description": "Whether o0 is on the right of the frame.",
-            "function_implementation": "def right(o1):\n  cx1 = (o1['x1'] + o1['x2']) / 2\n  return cx1 >= 240 and cx1 <= 480"
-        },
-        {
-            "signature": "Location_Top(o0)",
-            "description": "Whether o0 is at the top of the frame.",
-            "function_implementation": "def top(o1):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  return cy1 >= 0 and cy1 < 160"
-        },
-        {
-            "signature": "Location_Bottom(o0)",
-            "description": "Whether o0 is at the bottom of the frame.",
-            "function_implementation": "def bottom(o1):\n  cy1 = (o1['y1'] + o1['y2']) / 2\n  return cy1 >= 160 and cy1 <= 320"
-        },
-        {
-            "signature": "Color_Gray(o0)",
-            "description": "Whether the color of o0 is gray.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'gray'"
-        },
-        {
-            "signature": "Color_Red(o0)",
-            "description": "Whether the color of o0 is red.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'red'"
-        },
-        {
-            "signature": "Color_Blue(o0)",
-            "description": "Whether the color of o0 is blue.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'blue'"
-        },
-        {
-            "signature": "Color_Green(o0)",
-            "description": "Whether the color of o0 is green.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'green'"
-        },
-        {
-            "signature": "Color_Brown(o0)",
+        "BROWN": {
+            "signature": "color_brown(o0)",
             "description": "Whether the color of o0 is brown.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'brown'"
+            "function_implementation": "def color_brown(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  return 'color_brown' in o1_anames"
         },
-        {
-            "signature": "Color_Cyan(o0)",
+        "CYAN": {
+            "signature": "color_cyan(o0)",
             "description": "Whether the color of o0 is cyan.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'cyan'"
+            "function_implementation": "def color_cyan(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  return 'color_cyan' in o1_anames"
         },
-        {
-            "signature": "Color_Purple(o0)",
+        "PURPLE": {
+            "signature": "color_purple(o0)",
             "description": "Whether the color of o0 is purple.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'purple'"
+            "function_implementation": "def color_purple(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  return 'color_purple' in o1_anames"
         },
-        {
-            "signature": "Color_Yellow(o0)",
+        "YELLOW": {
+            "signature": "color_yellow(o0)",
             "description": "Whether the color of o0 is yellow.",
-            "function_implementation": "def color(o1):\n  return o1['color'] == 'yellow'"
+            "function_implementation": "def color_yellow(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  return 'color_yellow' in o1_anames"
         },
-        {
-            "signature": "Shape_Cube(o0)",
-            "description": "Whether the shape of o0 is cube.",
-            "function_implementation": "def shape(o1):\n  return o1['shape'] == 'cube'"
-        },
-        {
-            "signature": "Shape_Sphere(o0)",
-            "description": "Whether the shape of o0 is sphere.",
-            "function_implementation": "def shape(o1):\n  return o1['shape'] == 'sphere'"
-        },
-        {
-            "signature": "Shape_Cylinder(o0)",
+        "CYLINDER": {
+            "signature": "shape_cylinder(o0)",
             "description": "Whether the shape of o0 is cylinder.",
-            "function_implementation": "def shape(o1):\n  return o1['shape'] == 'cylinder'"
+            "function_implementation": "def shape_cylinder(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  return 'shape_cylinder' in o1_anames"
         },
-        {
-            "signature": "Material_Rubber(o0)",
-            "description": "Whether the material of o0 is rubber.",
-            "function_implementation": "def material(o1):\n  return o1['material'] == 'rubber'"
-        },
-        {
-            "signature": "Material_Metal(o0)",
+        "METAL": {
+            "signature": "material_metal(o0)",
             "description": "Whether the material of o0 is metal.",
-            "function_implementation": "def material(o1):\n  return o1['material'] == 'metal'"
+            "function_implementation": "def material_metal(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  return 'material_metal' in o1_anames"
+        },
+        "RIGHT": {
+            "signature": "location_right(o0)",
+            "description": "Whether o0 is on the right of the frame.",
+            "function_implementation": "def right(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  cx = (o1_x1 + o1_x2) / 2\n  return cx >= 240 and cx <= 480"
+        },
+        "BOTTOM": {
+            "signature": "location_bottom(o0)",
+            "description": "Whether o0 is at the bottom of the frame.",
+            "function_implementation": "def bottom(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 160 and cy1 <= 320"
         }
-    ]
+    }
 }
