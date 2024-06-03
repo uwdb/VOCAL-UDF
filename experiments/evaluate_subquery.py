@@ -35,6 +35,13 @@ if __name__ == '__main__':
     program_with_pixels = False
     num_workers = args.cpus
 
+    input_query_file = config[dataset]["input_query_file"]
+    task_name = os.path.basename(input_query_file).split(".")[0]
+    input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
+    gt_dsl = input_query['dsl']
+    positive_videos = input_query["positive_videos"]
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+
     """
     Set up logging
     """
@@ -43,6 +50,7 @@ if __name__ == '__main__':
         config["log_dir"],
         "query_execution",
         dataset,
+        task_name,
         "num_missing_udfs={}".format(num_missing_udfs),
         "queries_unavailable_udfs_removed",
     )
@@ -71,19 +79,19 @@ if __name__ == '__main__':
     sys.stderr = StreamToLogger(logger, logging.ERROR)
     sys.excepthook = exception_hook
 
-    # parsed_program = {'query': [{'scene_graph': [{'predicate': 'left_of', 'variables': ['o2', 'o0']}, {'predicate': 'color_red', 'variables': ['o0']}, {'predicate': 'front_of', 'variables': ['o1', 'o2']}], 'duration_constraint': 15}, {'scene_graph': [{'predicate': 'far_from', 'variables': ['o1', 'o2']}, {'predicate': 'left_of', 'variables': ['o0', 'o2']}], 'duration_constraint': 5}, {'scene_graph': [{'predicate': 'behind_of', 'variables': ['o2', 'o0']}, {'predicate': 'material_metal', 'variables': ['o1']}], 'duration_constraint': 1}]}
-    input_query_file = config[dataset]["input_query_file"]
-    input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
-    gt_dsl = input_query['dsl']
-    positive_videos = input_query["positive_videos"]
-    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
-
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
-    registered_functions = registered_udfs_json[f"{dataset}_base"]
-    new_modules = input_query["new_modules"]
-    assert num_missing_udfs >= 0 and num_missing_udfs <= 3, "num_missing_udfs must be between 0 and 3"
-    for new_module in new_modules[:(3-num_missing_udfs)]:
-        registered_functions.append(registered_udfs_json[dataset][new_module])
+    if "single_semantic" in task_name:
+        registered_functions = [{
+            "signature": "object(o0, name)",
+            "description": "Whether o0 is an object with the given name.",
+            "function_implementation": ""
+        }]
+    else:
+        registered_functions = registered_udfs_json[f"{dataset}_base"]
+        new_modules = input_query["new_modules"]
+        assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"
+        for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
+            registered_functions.append(registered_udfs_json[dataset][new_module])
     logger.info("Registered functions: {}".format(registered_functions))
     object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
     logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))

@@ -35,6 +35,7 @@ if __name__ == '__main__':
     parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
+    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
 
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
@@ -44,6 +45,7 @@ if __name__ == '__main__':
     allow_kwargs_in_udf = args.allow_kwargs_in_udf
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
+    llm_method = args.llm_method
     num_interpretations = args.num_interpretations
     program_with_pixels = args.program_with_pixels
     program_with_pretrained_models = args.program_with_pretrained_models
@@ -53,8 +55,8 @@ if __name__ == '__main__':
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
     selection_labels = args.selection_labels
-    if selection_strategy != "program":
-        assert program_with_pixels, "selection_strategy != 'program' requires program_with_pixels"
+    # if selection_strategy != "program":
+    #     assert program_with_pixels, "selection_strategy != 'program' requires program_with_pixels"
 
     if selection_strategy == "both":
         assert selection_labels != "none"
@@ -63,7 +65,7 @@ if __name__ == '__main__':
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
 
-    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}".format(
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}-llm_method={}".format(
         num_interpretations,
         num_parameter_search,
         allow_kwargs_in_udf,
@@ -73,12 +75,14 @@ if __name__ == '__main__':
         selection_strategy,
         selection_labels,
         labeling_budget,
+        llm_method,
     )
 
     random.seed(run_id)
     np.random.seed(run_id)
 
     input_query_file = config[dataset]["input_query_file"]
+    task_name = os.path.basename(input_query_file).split(".")[0]
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     positive_videos = input_query["positive_videos"]
     y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
@@ -91,6 +95,7 @@ if __name__ == '__main__':
         config["log_dir"],
         "query_execution",
         dataset,
+        task_name,
         "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
     )
@@ -124,6 +129,7 @@ if __name__ == '__main__':
             config["output_dir"],
             "udf_generation",
             dataset,
+            task_name,
             "num_missing_udfs={}".format(num_missing_udfs),
             config_name,
             "qid={}-run={}.json".format(query_id, run_id),

@@ -147,15 +147,14 @@ def get_active_domain(config, dataset, registered_functions):
     for registered_function in registered_functions:
         signature = registered_function["signature"]
         registered_function_name, registered_function_vars = parse_signature(signature)
+        if registered_function_name.lower() == "object":
+            continue
         if len(registered_function_vars) == 2:
             # Relationship UDF
             relationship_domain.append(registered_function_name.lower())
         else:
             # Attribute UDF
             attribute_domain.append(registered_function_name.lower())
-    object_domain = object_domain
-    relationship_domain = relationship_domain
-    attribute_domain = attribute_domain
     return object_domain, relationship_domain, attribute_domain
 
 
@@ -616,7 +615,7 @@ def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_tabl
     return output_vids, new_memo
 
 
-def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, available_udf_names, materialized_udf_names, on_the_fly_udf_names):
+def duckdb_execute_video_materialize(conn, current_query, memo, input_vids, available_udf_names, materialized_udf_names, on_the_fly_udf_names):
     """
     There are three types of UDFs:
     - available_udf_names: available UDFs
@@ -748,7 +747,6 @@ def duckdb_execute_clevrer_materialize(conn, current_query, memo, input_vids, av
                     v1 = variables[1]
                     pred_table = f"{v0}_{predicate}_{v1}"
                     table_list.append(f"rel_filtered as {pred_table}")
-                    # TODO: add "img" to the input of the UDF, or materialize the UDF
                     where_clauses.append(f"""
                         {v0}.vid = {pred_table}.vid
                         and {v0}.fid = {pred_table}.fid

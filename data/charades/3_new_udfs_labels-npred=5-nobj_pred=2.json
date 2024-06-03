@@ -5,7 +5,11 @@
             "question": "A person, who is not looking at object o1, is sitting on and positioned beneath it. Additionally, there is an object o2 classified as food.",
             "visprog_program": "",
             "dsl": "(beneath(o0, o1), not_looking_at(o0, o1), object(o0, 'person'), sitting_on(o0, o1)); object(o2, 'food')",
-            "new_modules": [],
+            "new_modules": [
+                "BENEATH",
+                "NOTLOOKINGAT",
+                "SITTINGON"
+            ],
             "positive_videos": [
                 15,
                 23,
@@ -667,7 +671,11 @@
             "question": "A person is not looking at object o1. Later, the person is sitting on o1. Finally, the person is holding some food.",
             "visprog_program": "",
             "dsl": "(not_looking_at(o0, o1), object(o0, 'person'), object(o2, 'food')); sitting_on(o0, o1); holding(o0, o2)",
-            "new_modules": [],
+            "new_modules": [
+                "NOTLOOKINGAT",
+                "SITTINGON",
+                "HOLDING"
+            ],
             "positive_videos": [
                 15,
                 23,
@@ -1251,7 +1259,11 @@
             "question": "A person is holding the food, not looking at another object o2, while simultaneously touching o2.",
             "visprog_program": "",
             "dsl": "object(o0, 'food'); (holding(o1, o0), not_looking_at(o1, o2), touching(o1, o2)); object(o1, 'person')",
-            "new_modules": [],
+            "new_modules": [
+                "HOLDING",
+                "NOTLOOKINGAT",
+                "TOUCHING"
+            ],
             "positive_videos": [
                 1,
                 15,
@@ -1936,7 +1948,10 @@
             "question": "Initially, a person is touching object o1. Later, the person is not looking at both object o1 and another cup/glass/bottle o2.",
             "visprog_program": "",
             "dsl": "touching(o0, o1); (not_looking_at(o0, o2), not_looking_at(o0, o1), object(o0, 'person')); object(o2, 'cup/glass/bottle')",
-            "new_modules": [],
+            "new_modules": [
+                "TOUCHING",
+                "NOTLOOKINGAT"
+            ],
             "positive_videos": [
                 15,
                 22,
@@ -2699,7 +2714,10 @@
             "question": "The person is not looking at the chair, and not looking at another object while touching it.",
             "visprog_program": "",
             "dsl": "object(o0, 'chair'); (not_looking_at(o1, o0), not_looking_at(o1, o2), object(o1, 'person'), touching(o1, o2))",
-            "new_modules": [],
+            "new_modules": [
+                "NOTLOOKINGAT",
+                "TOUCHING"
+            ],
             "positive_videos": [
                 15,
                 19,
@@ -3539,7 +3557,10 @@
             "question": "A person is involved in a sequence where they are not looking at a dish. Subsequently, the person is holding another object o2 and is not looking at it.",
             "visprog_program": "",
             "dsl": "object(o0, 'person'); (not_looking_at(o0, o1), object(o1, 'dish')); (holding(o0, o2), not_looking_at(o0, o2))",
-            "new_modules": [],
+            "new_modules": [
+                "NOTLOOKINGAT",
+                "HOLDING"
+            ],
             "positive_videos": [
                 14,
                 22,
@@ -4385,7 +4406,11 @@
             "question": "A person is touching a table. Subsequently, the person is positioned beneath another object o2 and is also sitting on o2.",
             "visprog_program": "",
             "dsl": "(object(o0, 'person'), object(o1, 'table'), touching(o0, o1)); beneath(o0, o2); sitting_on(o0, o2)",
-            "new_modules": [],
+            "new_modules": [
+                "BENEATH",
+                "SITTINGON",
+                "TOUCHING"
+            ],
             "positive_videos": [
                 15,
                 19,
@@ -4958,7 +4983,10 @@
             "question": "A person is sitting on object o1 and not looking at it. Later, the person is also not looking at another object o2, which is identified as a cup, glass, or bottle.",
             "visprog_program": "",
             "dsl": "(not_looking_at(o0, o1), object(o0, 'person'), sitting_on(o0, o1)); (not_looking_at(o0, o2), object(o2, 'cup/glass/bottle'))",
-            "new_modules": [],
+            "new_modules": [
+                "NOTLOOKINGAT",
+                "SITTINGON"
+            ],
             "positive_videos": [
                 15,
                 22,
@@ -5565,7 +5593,11 @@
             "question": "A person is beneath and sitting on object o1. Later, the person is not looking at the table.",
             "visprog_program": "",
             "dsl": "(beneath(o0, o1), object(o0, 'person'), sitting_on(o0, o1)); object(o2, 'table'); not_looking_at(o0, o2)",
-            "new_modules": [],
+            "new_modules": [
+                "BENEATH",
+                "NOTLOOKINGAT",
+                "SITTINGON"
+            ],
             "positive_videos": [
                 0,
                 15,
@@ -6498,7 +6530,11 @@
             "question": "A person is eating food and is not looking at another object o2. Subsequently, the person is holding object o2.",
             "visprog_program": "",
             "dsl": "(eating(o0, o1), not_looking_at(o0, o2)); (holding(o0, o2), object(o0, 'person'), object(o1, 'food'))",
-            "new_modules": [],
+            "new_modules": [
+                "EATING",
+                "HOLDING",
+                "NOTLOOKINGAT"
+            ],
             "positive_videos": [
                 10,
                 35,

@@ -24,7 +24,7 @@ clevrer:
   height: 320
   width: 480
   dataset_size: 10000
-  features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/clevrer_three_clips/
+  features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/clevrer_three_clips
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/video_frames
   input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/3_new_udfs_labels.json
   onames:
@@ -38,6 +38,11 @@ clevr:
     - object
 charades:
   dataset_size: 9601
+  features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/charades_three_clips
+  video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/frames
+  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/3_new_udfs_labels-npred=5-nobj_pred=1.json
+  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/single_semantic-unavailable=1-npred=3-nobj_pred=2-nvars=2-depth=1.json
+  input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2.json
   onames:
     - person
     - bag

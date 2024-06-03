@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import argparse
 import duckdb
-from vocaludf.utils import duckdb_execute_cache_sequence, duckdb_execute_clevrer_cache_sequence, replace_slot, duckdb_execute_clevrer_materialize
+from vocaludf.utils import replace_slot, duckdb_execute_video_materialize
 from duckdb_dir.udf import register_udf
 import yaml
 from openai import OpenAI
@@ -49,7 +49,50 @@ def generate_charades_queries(n_queries, ratio_lower_bound, ratio_upper_bound, n
                     queries.append(res)
                 print("Generated {} queries".format(len(queries)))
     queries = queries[:n_queries]
-    file_path = os.path.join(config['data_dir'], dataset_name, "{}_new_udfs_labels.json".format(nunsupported_udfs))
+    file_path = os.path.join(config['data_dir'], dataset_name, "unavailable={}-npred={}-nobj_pred={}-nvars={}-depth={}.json".format(nunsupported_udfs, npred, nobj_pred, nvars, depth))
+    data = {"questions": queries}
+    with open(file_path, "w") as file:
+        json.dump(data, file, indent=4)
+
+def generate_single_semantic_queries(ratio_lower_bound, ratio_upper_bound, npred, nobj_pred, nvars, depth, nunsupported_udfs, unsupported_list, obj_classes, dataset_name):
+    conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
+
+    init_table(conn, dataset_name)
+
+    queries = []
+    for unsupported_predicate in unsupported_list:
+        obj_classes_shuffled = obj_classes.copy()
+        random.shuffle(obj_classes_shuffled)
+        unsupported_predicate["variables"] = ["o_0", "o_1"]
+        new_modules = [unsupported_predicate["predicate"]]
+        for obj_class in obj_classes_shuffled:
+            predicate_list = [
+                unsupported_predicate,
+                {"predicate": "object", "parameter": "person", "nargs": 1, "variables": ["o_0"]},
+                {"predicate": "object", "parameter": obj_class, "nargs": 1, "variables": ["o_1"]},
+            ]
+            scene_graphs = [[] for _ in range(depth)]
+            for pred in predicate_list:
+                gid = random.randint(0, depth-1)
+                scene_graphs[gid].append(pred)
+            # remove empty scene graphs
+            scene_graphs = [scene_graph for scene_graph in scene_graphs if len(scene_graph) > 0]
+            scene_graphs_str = []
+            for i, scene_graph in enumerate(scene_graphs):
+                scene_graph_str = print_scene_graph(scene_graph)
+                scene_graphs_str.append(scene_graph_str)
+            query_str = "; ".join(scene_graphs_str)
+            program = dsl_to_program(query_str)
+            query_str = program_to_dsl(program, sort_variables=False) # Rewrite variables (but don't sort arguments within predicates)
+            print("generated query", query_str)
+
+            res = generate_gt_labels_given_target_query(conn, query_str, ratio_lower_bound, ratio_upper_bound, new_modules)
+            if res:
+                queries.append(res)
+                print("Generated {} queries".format(len(queries)))
+                break
+
+    file_path = os.path.join(config['data_dir'], dataset_name, "single_semantic-unavailable={}-npred={}-nobj_pred={}-nvars={}-depth={}.json".format(nunsupported_udfs, npred, nobj_pred, nvars, depth))
     data = {"questions": queries}
     with open(file_path, "w") as file:
         json.dump(data, file, indent=4)
@@ -60,12 +103,9 @@ def generate_one_query(conn, ratio_lower_bound, ratio_upper_bound, npred, nobj_p
     """
     # randomly choose nunsupported_udfs from unsupported_list
     # Example UDF format: {"predicate": "LeftOf", "parameter": None, "nargs": 2}
-    candidate_unsupported_predicate_list = []
-    for pred in unsupported_list:
-        for i in range(1, nvars):
-            candidate_predicate = {"predicate": pred["predicate"], "parameter": pred["parameter"], "nargs": pred["nargs"], "variables": ["o_0", f"o_{i}"]}
-            candidate_unsupported_predicate_list.append(candidate_predicate)
-    unsupported_predicates = random.sample(candidate_unsupported_predicate_list, nunsupported_udfs)
+    unsupported_predicates = random.sample(unsupported_list, nunsupported_udfs)
+    for pred in unsupported_predicates:
+        pred["variables"] = ["o_0", random.choice(["o_{}".format(i) for i in range(1, nvars)])]
     new_modules = [pred["predicate"] for pred in unsupported_predicates]
 
     candidate_predicate_list = []
@@ -189,7 +229,7 @@ def generate_gt_labels_given_target_query(conn, query_str, ratio_lower_bound, ra
     # TODO: add object UDFs. We should coalesce the objects into one UDF: object(o1, 'oname')
     input_vids = 9601
     _start = time.time()
-    result, new_memo = duckdb_execute_clevrer_materialize(conn, program, memo, input_vids, available_udf_names, [], [])
+    result, new_memo = duckdb_execute_video_materialize(conn, program, memo, input_vids, available_udf_names, [], [])
 
     print("Time to execute query: {}".format(time.time() - _start))
     result = sorted(result)
@@ -319,6 +359,7 @@ def generate_charades_queries_with_unsupported_udfs():
     ap.add_argument("--nunsupported_udfs", type=int, default=3, help="number of unsupported UDFs in each query")
     ap.add_argument("--max_workers", type=int, default=1, help="number of workers")
     ap.add_argument("--dataset_name", type=str, default="charades", help="dataset name")
+    ap.add_argument("--strategy", type=str, help="")
 
     args = ap.parse_args()
     n_queries = args.n_queries
@@ -331,41 +372,66 @@ def generate_charades_queries_with_unsupported_udfs():
     nunsupported_udfs = args.nunsupported_udfs
     max_workers = args.max_workers
     dataset_name = args.dataset_name
+    strategy = args.strategy
+    print("strategy", strategy)
 
     # lookingat, notlookingat, above, beneath, infrontof, behind, onthesideof, in, carrying, coveredby, drinkingfrom, eating, haveitontheback, holding, leaningon, lyingon, notcontacting, sittingon, standingon, touching, twisting, wearing, wiping, writingon
-
-    supported_list = [
-        {"predicate": "looking_at", "parameter": None, "nargs": 2},
-        {"predicate": "above", "parameter": None, "nargs": 2},
-        {"predicate": "in_front_of", "parameter": None, "nargs": 2},
-        {"predicate": "on_the_side_of", "parameter": None, "nargs": 2},
-        {"predicate": "carrying", "parameter": None, "nargs": 2},
-        {"predicate": "drinking_from", "parameter": None, "nargs": 2},
-        {"predicate": "have_it_on_the_back", "parameter": None, "nargs": 2},
-        {"predicate": "leaning_on", "parameter": None, "nargs": 2},
-        {"predicate": "not_contacting", "parameter": None, "nargs": 2},
-        {"predicate": "standing_on", "parameter": None, "nargs": 2},
-        {"predicate": "twisting", "parameter": None, "nargs": 2},
-        {"predicate": "wiping", "parameter": None, "nargs": 2},
-    ]
-    unsupported_list = [
-        {"predicate": "not_looking_at", "parameter": None, "nargs": 2},
-        {"predicate": "beneath", "parameter": None, "nargs": 2},
-        {"predicate": "behind", "parameter": None, "nargs": 2},
-        {"predicate": "in", "parameter": None, "nargs": 2},
-        {"predicate": "covered_by", "parameter": None, "nargs": 2},
-        {"predicate": "eating", "parameter": None, "nargs": 2},
-        {"predicate": "holding", "parameter": None, "nargs": 2},
-        {"predicate": "lying_on", "parameter": None, "nargs": 2},
-        {"predicate": "sitting_on", "parameter": None, "nargs": 2},
-        {"predicate": "touching", "parameter": None, "nargs": 2},
-        {"predicate": "wearing", "parameter": None, "nargs": 2},
-        {"predicate": "writing_on", "parameter": None, "nargs": 2},
-    ]
-
     obj_classes = ["bag", "bed", "blanket", "book", "box", "broom", "chair", "closet/cabinet", "clothes", "cup/glass/bottle", "dish", "door", "doorknob", "doorway", "floor", "food", "groceries", "laptop", "light", "medicine", "mirror", "paper/notebook", "phone/camera", "picture", "pillow", "refrigerator", "sandwich", "shelf", "shoe", "sofa/couch", "table", "television", "towel", "vacuum", "window"]
 
-    generate_charades_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nobj_pred, nvars, depth, nunsupported_udfs, supported_list, unsupported_list, obj_classes, max_workers, dataset_name)
+    if strategy is None:
+        supported_list = [
+            # {"predicate": "looking_at", "parameter": None, "nargs": 2},
+            # {"predicate": "on_the_side_of", "parameter": None, "nargs": 2},
+            # {"predicate": "not_contacting", "parameter": None, "nargs": 2},
+            # {"predicate": "not_looking_at", "parameter": None, "nargs": 2},
+            {"predicate": "touching", "parameter": None, "nargs": 2},
+            {"predicate": "leaning_on", "parameter": None, "nargs": 2},
+            {"predicate": "wearing", "parameter": None, "nargs": 2},
+            {"predicate": "drinking_from", "parameter": None, "nargs": 2},
+            {"predicate": "lying_on", "parameter": None, "nargs": 2},
+            {"predicate": "writing_on", "parameter": None, "nargs": 2},
+            {"predicate": "twisting", "parameter": None, "nargs": 2},
+        ]
+        supported_spatial_list = [
+            {"predicate": "above", "parameter": None, "nargs": 2},
+            {"predicate": "in_front_of", "parameter": None, "nargs": 2},
+        ]
+        supported_list = supported_list + supported_spatial_list
+
+        unsupported_list = [
+            {"predicate": "holding", "parameter": None, "nargs": 2},
+            {"predicate": "sitting_on", "parameter": None, "nargs": 2},
+            {"predicate": "standing_on", "parameter": None, "nargs": 2},
+            {"predicate": "covered_by", "parameter": None, "nargs": 2},
+            {"predicate": "carrying", "parameter": None, "nargs": 2},
+            {"predicate": "eating", "parameter": None, "nargs": 2},
+            {"predicate": "wiping", "parameter": None, "nargs": 2},
+            {"predicate": "have_it_on_the_back", "parameter": None, "nargs": 2},
+        ]
+        unsupported_spatial_list = [
+            {"predicate": "beneath", "parameter": None, "nargs": 2},
+            {"predicate": "behind", "parameter": None, "nargs": 2},
+            {"predicate": "in", "parameter": None, "nargs": 2},
+        ]
+        unsupported_list = unsupported_list + unsupported_spatial_list
+
+        generate_charades_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nobj_pred, nvars, depth, nunsupported_udfs, supported_list, unsupported_list, obj_classes, max_workers, dataset_name)
+    elif strategy == "single-semantic":
+        # Top-10 most frequent semantic relationships
+        unsupported_list = [
+            {"predicate": "not_looking_at", "parameter": None, "nargs": 2},
+            {"predicate": "looking_at", "parameter": None, "nargs": 2},
+            {"predicate": "holding", "parameter": None, "nargs": 2},
+            {"predicate": "not_contacting", "parameter": None, "nargs": 2},
+            {"predicate": "touching", "parameter": None, "nargs": 2},
+            {"predicate": "sitting_on", "parameter": None, "nargs": 2},
+            {"predicate": "leaning_on", "parameter": None, "nargs": 2},
+            {"predicate": "drinking_from", "parameter": None, "nargs": 2},
+            {"predicate": "standing_on", "parameter": None, "nargs": 2},
+            {"predicate": "wearing", "parameter": None, "nargs": 2},
+        ]
+        # python generate_charades_queries.py --n_queries 10 --npred 3 --nobj_pred 2 --nvars 2 --depth 1 --nunsupported_udfs 1 --strategy "single-semantic" --ratio_upper_bound 0.5
+        generate_single_semantic_queries(ratio_lower_bound, ratio_upper_bound, npred, nobj_pred, nvars, depth, nunsupported_udfs, unsupported_list, obj_classes, dataset_name)
 
 # def generate_clevrer_queries_udf_exclusion():
 #     # python generate_clevrer_queries.py --udf "Near"

@@ -3,8 +3,7 @@ import string
 import os
 from vocaludf.utils import (
     duckdb_execute_cache_sequence,
-    duckdb_execute_clevrer_cache_sequence,
-    duckdb_execute_clevrer_materialize,
+    duckdb_execute_video_materialize,
     parse_signature,
     PredImageDataset,
 )
@@ -38,7 +37,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def VideoFrameDaliDataloader(
+def ClevrerDaliDataloader(
     vids,
     sequence_length=64,
     video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/",
@@ -56,6 +55,57 @@ def VideoFrameDaliDataloader(
         )
         for vid in vids
     ]
+
+    @pipeline_def
+    def video_pipe(filenames, vids):
+        videos, labels, start_frame_num = fn.readers.video(
+            device="gpu",
+            filenames=filenames,
+            # the only "boosting parameter" is the sequence_length: https://github.com/NVIDIA/DALI/issues/4498
+            sequence_length=sequence_length,
+            pad_sequences=True,
+            # shard_id=0,
+            # num_shards=1,
+            dtype=types.UINT8,
+            random_shuffle=False,
+            initial_fill=None, # Only relevant when shuffle=True
+            file_list_include_preceding_frame=False, # Quiet warning about default changing
+            dont_use_mmap=True,
+            skip_vfr_check=True,
+            enable_frame_num=True,
+            labels=vids,
+            name='reader',
+        )
+        return videos, labels, start_frame_num
+
+    pipe = video_pipe(batch_size=batch_size, num_threads=num_threads, device_id=0, filenames=video_files, vids=vids)
+    pipe.build()
+    return pipe
+
+def CharadesDaliDataloader(
+    vids,
+    sequence_length=64,
+    video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/Charades_v1_480",
+    device='gpu',
+    batch_size=None,
+    num_threads=None,
+):
+    assert device == 'gpu', 'dali video_resize only supports gpu backend'
+    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    df_metadata = conn.execute(f"""
+        SELECT DISTINCT vname, vid
+        FROM charades_metadata
+    """).df()
+    vid_to_vname = {int(vid): vname for vname, vid in zip(df_metadata['vname'], df_metadata['vid'])}
+    video_filenames = [f"{vid_to_vname[vid]}.mp4" for vid in vids]
+    video_files = [
+        os.path.join(
+            video_directory,
+            fname,
+        )
+        for fname in video_filenames
+    ]
+
 
     @pipeline_def
     def video_pipe(filenames, vids):
@@ -115,7 +165,9 @@ class QueryExecutor:
         for func in self.registered_functions:
             signature = func["signature"]
             udf_name, udf_vars = parse_signature(signature)
-            if func.get("semantic_interpretation", "") == "dummy":
+            if udf_name in self.available_udf_names:
+                continue
+            elif func.get("semantic_interpretation", "") == "dummy":
                 if len(udf_vars) == 1:
                     df = self.conn.execute(f"SELECT vid, fid, o1_oid, 1 as pred FROM one_object").df()
                 else:
@@ -164,18 +216,23 @@ class QueryExecutor:
 
 
     def init_table(self):
+        metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
+        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
+        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
+
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
         sql = f"""
             CREATE TEMPORARY TABLE one_object AS
             SELECT
-                o.vid AS vid, o.fid AS fid, o.oid AS o1_oid, o.oname AS o1_oname,
-                o.x1 AS o1_x1, o.y1 AS o1_y1, o.x2 AS o1_x2, o.y2 AS o1_y2,
+                o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
+                o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
                 COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
                 COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
-                320 AS height, 480 AS width
-            FROM {self.dataset}_objects o
-            LEFT OUTER JOIN {self.dataset}_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid
-            GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
+                {height_width_clause}
+            FROM {self.dataset}_objects o1
+            LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+            {metadata_join_clause}
+            GROUP BY {group_by_clause}
         """
         logger.debug(f"Create one_object table:\n{sql}")
         self.conn.execute(sql, self.attribute_domain).df()
@@ -206,11 +263,12 @@ class QueryExecutor:
                 COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
                 COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
                 COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
-                320 AS height, 480 AS width
+                {height_width_clause}
             FROM obj_with_attrs o1
             JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
             LEFT OUTER JOIN relationships_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
             LEFT OUTER JOIN relationships_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
+            {metadata_join_clause}
             WHERE o1.oid <> o2.oid
         """
         logger.debug(f"Create two_objects table:\n{sql}")
@@ -252,7 +310,7 @@ class QueryExecutor:
         for udf_name, df in self.materialized_udfs.items():
             exec(f"{udf_name} = df")
         if self.dataset == "clevrer":
-            exec_func = duckdb_execute_clevrer_materialize
+            exec_func = duckdb_execute_video_materialize
             if debug:
                 input_vids = 1000
             else:
@@ -263,6 +321,12 @@ class QueryExecutor:
                 input_vids = 1500
             else:
                 input_vids = 15000
+        elif self.dataset == "charades":
+            exec_func = duckdb_execute_video_materialize
+            if debug:
+                input_vids = 1000
+            else:
+                input_vids = 9601
         else:
             raise ValueError(
                 "Unknown dataset: {}".format(self.dataset)
@@ -371,15 +435,18 @@ class QueryExecutor:
 
         logger.info("building video dataloader")
         # Create DALI pipeline for loading video frames
-        pipe = VideoFrameDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
+        if self.dataset == "clevrer":
+            pipe = ClevrerDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
+        elif self.dataset == "charades":
+            pipe = CharadesDaliDataloader(vids, sequence_length=128, batch_size=1, num_threads=1)
         video_iterator = DALIGenericIterator(
-                [pipe],
-                ['frames', 'vid', 'fid'],
-                last_batch_policy=LastBatchPolicy.PARTIAL,
-                # Required or iterator loops indefinitely (https://github.com/NVIDIA/DALI/issues/2873)
-                # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
-                reader_name='reader'
-            )
+            [pipe],
+            ['frames', 'vid', 'fid'],
+            last_batch_policy=LastBatchPolicy.PARTIAL,
+            # Required or iterator loops indefinitely (https://github.com/NVIDIA/DALI/issues/2873)
+            # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
+            reader_name='reader'
+        )
 
         udf_to_df_map = defaultdict(list)
         udf_to_pred_map = defaultdict(list)

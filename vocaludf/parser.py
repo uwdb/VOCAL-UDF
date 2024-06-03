@@ -78,9 +78,9 @@ def parse_udf():
     string = QuotedString("'") | QuotedString('"')
     number = ppc.number()
     value = string | number | TRUE | FALSE
-    fn_name = ungroup(~Literal("Duration") + Word(alphas, alphanums + "_"))
+    fn_name = ungroup(~Literal("Duration") + ~Literal("object") + Word(alphas, alphanums + "_"))
     fn_args = Group(var - Opt(comma + var))
-    udf = fn_name("fn_name") - lpar - fn_args('variables') - Opt(comma + value)('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar
+    udf = fn_name("fn_name") - lpar - fn_args('variables') - Opt(comma + value)('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar | Literal("object")("fn_name") - lpar - Group(var)('variables') - comma - Word(alphas, alphanums + "_")('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar
     return udf
 
 if __name__ == "__main__":
@@ -120,7 +120,10 @@ if __name__ == "__main__":
             else:
                 print("success")
     # [{'scene_graph': [{'predicate': 'Color', 'parameter': 'red', 'variables': ['o0']}, {'predicate': 'Far', 'parameter': 3.0, 'variables': ['o0', 'o1']}, {'predicate': 'Shape', 'parameter': 'cylinder', 'variables': ['o1']}], 'duration_constraint': 1}, {'scene_graph': [{'predicate': 'Near', 'parameter': 1.0, 'variables': ['o0', 'o1']}, {'predicate': 'RightQuadrant', 'parameter': None, 'variables': ['o2']}, {'predicate': 'TopQuadrant', 'parameter': None, 'variables': ['o2']}], 'duration_constraint': 1}]
+
+
     # unit tests for UDF
+    test_udf("object(o1, oname)", {'fn_name': 'object', 'variables': ['o1'], 'parameter': 'oname'})
     test_udf("Color_red(o1)", {'fn_name': 'Color_red', 'variables': ['o1']})
     test_udf("Color_red(o1, o2)", {'fn_name': 'Color_red', 'variables': ['o1', 'o2']})
     test_udf("Color_red(o1, -1)", {'fn_name': 'Color_red', 'variables': ['o1'], 'parameter': -1})

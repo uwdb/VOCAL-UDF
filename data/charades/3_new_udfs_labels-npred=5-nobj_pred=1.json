@@ -5,7 +5,11 @@
             "question": "A person is behind an object o1 and is also touching another object o2. Later, the person moves to be in front of o2 and is not looking at o2.",
             "visprog_program": "",
             "dsl": "(behind(o0, o1), touching(o0, o2)); object(o0, 'person'); (in_front_of(o0, o2), not_looking_at(o0, o2))",
-            "new_modules": [],
+            "new_modules": [
+                "BEHIND",
+                "TOUCHING",
+                "NOTLOOKINGAT"
+            ],
             "positive_videos": [
                 5,
                 7,
@@ -1680,7 +1684,10 @@
             "question": "Initially, a person is holding an object o1 and is in front of another object o2. Subsequently, this person is holding o2, and finally, the person is behind o1.",
             "visprog_program": "",
             "dsl": "(holding(o0, o1), in_front_of(o0, o2)); (holding(o0, o2), object(o0, 'person')); behind(o0, o1)",
-            "new_modules": [],
+            "new_modules": [
+                "HOLDING",
+                "BEHIND"
+            ],
             "positive_videos": [
                 20,
                 69,
@@ -2700,7 +2707,10 @@
             "question": "A person is not looking at an object o1 while simultaneously touching it. Later, the person is on the side of another object o2 while touching it.",
             "visprog_program": "",
             "dsl": "not_looking_at(o0, o1); touching(o0, o1); (object(o0, 'person'), on_the_side_of(o0, o2), touching(o0, o2))",
-            "new_modules": [],
+            "new_modules": [
+                "NOT_LOOKING_AT",
+                "TOUCHING"
+            ],
             "positive_videos": [
                 15,
                 22,
@@ -4495,7 +4505,10 @@
             "question": "A person is in front of an object o1 and not looking at another object o2. Later in the sequence, the person is in o2 and not looking at o1.",
             "visprog_program": "",
             "dsl": "(in_front_of(o0, o1), not_looking_at(o0, o2)); object(o0, 'person'); (in(o0, o2), not_looking_at(o0, o1))",
-            "new_modules": [],
+            "new_modules": [
+                "NOT_LOOKING_AT",
+                "IN"
+            ],
             "positive_videos": [
                 2,
                 15,
@@ -5506,7 +5519,11 @@
             "question": "A person is holding and touching an object o1, and positioned on the side of another object o2. In a subsequent scene, the person is not looking at o1.",
             "visprog_program": "",
             "dsl": "(holding(o0, o1), on_the_side_of(o0, o2), touching(o0, o1)); object(o0, 'person'); not_looking_at(o0, o1)",
-            "new_modules": [],
+            "new_modules": [
+                "HOLDING",
+                "TOUCHING",
+                "NOT_LOOKING_AT"
+            ],
             "positive_videos": [
                 1,
                 20,
@@ -6196,7 +6213,10 @@
             "question": "A person is not looking at object o1 while sitting on another object o2. Following this, the person is leaning on o2 and not looking at o2.",
             "visprog_program": "",
             "dsl": "(not_looking_at(o0, o1), object(o0, 'person'), sitting_on(o0, o2)); (leaning_on(o0, o2), not_looking_at(o0, o2))",
-            "new_modules": [],
+            "new_modules": [
+                "NOT_LOOKING_AT",
+                "SITTING_ON"
+            ],
             "positive_videos": [
                 0,
                 19,
@@ -7434,7 +7454,10 @@
             "question": "Initially, a person is holding object o1 while not making contact with another object o2. Subsequently, the person is not looking at either o1 or o2.",
             "visprog_program": "",
             "dsl": "(holding(o0, o1), not_contacting(o0, o2)); (not_looking_at(o0, o1), not_looking_at(o0, o2), object(o0, 'person'))",
-            "new_modules": [],
+            "new_modules": [
+                "HOLDING",
+                "NOT_LOOKING_AT"
+            ],
             "positive_videos": [
                 1,
                 2,
@@ -11236,7 +11259,11 @@
             "question": "Initially, a person is behind object o1 without contacting it but is touching another object o2. Later, the person is not looking at o1.",
             "visprog_program": "",
             "dsl": "(behind(o0, o1), not_contacting(o0, o1), touching(o0, o2)); (not_looking_at(o0, o1), object(o0, 'person'))",
-            "new_modules": [],
+            "new_modules": [
+                "BEHIND",
+                "TOUCHING",
+                "NOT_LOOKING_AT"
+            ],
             "positive_videos": [
                 5,
                 19,
@@ -12029,7 +12056,10 @@
             "question": "A person is leaning on object o1 while not looking at it. Later, the person is not looking at another object o2. Finally, the person is positioned beneath o2.",
             "visprog_program": "",
             "dsl": "(leaning_on(o0, o1), not_looking_at(o0, o1)); not_looking_at(o0, o2); (beneath(o0, o2), object(o0, 'person'))",
-            "new_modules": [],
+            "new_modules": [
+                "NOT_LOOKING_AT",
+                "BENEATH"
+            ],
             "positive_videos": [
                 7,
                 23,
@@ -12563,7 +12593,11 @@
             "question": "Initially, a person is beneath object o1 and touching another object o2. Subsequently, the person is looking at o1 while not looking at o2.",
             "visprog_program": "",
             "dsl": "beneath(o0, o1); touching(o0, o2); (looking_at(o0, o1), not_looking_at(o0, o2), object(o0, 'person'))",
-            "new_modules": [],
+            "new_modules": [
+                "BENEATH",
+                "TOUCHING",
+                "NOT_LOOKING_AT"
+            ],
             "positive_videos": [
                 7,
                 16,

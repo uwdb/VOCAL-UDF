@@ -4,6 +4,7 @@ from vocaludf.parser import parse
 from vocaludf.utils import replace_slot
 import pyparsing as pp
 import logging
+import os
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -13,9 +14,9 @@ class QueryParser:
         self,
         config,
         prompt_config,
-        config_list,
         dataset,
         registered_functions,
+        object_domain,
         run_id,
         allow_new_udfs=True,
     ):
@@ -24,7 +25,8 @@ class QueryParser:
             self.registered_function_names.append(
                 registered_function["signature"].split("(")[0].lower()
             )
-        if dataset in ["clevrer"]:  # video dataset
+        self.object_domain = object_domain
+        if dataset in ["clevrer", "charades"]:  # video dataset
             dsl_definition_prompt = prompt_config["dsl_definition"]
         elif dataset in ["clevr"]:  # image dataset
             dsl_definition_prompt = prompt_config["dsl_definition_image"]
@@ -35,7 +37,7 @@ class QueryParser:
                 " ".join(
                     [
                         dsl_definition_prompt,
-                        prompt_config["udf_definition"],
+                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer"] else prompt_config["udf_definition"]["with_object"],
                         prompt_config["registered_udfs"],
                         prompt_config["parse_query"],
                     ]
@@ -50,15 +52,15 @@ class QueryParser:
                 },
             )
             is_termination_msg = lambda x: x.get("content", "") and (
-                "yes" in x.get("content", "").rstrip().lower()
-                or "no" in x.get("content", "").rstrip().lower()
+                "parse_yes" in x.get("content", "").rstrip().lower()
+                or "parse_no" in x.get("content", "").rstrip().lower()
             )
         else:
             system_message = replace_slot(
                 " ".join(
                     [
                         dsl_definition_prompt,
-                        prompt_config["udf_definition"],
+                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer"] else prompt_config["udf_definition"]["with_object"],
                         prompt_config["registered_udfs"],
                         prompt_config["force_parse_query"],
                     ]
@@ -82,7 +84,10 @@ class QueryParser:
             name="parser",
             system_message=system_message,
             llm_config={
-                "config_list": config_list,
+                "config_list": [{
+                    'model': 'gpt-4',
+                    'api_key': os.getenv("OPENAI_API_KEY"),
+                }],
                 "timeout": 120,
                 "temperature": config["query_parser"]["temperature"],
                 "seed": run_id,
@@ -94,33 +99,31 @@ class QueryParser:
             is_termination_msg=is_termination_msg,
             human_input_mode="NEVER",
             max_consecutive_auto_reply=10,
-            code_execution_config={"work_dir": "coding", "use_docker": False},
+            code_execution_config=False,
+            # code_execution_config={"work_dir": "coding", "use_docker": False},
         )
 
-        @self.user_proxy.register_for_execution()
-        @self.parser.register_for_llm(
-            description="Verify syntax correctness of input query."
-        )
         def verify_syntax(
             query: Annotated[str, "Input query written in DSL to be verified."]
         ) -> str:
             def check_UDF_support(program):
                 unsupported_udfs = []
+                unsupported_objects = []
                 flag = True
                 for sg in program["query"]:
                     for pred in sg["scene_graph"]:
-                        if (
-                            pred["predicate"].lower()
-                            not in self.registered_function_names
-                        ):
+                        if pred["predicate"].lower() not in self.registered_function_names:
                             flag = False
                             unsupported_udfs.append(pred["predicate"])
-                return flag, unsupported_udfs
+                        if pred["predicate"].lower() == "object" and pred["parameter"].lower() not in self.object_domain:
+                            flag = False
+                            unsupported_objects.append(pred["parameter"])
+                return flag, unsupported_udfs, unsupported_objects
 
             try:
                 parsed_program = parse().parseString(query, parseAll=True).as_dict()
                 # Post-check if parsed program uses unsupported UDFs
-                flag, unsupported_udfs = check_UDF_support(parsed_program)
+                flag, unsupported_udfs, unsupported_objects = check_UDF_support(parsed_program)
                 if flag:
                     self.parsed_program = parsed_program
                     self.parsed_query = query
@@ -128,14 +131,18 @@ class QueryParser:
                 else:
                     return (
                         query
-                        + "failed:\n"
-                        + "Unsupported UDFs: {}".format(unsupported_udfs)
+                        + " failed:\n"
+                        + "Unsupported UDFs: {}\n".format(unsupported_udfs) if unsupported_udfs else ""
+                        + "Unsupported Objects: {}\n".format(unsupported_objects) if unsupported_objects else ""
                     )
             except (pp.ParseException, pp.ParseSyntaxException) as err:
                 return err.explain()
             except Exception as e:
-                error_message = query + "failed:\n" + str(e)
+                error_message = query + " failed:\n" + str(e)
                 return error_message
+
+        self.parser.register_for_llm(name="verify_syntax", description="Verify syntax correctness of input query.")(verify_syntax)
+        self.user_proxy.register_for_execution(name="verify_syntax")(verify_syntax)
 
     def parse(self, user_query):
         self.user_proxy.initiate_chat(
@@ -146,8 +153,8 @@ class QueryParser:
         logger.debug("chat_messages {}".format(chat_messages))
         if chat_messages[-1]["role"] != "user":
             # The conversation didn't end with the user's message (YES/NO)
-            # Assume YES
-            flag = "yes"
+            # Assume NO
+            flag = "parse_no"
             logger.debug(
                 "The conversation didn't end with the user's message. Assume: flag {}".format(
                     flag

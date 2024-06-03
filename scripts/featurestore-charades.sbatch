@@ -13,6 +13,10 @@ cat $0
 echo "Date" $(date)
 echo "--------------------"
 
+# bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
+#     python \
+#         /gscratch/balazinska/enhaoz/VOCAL-UDF/featurestore/charades_three_clips.py
+
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/featurestore/charades_three_clips.py
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/featurestore/charades_clip_with_bboxes.py

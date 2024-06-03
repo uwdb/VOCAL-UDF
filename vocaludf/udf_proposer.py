@@ -91,14 +91,12 @@ class UDFCandidate:
 
 
 class UDFProposer:
-    llm_method = "gpt4v"
     mlp_method = "three_clip"
     # Propose new UDFs and generate semantic interpretations
     def __init__(
         self,
         config,
         prompt_config,
-        config_list,
         registered_functions,
         object_domain,
         relationship_domain,
@@ -118,10 +116,10 @@ class UDFProposer:
         selection_strategy,
         selection_labels,
         allow_kwargs_in_udf,
+        llm_method
     ):
         self.config = config
         self.prompt_config = prompt_config
-        self.config_list = config_list
         self.registered_functions = registered_functions
         self.object_domain = object_domain
         self.relationship_domain = relationship_domain
@@ -138,6 +136,7 @@ class UDFProposer:
         self.selection_strategy = selection_strategy
         self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
+        self.llm_method = llm_method
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -161,10 +160,13 @@ class UDFProposer:
         self.load_labeled_data = load_labeled_data
         self.attribute_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "attribute")
         self.relationship_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "relationship")
+        self.llm_positive_df = None
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
         # Load the CLIP model
         # clip_model_name = "openai/clip-vit-base-patch32"
         clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
         self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
         # self.clip_model.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
@@ -172,20 +174,43 @@ class UDFProposer:
 
         self.dim_in = self.clip_model.config.projection_dim
 
+        if self.llm_method == "llava":
+            # Make room for llava model
+            llava_model_name = os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf')
+            self.llava_model = LlavaNextForConditionalGeneration.from_pretrained(
+                llava_model_name,
+                torch_dtype=torch.float16,
+                device_map="auto",
+            )
+            logger.debug("llava_model.hf_device_map: {}".format(self.llava_model.hf_device_map))
+            self.llava_processor = LlavaNextProcessor.from_pretrained(llava_model_name)
+            self.llava_processor.tokenizer.padding_side = "left"
+
+        if self.dataset == "charades":
+            df_metadata = self.conn.execute(f"""
+                SELECT DISTINCT vname, vid
+                FROM charades_metadata
+            """).df()
+            self.vid_to_vname = {int(vid): vname for vid, vname in zip(df_metadata['vid'], df_metadata['vname'])}
+
     def init_table(self):
+        metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
+        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
+        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
         # TODO: use object_domain to filter out objects that are not in the domain
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
         sql = f"""
             SELECT
-                o.vid AS vid, o.fid AS fid, o.oid AS o1_oid, o.oname AS o1_oname,
-                o.x1 AS o1_x1, o.y1 AS o1_y1, o.x2 AS o1_x2, o.y2 AS o1_y2,
+                o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
+                o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
                 COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
                 COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
-                320 AS height, 480 AS width
-            FROM {self.dataset}_objects o
-            LEFT OUTER JOIN {self.dataset}_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid
-            GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
-            ORDER BY o.vid, o.fid, o.oid, o.x1, o.y1, o.x2, o.y2
+                {height_width_clause}
+            FROM {self.dataset}_objects o1
+            LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+            {metadata_join_clause}
+            GROUP BY {group_by_clause}
+            ORDER BY o1.vid, o1.fid, o1.oid, o1.x1, o1.y1, o1.x2, o1.y2
         """
         logger.debug(f"Create one_object table:\n{sql}")
         self.one_object_df = self.conn.execute(sql, self.attribute_domain).df()
@@ -215,11 +240,12 @@ class UDFProposer:
                 COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
                 COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
                 COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
-                320 AS height, 480 AS width
+                {height_width_clause}
             FROM obj_with_attrs o1
             JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
             LEFT OUTER JOIN relationships_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
             LEFT OUTER JOIN relationships_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
+            {metadata_join_clause}
             WHERE o1.oid <> o2.oid
             ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         """
@@ -235,7 +261,7 @@ class UDFProposer:
     def propose(self, user_query):
         # Step 1: propose new UDFs
         logger.info("Proposing new UDFs")
-        if self.dataset in ["clevrer"]:  # video dataset
+        if self.dataset in ["clevrer", "charades"]:  # video dataset
             dsl_definition_prompt = self.prompt_config["dsl_definition"]
         elif self.dataset in ["clevr"]:  # image dataset
             dsl_definition_prompt = self.prompt_config["dsl_definition_image"]
@@ -243,7 +269,7 @@ class UDFProposer:
             " ".join(
                 [
                     dsl_definition_prompt,
-                    self.prompt_config["udf_definition"],
+                    self.prompt_config["udf_definition"]["without_object"] if self.dataset in ["clevr", "clevrer"] else self.prompt_config["udf_definition"]["with_object"],
                     self.prompt_config["registered_udfs"],
                     self.prompt_config["propose_udfs"],
                 ]
@@ -261,7 +287,10 @@ class UDFProposer:
             name="udf_proposer",
             system_message=system_message,
             llm_config={
-                "config_list": self.config_list,
+                "config_list": [{
+                    'model': 'gpt-4-turbo-2024-04-09',
+                    'api_key': os.getenv("OPENAI_API_KEY"),
+                }],
                 "timeout": 120,
                 "temperature": self.config["udf_proposer"]["temperature"],
                 "seed": self.run_id,
@@ -276,7 +305,8 @@ class UDFProposer:
             and "terminate" in x.get("content", "").rstrip().lower(),
             human_input_mode="NEVER",
             max_consecutive_auto_reply=10,
-            code_execution_config={"work_dir": "coding", "use_docker": False},
+            code_execution_config=False,
+            # code_execution_config={"work_dir": "coding", "use_docker": False},
         )
 
         @user_proxy.register_for_execution()
@@ -322,15 +352,17 @@ class UDFProposer:
                 for registered_function in self.registered_functions
             ]
         )
+        logger.info("filtering out functions that are already registered")
         for key in list(self.proposed_functions.keys()):
             if key.split("(")[0].lower() in registered_function_names:
+                logger.info(f"filtering out {key}")
                 del self.proposed_functions[key]
         # Step 2: verify functions (i.e., whether they can be constructed out of existing ones)
         # TODO: Implement this
         return self.proposed_functions
 
 
-    def implement(self, udf_signature, udf_description):
+    def implement(self, udf_signature, udf_description, gt_udf_name):
         # TODO: incorporate labels (maybe in the selection stage)
         if self.selection_strategy == "program":
             if self.selection_labels == "none" and self.allow_kwargs_in_udf:
@@ -338,7 +370,7 @@ class UDFProposer:
                 logger.info("Turning off allow_kwargs_in_udf since no labels are provided")
             return self._generate_program(udf_signature, udf_description)
         elif self.selection_strategy == "model":
-            return self._distill_model(udf_signature, udf_description)
+            return self._distill_model(udf_signature, udf_description, gt_udf_name)
         elif self.selection_strategy == "llm":
             if self.selection_labels == "none" and self.allow_kwargs_in_udf:
                 self.allow_kwargs_in_udf = False
@@ -347,12 +379,12 @@ class UDFProposer:
             if llm_decision == "programUDF":
                 return self._generate_program(udf_signature, udf_description)
             elif llm_decision == "modelUDF":
-                return self._distill_model(udf_signature, udf_description)
+                return self._distill_model(udf_signature, udf_description, gt_udf_name)
             else:
                 raise NotImplementedError(f"llm_decision: {llm_decision} is not supported yet.")
         elif self.selection_strategy == "both":
             program_udf_candidates = self._generate_program(udf_signature, udf_description)
-            model_udf_candidates = self._distill_model(udf_signature, udf_description)
+            model_udf_candidates = self._distill_model(udf_signature, udf_description, gt_udf_name)
             return program_udf_candidates + model_udf_candidates
 
 
@@ -500,7 +532,7 @@ class UDFProposer:
                 verifed_implemented_udfs = []
                 for idx in range(len(implemented_udfs)):
                     implemented_udf = implemented_udfs[idx]
-                    implemented_udf, success = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, self.program_with_pixels)
+                    implemented_udf, success = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt)
                     if success:
                         implemented_udf["udf_name"] = udf_name
                         implemented_udf["udf_signature"] = udf_signature
@@ -546,8 +578,8 @@ class UDFProposer:
 
         return udf_candidate_list
 
-    def verify_syntax_correctness(self, implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, with_pixels, n_verify_samples=10):
-        df_samples = self.construct_train_and_test_data(n_obj, n_verify_samples, with_images=self.program_with_pixels)
+    def verify_syntax_correctness(self, implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, n_verify_samples=10):
+        df_samples = self.construct_train_and_test_data(n_obj, n_verify_samples, df_with_img_column=self.program_with_pixels)
         verify_syntax_correctness_prompt = replace_slot(
             verify_syntax_correctness_base_prompt,
             {
@@ -621,7 +653,7 @@ class UDFProposer:
                             break
                 if not is_kwargs_correct:
                     continue
-                result = self.exec_udf_with_data(df_samples, udf_obj, kwargs, n_obj, with_pixels)
+                result = self.exec_udf_with_data(df_samples, udf_obj, kwargs, n_obj)
                 contains_non_boolean = False
                 for r in result:
                     if r != 1 and r != 0:
@@ -639,7 +671,7 @@ class UDFProposer:
             logger.debug("verify_syntax_correctness:\n" + "\n".join([f"{message['role']}: {message['content']}" for message in messages]))
         return implemented_udf, success
 
-    def exec_udf_with_data(self, df, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=True):
+    def exec_udf_with_data(self, df, udf_obj, kwargs, n_obj, requires_no_error=True):
         def safe_udf(udf, *args, **kwargs):
             try:
                 return bool(udf(*args, **kwargs))
@@ -653,12 +685,12 @@ class UDFProposer:
             func = partial(safe_udf, udf_obj, **kwargs)
 
         if n_obj == 1:
-            if with_pixels:
+            if self.program_with_pixels:
                 result = list(tqdm(self.executor.map(func, df["img"], df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
             else:
                 result = list(tqdm(self.executor.map(func, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
         elif n_obj == 2:
-            if with_pixels:
+            if self.program_with_pixels:
                 result = list(tqdm(self.executor.map(func, df["img"], df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
             else:
                 result = list(tqdm(self.executor.map(func, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"]), total=len(df), file=sys.stdout, desc="exec_udf_with_data"))
@@ -703,11 +735,17 @@ class UDFProposer:
         # self.gt_udf = getattr(module, function_name)
         self.gt_udf_name = gt_udf_name
 
+        # TODO: ask LLM about relevant object classes to the target relationships, and filter data
+        filtered_objects = None
+        if self.dataset in ["charades"]:
+            filtered_objects = list(set(self.llm_filter_relevant_objects(udf_signature, udf_description) + ['person']))
+        logger.debug(f"filtered_objects: {filtered_objects}")
+
         # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 2) to ensure we have enough training samples
         if gt_udf_name:
-            self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, self.n_test_distill, with_images=True)
+            self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, self.n_test_distill, df_with_img_column=True, filtered_objects=filtered_objects)
         else:
-            self.df_train = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, with_images=True)
+            self.df_train = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, df_with_img_column=True, filtered_objects=filtered_objects)
 
         self.llm_annotate_data()
         self.mlp_prepare_data()
@@ -724,9 +762,46 @@ class UDFProposer:
         new_udf_candidate = UDFCandidate(id='model', payload=udf_dict)
         return [new_udf_candidate]
 
+    def llm_filter_relevant_objects(self, udf_signature, udf_description):
+        filter_objects_prompt = replace_slot(
+            self.prompt_config["filter_training_data"],
+            {
+                "object_classes": self.object_domain,
+                "udf_signature": udf_signature,
+                "udf_description": udf_description,
+            },
+        )
+        logger.debug("filter_objects_prompt: {}".format(filter_objects_prompt))
+        for trial in range(3):  # Retry 3 times
+            response = None
+            try:
+                logger.debug(f"trial: {trial}")
+                response = self.client.chat.completions.create(
+                    model="gpt-4-turbo-2024-04-09",
+                    messages=[
+                        {"role": "user", "content": filter_objects_prompt},
+                    ],
+                    temperature=self.config["udf_generator"]["temperature"],
+                    top_p=self.config["udf_generator"]["top_p"],
+                    seed=self.run_id * 42 + trial,
+                )
+                filtered_objects = eval(
+                    "\n\n".join(
+                        re.findall(
+                            r"```json\n(.*?)```",
+                            response.choices[0].message.content,
+                            re.DOTALL,
+                        )
+                    )
+                )["answer"]
+                return filtered_objects
+            except Exception as e:
+                logger.exception("ERROR: failed to filter relevant objects: {}".format(e))
+                logger.debug(response)
+
     def llm_annotate_data(self):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
-
+        llm_positive_df = []
         labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method)
         labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_class, self.run_id, self.n_train_distill))
         os.makedirs(labeled_data_dir, exist_ok=True)
@@ -745,16 +820,21 @@ class UDFProposer:
             # Training and validation data
             self.label_count = 0
             for _, row in self.df_train.iterrows():
+                logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
                 try:
                     gt_label = self._get_gt_label(row)
-                    logger.debug("gt_label: {}".format(gt_label))
                     # Read and crop frame
                     logger.debug("row: {}".format(row.drop('img').to_dict()))
                     frame, image_size = self.frame_processing_for_model(row)
                     if frame is None:
                         continue
-                    llm_label, base64_image, image_prompt = self._llm_annotate_frame(frame, image_size, row, gt_label)
+                    if self.llm_method == "gpt4v":
+                        llm_label, base64_image, image_prompt = self._llm_annotate_frame(frame, image_size, row, gt_label)
+                    elif self.llm_method == "llava":
+                        llm_label, base64_image, image_prompt = self._llava_annotate_frame(frame, image_size, row, gt_label, self.llava_model, self.llava_processor)
                     labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
+                    if llm_label == 1:
+                        llm_positive_df.append(row)
                     if self.label_count >= self.n_train_distill:
                         break
                 except Exception as e:
@@ -766,6 +846,7 @@ class UDFProposer:
             else:
                 llm_f1 = -1
             labeled_data["metadata"] = {"llm_TP": self.llm_TP, "llm_FP": self.llm_FP, "llm_TN": self.llm_TN, "llm_FN": self.llm_FN, "llm_f1": llm_f1}
+            self.llm_positive_df = pd.DataFrame(llm_positive_df).reset_index(drop=True)
 
             # Test data
             if self.gt_udf_name is not None:
@@ -786,6 +867,10 @@ class UDFProposer:
                 logger.info("Saving labeled data to {}".format(labeled_data_path))
                 torch.save(labeled_data, labeled_data_path)
         self.labeled_data = labeled_data
+
+        # if self.llm_method == "llava":
+        #     del llava_model
+        #     torch.cuda.empty_cache()
 
     def mlp_prepare_data(self):
         # TODO: retrieve features directly from parquet files
@@ -850,6 +935,9 @@ class UDFProposer:
         callbacks=[checkpoint_callback]
         earlystopping_callback = pl.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10)
         callbacks.append(earlystopping_callback)
+        # TODO: fine-tuning the learning rate
+        # learningrate_callback = pl.callbacks.LearningRateFinder()
+        # callbacks.append(learningrate_callback)
 
         self.mlp_model = mlp.MLP(mlp_dim_in, 2, logger, self.class_weights) # binary classification
 
@@ -927,6 +1015,11 @@ class UDFProposer:
     def _llm_annotate_frame(self, frame, image_size, row, gt_label):
         # TODO: don't resize the frame here, resize it in the model
         # Convert the frame to a base 64 encoded image
+        # TODO: Try different llm annotation prompt: draw bounding boxes on subject and object.
+        if self.n_obj == 2:
+            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
+            cv2.rectangle(frame, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
+            cv2.rectangle(frame, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
         _, buffer = cv2.imencode('.jpg', frame)
         base64_image = base64.b64encode(buffer).decode('utf-8')
         logger.debug("base64_image: {}".format(base64_image))
@@ -955,6 +1048,7 @@ class UDFProposer:
         )
         result = response.choices[0].message.content
         logger.debug("Result: {}".format(result))
+        logger.debug("gt_label: {}".format(gt_label))
         if "yes" in result.lower():
             llm_label = 1
             if self.gt_udf_name is not None:
@@ -978,19 +1072,71 @@ class UDFProposer:
         image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
         return image_prompt
 
+    def _llava_annotate_frame(self, frame, image_size, row, gt_label, llava_model, llava_processor):
+        if self.n_obj == 2:
+            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
+            cv2.rectangle(frame, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
+            cv2.rectangle(frame, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
+        _, buffer = cv2.imencode('.jpg', frame)
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        logger.debug("base64_image: {}".format(base64_image))
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Convert the frame to PIL image
+        pil_image = Image.fromarray(frame)
+        llava_image_prompt, last_word = self._create_llava_image_prompt(row, image_size)
+        logger.debug("Llava image prompt: {}".format(llava_image_prompt))
+        inputs = llava_processor(llava_image_prompt, pil_image, return_tensors="pt").to(self.device)
+        output = llava_model.generate(
+            **inputs,
+            max_new_tokens=10,
+            do_sample=True,
+            temperature=0.2,
+            top_p=0.7
+        )
+        result = llava_processor.decode(output[0], skip_special_tokens=True)
+        result = result.split(last_word)[-1].strip().lower()
+        logger.debug("Llava result: {}".format(result))
+        logger.debug("gt_label: {}".format(gt_label))
+        if "yes" in result.lower():
+            llm_label = 1
+            if self.gt_udf_name is not None:
+                if gt_label == 1:
+                    self.llm_TP += 1
+                else:
+                    self.llm_FP += 1
+        elif "no" in result.lower():
+            llm_label = 0
+            if self.gt_udf_name is not None:
+                if gt_label == 0:
+                    self.llm_TN += 1
+                else:
+                    self.llm_FN += 1
+        else:
+            raise ValueError("Invalid response", result)
+        self.label_count += 1
+        return llm_label, base64_image, llava_image_prompt
+
+    def _create_llava_image_prompt(self, row, image_size):
+        image_prompt = "<|im_start|>system\nAnswer the questions.<|im_end|><|im_start|>user\n<image>\n{}? Answer with 'yes' or 'no'.<|im_end|><|im_start|>assistant\n".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
+        return image_prompt, "assistant"
+
     def replace_objects(self, input_string, row, image_size):
         # Find all occurrences of "o" followed by integers
         objects = re.findall(r'o\d+', input_string)
         # Sort the objects based on the integer part of the identifier
-        sorted_objects = sorted(objects, key=lambda x: int(x[1:]))
+        sorted_objects = sorted(set(objects), key=lambda x: int(x[1:]))
 
         h, w = image_size
         if len(sorted_objects) == 1:
             new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]}")
         elif len(sorted_objects) == 2 and self.n_obj == 2:
             o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
-            new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {int(o1x1), int(o1y1), int(o1x2), int(o1y2)}")
-            new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {int(o2x1), int(o2y1), int(o2x2), int(o2y2)}")
+            # new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {int(o1x1), int(o1y1), int(o1x2), int(o1y2)}")
+            # new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {int(o2x1), int(o2y1), int(o2x2), int(o2y2)}")
+            new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {int(o1x1), int(o1y1), int(o1x2), int(o1y2)} in the red box")
+            new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {int(o2x1), int(o2y1), int(o2x2), int(o2y2)} in the blue box")
+        else:
+            new_string = input_string
 
         return new_string
 
@@ -1017,12 +1163,6 @@ class UDFProposer:
             frame_target[int(o2y2):, :] = 0
             frame_target[:, :int(o2x1)] = 0
             frame_target[:, int(o2x2):] = 0
-            # _, buffer = cv2.imencode('.jpg', frame_subject)
-            # base64_frame_subject = base64.b64encode(buffer).decode('utf-8')
-            # logger.debug("base64_frame_subject: {}".format(base64_frame_subject))
-            # _, buffer = cv2.imencode('.jpg', frame_target)
-            # base64_frame_target = base64.b64encode(buffer).decode('utf-8')
-            # logger.debug("base64_frame_target: {}".format(base64_frame_target))
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_subject = cv2.cvtColor(frame_subject, cv2.COLOR_BGR2RGB)
             frame_target = cv2.cvtColor(frame_target, cv2.COLOR_BGR2RGB)
@@ -1050,10 +1190,15 @@ class UDFProposer:
     # We could either add a dummy UDF to the candidate list,
     # or only register UDFs when the F1 score is above a certain threshold (how to decide the threshold?) to avoid generating terrible UDFs
     def select(self, gt_udf_name, udf_candidate_list):
-        return self._select(gt_udf_name, udf_candidate_list, with_pixels=self.program_with_pixels)
+        df_with_img_column = self.program_with_pixels
+        for udf_candidate in udf_candidate_list:
+            if udf_candidate.id == "model":
+                df_with_img_column = True
+                break
+        return self._select(gt_udf_name, udf_candidate_list, df_with_img_column=df_with_img_column)
 
 
-    def _select(self, gt_udf_name, udf_candidate_list, with_pixels):
+    def _select(self, gt_udf_name, udf_candidate_list, df_with_img_column):
         # if len(udf_candidate_list) == 1:
         #     selected_udf_candidate = udf_candidate_list[0]
         # else:
@@ -1066,19 +1211,12 @@ class UDFProposer:
         udf_candidate_list.append(dummy_udf)
 
         # Construct training data and test data
-        # TODO: Too slow.
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, with_images=with_pixels)
-
-        # Dynamically import the ground truth UDF
-        # TODO: I think we can remove this since we already materialized the ground truth UDF in database
-        # Example: gt_udf = gt_behind.gt_0
-        # module_name, function_name = gt_udf_name.split(".")
-        # module_name = "udfs.{}".format(module_name)
-        # module = importlib.import_module(module_name)
-        # gt_udf = getattr(module, function_name)
+        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, df_with_img_column=df_with_img_column)
 
         # Select new video segments to label
+        # TODO: df_train and llm_positive_df may contain the same tuples
         labeled_index = []
+        llm_positive_labeled_index = []
         segment_selection_time = 0
         _start_segment_selection_time = time.time()
         # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
@@ -1086,22 +1224,29 @@ class UDFProposer:
         for iter in range(self.labeling_budget):
             logger.info("iter {}: {}".format(iter, "positive-sampling" if use_positive_sampling else "uncertainty-sampling"))
             _start_segment_selection_time_per_iter = time.time()
-            new_labeled_index = self.select_sample(
-                udf_candidate_list, udf_name, df_train, n_obj, labeled_index, with_pixels, use_positive_sampling
-            )
-            logger.info("pick next segments {}".format(new_labeled_index))
-            labeled_index += new_labeled_index
-            logger.info("# labeled segments {}".format(len(labeled_index)))
+            if use_positive_sampling and self.llm_positive_df is not None and len(self.llm_positive_df) > len(llm_positive_labeled_index):
+                select_from_llm_positive_df = True
+                new_labeled_index = [len(llm_positive_labeled_index)]
+                logger.info("pick next segments from llm_positive_df {}".format(new_labeled_index))
+                llm_positive_labeled_index += new_labeled_index
+            else:
+                select_from_llm_positive_df = False
+                new_labeled_index = self.select_sample(
+                    udf_candidate_list, udf_name, df_train, n_obj, labeled_index, use_positive_sampling
+                )
+                logger.info("pick next segments {}".format(new_labeled_index))
+                labeled_index += new_labeled_index
+            logger.info("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(labeled_index))))
             if n_obj == 1:
-                # y_true = df_train.iloc[labeled_index].apply(
-                #     lambda row: gt_udf(row["o1"]), axis=1
-                # )
-                y_true = pd.Series([gt_udf_name in anames for anames in df_train.iloc[labeled_index]['o1_gt_anames']])
+                if self.llm_positive_df is not None:
+                    y_true = pd.Series([gt_udf_name in anames for anames in pd.concat([df_train.iloc[labeled_index]['o1_gt_anames'], self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_gt_anames']])])
+                else:
+                    y_true = pd.Series([gt_udf_name in anames for anames in df_train.iloc[labeled_index]['o1_gt_anames']])
             elif n_obj == 2:
-                # y_true = df_train.iloc[labeled_index].apply(
-                #     lambda row: gt_udf(row["o1"], row["o2"]), axis=1
-                # )
-                y_true = pd.Series([gt_udf_name in rnames for rnames in df_train.iloc[labeled_index]['o1_o2_gt_rnames']])
+                if self.llm_positive_df is not None:
+                    y_true = pd.Series([gt_udf_name in rnames for rnames in pd.concat([df_train.iloc[labeled_index]['o1_o2_gt_rnames'], self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_o2_gt_rnames']])])
+                else:
+                    y_true = pd.Series([gt_udf_name in rnames for rnames in df_train.iloc[labeled_index]['o1_o2_gt_rnames']])
             # log number of positive and negative samples
             logger.info(
                 "# positive: {}, # negative: {}".format(
@@ -1111,16 +1256,26 @@ class UDFProposer:
             use_positive_sampling = False if sum(y_true) > len(y_true) - sum(y_true) else True
             # Update scores
             for i in range(len(udf_candidate_list)):
-                score, loss_t = self.compute_udf_score(
-                    gt_udf_name,
-                    udf_candidate_list[i],
-                    udf_name,
-                    n_obj,
-                    df_train.iloc[labeled_index],
-                    df_train.iloc[new_labeled_index],
-                    with_pixels=with_pixels,
-                    add_one=True, # add one to avoid zero f1 score
-                )
+                if self.llm_positive_df is not None:
+                    score, loss_t = self.compute_udf_score(
+                        gt_udf_name,
+                        udf_candidate_list[i],
+                        udf_name,
+                        n_obj,
+                        pd.concat([df_train.iloc[labeled_index], self.llm_positive_df.iloc[llm_positive_labeled_index]]),
+                        self.llm_positive_df.iloc[new_labeled_index] if select_from_llm_positive_df else df_train.iloc[new_labeled_index],
+                        add_one=True, # add one to avoid zero f1 score
+                    )
+                else:
+                    score, loss_t = self.compute_udf_score(
+                        gt_udf_name,
+                        udf_candidate_list[i],
+                        udf_name,
+                        n_obj,
+                        df_train.iloc[labeled_index],
+                        df_train.iloc[new_labeled_index],
+                        add_one=True, # add one to avoid zero f1 score
+                    )
                 udf_candidate_list[i].score = score
                 udf_candidate_list[i].loss_t += loss_t
             # sort udf_candidate_list by score
@@ -1147,7 +1302,6 @@ class UDFProposer:
                 udf_name,
                 n_obj,
                 df_test,
-                with_pixels=with_pixels
             )
             logger.info(str(udf_candidate_list[i]))
 
@@ -1158,14 +1312,22 @@ class UDFProposer:
         else:
             # Compute final f1 score (without adding one)
             for i in range(len(udf_candidate_list)):
-                udf_candidate_list[i].score = self.compute_udf_score(
-                    gt_udf_name,
-                    udf_candidate_list[i],
-                    udf_name,
-                    n_obj,
-                    df_train.iloc[labeled_index],
-                    with_pixels=with_pixels,
-                )
+                if self.llm_positive_df is not None:
+                    udf_candidate_list[i].score = self.compute_udf_score(
+                        gt_udf_name,
+                        udf_candidate_list[i],
+                        udf_name,
+                        n_obj,
+                        pd.concat([df_train.iloc[labeled_index], self.llm_positive_df.iloc[llm_positive_labeled_index]]),
+                    )
+                else:
+                    udf_candidate_list[i].score = self.compute_udf_score(
+                        gt_udf_name,
+                        udf_candidate_list[i],
+                        udf_name,
+                        n_obj,
+                        df_train.iloc[labeled_index],
+                    )
             best_score = max(udf_candidate.score for udf_candidate in udf_candidate_list)
             best_candidates = [
                 udf_candidate
@@ -1198,7 +1360,7 @@ class UDFProposer:
 
 
     def select_sample(
-        self, udf_candidate_list, udf_name, df_train, n_obj, labeled_index, with_pixels, use_positive_sampling
+        self, udf_candidate_list, udf_name, df_train, n_obj, labeled_index, use_positive_sampling
     ):
         # sample a subset of videos during each iteration
         n_sampled_videos = 500
@@ -1244,7 +1406,7 @@ class UDFProposer:
                     udf_obj = globals()[py_func_name]
                     # TODO: may need to timeout if running for too long
                     logger.debug(f"udf_name: {udf_name}")
-                    result = self.exec_udf_with_data(df_sampled, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=False)
+                    result = self.exec_udf_with_data(df_sampled, udf_obj, kwargs, n_obj, requires_no_error=False)
                     contains_non_boolean = False
                     for r in result:
                         if r != 1 and r != 0:
@@ -1291,6 +1453,8 @@ class UDFProposer:
         logger.debug("query weights {}".format(posterior_t))
 
         if use_positive_sampling:
+            # TODO: filter objects?
+            # TODO: ask LLM?
             # find sample with highest weighted probability of being positive
             probability_list = np.zeros(len(sampled_index))
             for i in range(len(sampled_index)):
@@ -1357,25 +1521,26 @@ class UDFProposer:
 
         for batch_start in range(0, num_samples, batch_size):
             batch_end = batch_start + batch_size
-            frames = []
             idxs_to_predict = []
-            rois = []
+            image_patches = []
 
             # Process each batch
             for i, (_, row) in enumerate(df.iloc[batch_start:batch_end].iterrows()):
                 frame = row["img"]
-                frames.append(frame)
                 idxs_to_predict.append(batch_start + i)
-                o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (320, 480))
-                rois.append([i, o1_x1, o1_y1, o1_x2, o1_y2])
-            frames = np.array(frames)
-            frames = torch.tensor(frames, dtype=torch.float32).permute(0, 3, 1, 2).to(self.device) # Shape: (B, C, H, W)
+                o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (frame.shape[0], frame.shape[1]))
+                rois = [[0, o1_x1, o1_y1, o1_x2, o1_y2]]
 
-            rois_tensor = torch.tensor(rois, dtype=torch.float).to(self.device)
-            # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
-            # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
-            patch_size=(224, 224)
-            image_patches = ops.roi_align(frames, rois_tensor, output_size=patch_size, spatial_scale=1.0)
+                single_frame = torch.tensor(frame, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(self.device) # Shape: (1, C, H, W)
+
+                rois_tensor = torch.tensor(rois, dtype=torch.float).to(self.device)
+                # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
+                # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
+                patch_size=(224, 224)
+                signle_frame_patches = ops.roi_align(single_frame, rois_tensor, output_size=patch_size, spatial_scale=1.0)
+                image_patches.append(signle_frame_patches)
+
+            image_patches = torch.cat(image_patches, dim=0)
 
             # Run CLIP model
             inputs = transforms(image_patches)
@@ -1395,16 +1560,14 @@ class UDFProposer:
 
         for batch_start in range(0, num_samples, batch_size):
             batch_end = batch_start + batch_size
-            frames = []
             idxs_to_predict = []
-            rois = []
             batch_boxes = []
+            image_patches = []
 
             for i, (_, row) in enumerate(df.iloc[batch_start:batch_end].iterrows()):
                 frame = row["img"]
-                frames.append(frame)
-                o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (320, 480))
-                o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], (320, 480))
+                o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (frame.shape[0], frame.shape[1]))
+                o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], (frame.shape[0], frame.shape[1]))
                 # Verify rois are correct
                 roi_x1 = min(o1_x1, o2_x1)
                 roi_y1 = min(o1_y1, o2_y1)
@@ -1412,23 +1575,25 @@ class UDFProposer:
                 roi_y2 = max(o1_y2, o2_y2)
                 if 0 <= roi_x1 < roi_x2 and 0 <= roi_y1 < roi_y2:
                     idxs_to_predict.append(batch_start + i)
-                    rois.append([i, roi_x1, roi_y1, roi_x2, roi_y2])
-                    new_o1x1, new_o1y1, new_o1x2, new_o1y2, new_o2x1, new_o2y1, new_o2x2, new_o2y2 = self._compute_new_box_after_crop(row, (320, 480))
+                    rois = [[0, roi_x1, roi_y1, roi_x2, roi_y2]]
+                    new_o1x1, new_o1y1, new_o1x2, new_o1y2, new_o2x1, new_o2y1, new_o2x2, new_o2y2 = self._compute_new_box_after_crop(row, (frame.shape[0], frame.shape[1]))
                     batch_boxes.append([int(new_o1x1), int(new_o1y1), int(new_o1x2), int(new_o1y2), int(new_o2x1), int(new_o2y1), int(new_o2x2), int(new_o2y2)])
 
-            frames = np.array(frames)
-            frames = torch.tensor(frames, dtype=torch.float32).permute(0, 3, 1, 2).to(self.device) # Shape: (B, C, H, W)
-            rois_tensor = torch.tensor(rois, dtype=torch.float).to(self.device)
-            # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
-            # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
-            patch_size=(224, 224)
-            image_patches = ops.roi_align(frames, rois_tensor, output_size=patch_size, spatial_scale=1.0)
+                    single_frame = torch.tensor(frame, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(self.device) # Shape: (1, C, H, W)
+                    rois_tensor = torch.tensor(rois, dtype=torch.float).to(self.device)
+                    # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
+                    # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
+                    patch_size=(224, 224)
+                    signle_frame_patches = ops.roi_align(single_frame, rois_tensor, output_size=patch_size, spatial_scale=1.0)
+                    image_patches.append(signle_frame_patches)
 
+            image_patches = torch.cat(image_patches, dim=0)
             # Run CLIP model
             batch_frames = image_patches.clone()
             # torch.tensor(image_patches).to(device)
             batch_boxes = torch.tensor(batch_boxes).to(self.device)
             N, C, H, W = batch_frames.shape
+            logger.debug(f"batch_frames.shape: {batch_frames.shape}, batch_boxes.shape: {batch_boxes.shape}")
             X = torch.arange(W, device=self.device).view(1, 1, W).expand(N, H, W)
             Y = torch.arange(H, device=self.device).view(1, H, 1).expand(N, H, W)
             subject_masks = (X >= batch_boxes[:, 0].view(N, 1, 1).expand(N, H, W)) & (X < batch_boxes[:, 2].view(N, 1, 1).expand(N, H, W)) & (Y >= batch_boxes[:, 1].view(N, 1, 1).expand(N, H, W)) & (Y < batch_boxes[:, 3].view(N, 1, 1).expand(N, H, W))
@@ -1504,7 +1669,6 @@ class UDFProposer:
         n_obj,
         df,
         df_newly_labeled=None,
-        with_pixels=False,
         add_one=False,
     ):
         """
@@ -1529,9 +1693,9 @@ class UDFProposer:
                 py_func_name = "py_{}".format(udf_name)
                 exec(udf_candidate.function_implementation, globals())
                 udf_obj = globals()[py_func_name]
-                y_pred = self.exec_udf_with_data(df, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=False)
+                y_pred = self.exec_udf_with_data(df, udf_obj, kwargs, n_obj, requires_no_error=False)
                 if df_newly_labeled is not None:
-                    y_pred_new = self.exec_udf_with_data(df_newly_labeled, udf_obj, kwargs, n_obj, with_pixels, requires_no_error=False)
+                    y_pred_new = self.exec_udf_with_data(df_newly_labeled, udf_obj, kwargs, n_obj, requires_no_error=False)
             except Exception as e:
                 logger.exception("ERROR: failed to execute udf_candidate {}: {}".format(udf_candidate.id, e))
                 y_pred = [False] * len(df)
@@ -1576,11 +1740,17 @@ class UDFProposer:
         else:
             return score
 
-    def construct_train_and_test_data(self, n_obj, n_train=None, n_test=None, with_images=False):
-        if with_images:
-            return self._construct_train_and_test_data_with_images(n_obj, n_train, n_test)
+    def construct_train_and_test_data(self, n_obj, n_train=None, n_test=None, df_with_img_column=False, filtered_objects=None):
+        if self.dataset == "charades":
+            if df_with_img_column:
+                return self._construct_train_and_test_data_with_images_person_object_relationships(n_obj, n_train, n_test, filtered_objects=filtered_objects)
+            else:
+                return self._construct_train_and_test_data_without_images_person_object_relationships(n_obj, n_train, n_test, filtered_objects=filtered_objects)
         else:
-            return self._construct_train_and_test_data_without_images(n_obj, n_train, n_test)
+            if df_with_img_column:
+                return self._construct_train_and_test_data_with_images(n_obj, n_train, n_test)
+            else:
+                return self._construct_train_and_test_data_without_images(n_obj, n_train, n_test)
 
     def _construct_train_and_test_data_without_images(self, n_obj, n_train=None, n_test=None):
         # Construct training data and test data
@@ -1618,12 +1788,72 @@ class UDFProposer:
             df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
             return df
 
+    def _construct_train_and_test_data_without_images_person_object_relationships(self, n_obj, n_train=None, n_test=None, filtered_objects=None):
+        n_samples = n_train + n_test if n_test else n_train
+        # Construct training data and test data
+        if n_obj == 1: # Charades shouldn't need this, but just in case
+            df_filtered = self.one_object_df
+        elif n_obj == 2: # Only consider person-object relationships
+            # vid, fid, o1_oid, o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oid, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, o1_o2_gt_rnames, height, width
+            if filtered_objects:
+                # obj_parameters = ','.join('?' for _ in filtered_objects)
+                df_filtered = self.two_objects_df[((self.two_objects_df["o1_oid"] == 0) | (self.two_objects_df["o2_oid"] == 0)) & (self.two_objects_df["o1_oname"].isin(filtered_objects)) & (self.two_objects_df["o2_oname"].isin(filtered_objects))]
+                # self.conn.execute(f"""
+                #     SELECT *
+                #     FROM self.two_objects_df
+                #     WHERE (o1_oid = 0 OR o2_oid = 0) AND o1_oname = ANY([{obj_parameters}]) AND o2_oname = ANY([{obj_parameters}])
+                # """, filtered_objects + filtered_objects).df()
+            else:
+                df_filtered = self.two_objects_df[(self.two_objects_df["o1_oid"] == 0) | (self.two_objects_df["o2_oid"] == 0)]
+
+            if len(df_filtered) < n_samples:
+                logger.warning(f"Number of samples ({len(df_filtered)}) is less than n_samples ({n_samples}).")
+                df_filtered = self.two_objects_df
+        else:
+            raise ValueError("Number of objects not supported: {}".format(n_obj))
+
+        if n_train or n_test:
+            df_filtered = df_filtered.sample(n_samples, random_state=self.run_id)
+
+        if n_test:
+            df_train = df_filtered[:n_train]
+            df_train = df_train.reset_index(drop=True)
+            df_test = df_filtered[n_train:]
+            df_test = df_test.reset_index(drop=True)
+            return df_train, df_test
+        else:
+            df_filtered = df_filtered.reset_index(drop=True)
+            return df_filtered
+
+    def _construct_train_and_test_data_with_images_person_object_relationships(self, n_obj, n_train=None, n_test=None, filtered_objects=None):
+        # Construct training data and test data
+        # dataframe consists of columns: img, o1 [, o2]
+        if n_test:
+            df_train, df_test = self._construct_train_and_test_data_without_images_person_object_relationships(n_obj, n_train, n_test, filtered_objects=filtered_objects)
+            # construct the img column
+            for df in [df_train, df_test]:
+                df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
+            return df_train, df_test
+        else:
+            df = self._construct_train_and_test_data_without_images_person_object_relationships(n_obj, n_train, filtered_objects=filtered_objects)
+            df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
+            return df
+
     def frame_processing_for_program(self, vid, fid):
-        frame = np.array(Image.open(os.path.join(
+        if self.dataset == "clevrer":
+            frame = np.array(Image.open(os.path.join(
                 self.config[self.dataset]["video_frames_dir"],
                 f"sim_{str(vid).zfill(5)}",
                 f"frame_{str(fid).zfill(5)}.png"
             ))) # Shape: (H, W, C)
+        elif self.dataset == "charades":
+            frame = np.array(Image.open(os.path.join(
+                self.config[self.dataset]["video_frames_dir"],
+                f"{self.vid_to_vname[vid]}.mp4",
+                f"{str(fid).zfill(6)}.png"
+            ))) # Shape: (H, W, C)
+        else:
+            raise ValueError(f"Dataset {self.dataset} not supported")
         return frame
 
     # [[Deprecated]]
@@ -1664,7 +1894,7 @@ class UDFProposer:
         n_obj = len(udf_vars)
 
         # Construct training data and test data
-        _, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, with_images=True)
+        _, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, df_with_img_column=True)
 
         # Dynamically import the ground truth UDF
         # Example: gt_udf = gt_behind.gt_0
@@ -1683,7 +1913,6 @@ class UDFProposer:
                 udf_name,
                 n_obj,
                 df_test,
-                with_pixels=with_pixels
             )
             udf_candidate_list[i].test_score = test_score
             logger.info(str(udf_candidate_list[i]))

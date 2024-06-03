@@ -24,7 +24,7 @@ def using(point=""):
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
 if __name__ == "__main__":
-    # python main.py --query_id 3 --run_id 0 --dataset "clevrer" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --cpus 4 --save_labeled_data --n_train_distill 100 --selection_strategy "llm" --selection_labels "user"
+    # python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "charades" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "llava"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -48,6 +48,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
     parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
+    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
 
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
@@ -70,15 +71,16 @@ if __name__ == "__main__":
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
     selection_labels = args.selection_labels
-    if selection_strategy != "program":
-        assert program_with_pixels, "selection_strategy != 'program' requires program_with_pixels"
+    llm_method = args.llm_method
+    # if selection_strategy != "program":
+    #     assert program_with_pixels, "selection_strategy != 'program' requires program_with_pixels"
 
     if selection_strategy == "both":
         assert selection_labels != "none"
     elif selection_strategy == "model":
         assert selection_labels == "none"
 
-    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}".format(
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}-llm_method={}".format(
         num_interpretations,
         num_parameter_search,
         allow_kwargs_in_udf,
@@ -88,26 +90,30 @@ if __name__ == "__main__":
         selection_strategy,
         selection_labels,
         labeling_budget,
-    )
-    base_dir = os.path.join(
-        "udf_generation",
-        dataset,
-        "num_missing_udfs={}".format(num_missing_udfs),
-        config_name,
+        llm_method,
     )
 
     random.seed(run_id)
     np.random.seed(run_id)
 
     input_query_file = config[dataset]["input_query_file"]
+    task_name = os.path.basename(input_query_file).split(".")[0]
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     gt_dsl = input_query["dsl"]
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
     y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+
     """
     Set up logging
     """
+    base_dir = os.path.join(
+        "udf_generation",
+        dataset,
+        task_name,
+        "num_missing_udfs={}".format(num_missing_udfs),
+        config_name,
+    )
     # Create a directory if it doesn't already exist
     log_dir = os.path.join(
         config["log_dir"],
@@ -138,26 +144,23 @@ if __name__ == "__main__":
     sys.stderr = StreamToLogger(logger, logging.ERROR)
     sys.excepthook = exception_hook
 
-    # Load LLM inference endpoints from an env variable or a file
-    # See https://microsoft.github.io/autogen/docs/FAQ#set-your-api-endpoints
-    # and OAI_CONFIG_LIST_sample
-    config_list = autogen.config_list_from_json(
-        env_or_file="/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/OAI_CONFIG_LIST",
-        filter_dict={
-            "model": ["gpt-4", "gpt-3.5-turbo", "gpt-3.5-turbo-16k"],
-        },
-    )
-
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
-    registered_functions = registered_udfs_json[f"{dataset}_base"]
-    new_modules = input_query["new_modules"]
-    assert num_missing_udfs >= 0 and num_missing_udfs <= 3, "num_missing_udfs must be between 0 and 3"
-    for new_module in new_modules[:(3-num_missing_udfs)]:
-        registered_functions.append(registered_udfs_json[dataset][new_module])
+    if "single_semantic" in task_name:
+        registered_functions = [{
+            "signature": "object(o0, name)",
+            "description": "Whether o0 is an object with the given name.",
+            "function_implementation": ""
+        }]
+    else:
+        registered_functions = registered_udfs_json[f"{dataset}_base"]
+        new_modules = input_query["new_modules"]
+        assert num_missing_udfs >= 0 and num_missing_udfs <= 3, "num_missing_udfs must be between 0 and 3"
+        for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
+            registered_functions.append(registered_udfs_json[dataset][new_module])
     logger.info("Registered functions: {}".format(registered_functions))
     object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
     logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
@@ -167,15 +170,14 @@ if __name__ == "__main__":
 
     # Parse query
     qp = QueryParser(
-        config, prompt_config, config_list, dataset, registered_functions, run_id
+        config, prompt_config, dataset, registered_functions, object_domain, run_id
     )
     flag = qp.parse(user_query)
-    if 'no' in flag:
+    if 'parse_no' in flag:
         # Step 1: propose new UDFs
         up = UDFProposer(
             config,
             prompt_config,
-            config_list,
             registered_functions,
             object_domain,
             relationship_domain,
@@ -195,38 +197,65 @@ if __name__ == "__main__":
             selection_strategy,
             selection_labels,
             allow_kwargs_in_udf,
+            llm_method,
         )
         proposed_functions = up.propose(user_query)
         for udf_signature, udf_description in proposed_functions.items():
-            # Step 2.a: generate semantic interpretations and implementations. Save the generated UDFs to disk
-            # Step 2.b: Distilled-model UDFs
-            # udf_candidate_list = up.implement(udf_signature, udf_description)
-            udf_candidate_list = up.implement(udf_signature, udf_description)
-
-            # # Step 3: Select the best UDF (determine the best UDF between model-based and program-based)
-            # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
             # First, retrieve the ground truth UDF
             if ask_for_gt_udf:
                 # Ask the user for gt_udf name
-                gt_udf_name = input(
-                    'Please enter gt_udf_name (options: "near", "far", "right_of", "behind", "location_right", "location_bottom", "color_brown", "color_purple", "color_cyan", "color_yellow", "shape_cylinder", "material_metal"): '
-                )
+                if dataset == "clevrer":
+                    gt_udf_name = input(
+                        'Please enter gt_udf_name (options: "near", "far", "right_of", "behind", "location_right", "location_bottom", "color_brown", "color_purple", "color_cyan", "color_yellow", "shape_cylinder", "material_metal"): '
+                    )
+                elif dataset == "charades":
+                    gt_udf_name = input(
+                        'Please enter gt_udf_name (options: "looking_at", "above", "in_front_of", "on_the_side_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "not_contacting", "standing_on", "twisting", "wiping", "not_looking_at", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"): '
+                    )
             else:
                 # HACK: Use a LM to automatically resolve the ground truth UDF
                 # NOTE: Correctness is not guaranteed
                 udf_name, udf_vars = parse_signature(udf_signature)
-                if len(udf_vars) == 2:
-                    gt_udf_candidates = ["near", "far", "right_of", "behind"]
-                else:
+                if dataset == "clevrer":
+                    if len(udf_vars) == 2:
+                        gt_udf_candidates = ["near", "far", "right_of", "behind"]
+                    else:
+                        gt_udf_candidates = [
+                            "location_right",
+                            "location_bottom",
+                            "color_brown",
+                            "color_purple",
+                            "color_cyan",
+                            "color_yellow",
+                            "shape_cylinder",
+                            "material_metal",
+                        ]
+                elif dataset == "charades":
                     gt_udf_candidates = [
-                        "location_right",
-                        "location_bottom",
-                        "color_brown",
-                        "color_purple",
-                        "color_cyan",
-                        "color_yellow",
-                        "shape_cylinder",
-                        "material_metal",
+                        "looking_at",
+                        "above",
+                        "in_front_of",
+                        "on_the_side_of",
+                        "carrying",
+                        "drinking_from",
+                        "have_it_on_the_back",
+                        "leaning_on",
+                        "not_contacting",
+                        "standing_on",
+                        "twisting",
+                        "wiping",
+                        "not_looking_at",
+                        "beneath",
+                        "behind",
+                        "in",
+                        "covered_by",
+                        "eating",
+                        "holding",
+                        "lying_on",
+                        "sitting_on",
+                        "touching",
+                        "wearing",
+                        "writing_on",
                     ]
                 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
                 gt_udf_embeddings = model.encode(gt_udf_candidates)
@@ -246,6 +275,15 @@ if __name__ == "__main__":
                     )
                 )
                 logger.info(f"Selected gt_udf_name: {gt_udf_name}")
+
+            # Step 2.a: generate semantic interpretations and implementations. Save the generated UDFs to disk
+            # Step 2.b: Distilled-model UDFs
+            # udf_candidate_list = up.implement(udf_signature, udf_description)
+            udf_candidate_list = up.implement(udf_signature, udf_description, gt_udf_name)
+
+            # # Step 3: Select the best UDF (determine the best UDF between model-based and program-based)
+            # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
+
             # TODO: since we already precomputed the UDF results, we can directly retrieve them from the database
             selected_udf_candidate = up.select(gt_udf_name, udf_candidate_list)
 
@@ -266,7 +304,7 @@ if __name__ == "__main__":
                 "function_implementation": function_implementation,
             }
             registered_functions.append(new_udf)
-            if semantic_interpretation == "model":
+            if semantic_interpretation in ["model", "dummy"]:
                 materialized_df_names.append(parse_signature(udf_signature)[0])
             else:
                 on_the_fly_udf_names.append(parse_signature(udf_signature)[0])
@@ -275,9 +313,9 @@ if __name__ == "__main__":
         qp = QueryParser(
             config,
             prompt_config,
-            config_list,
             dataset,
             registered_functions,
+            object_domain,
             run_id,
             allow_new_udfs=False,
         )

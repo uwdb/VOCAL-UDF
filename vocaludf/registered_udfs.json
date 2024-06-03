@@ -28,7 +28,52 @@
         {
             "signature": "object(o0, name)",
             "description": "Whether o0 is an object with the given name.",
-            "function_implementation": "def object(name, o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n    return name == o1_oname"
+            "function_implementation": ""
+        },
+        {
+            "signature": "touching(o0, o1)",
+            "description": "Whether o0 is touching o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "leaning_on(o0, o1)",
+            "description": "Whether o0 is leaning on o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "wearing(o0, o1)",
+            "description": "Whether o0 is wearing o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "drinking_from(o0, o1)",
+            "description": "Whether o0 is drinking from o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "lying_on(o0, o1)",
+            "description": "Whether o0 is lying on o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "writing_on(o0, o1)",
+            "description": "Whether o0 is writing on o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "twisting(o0, o1)",
+            "description": "Whether o0 is twisting o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "above(o0, o1)",
+            "description": "Whether o0 is above o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "in_front_of(o0, o1)",
+            "description": "Whether o0 is in front of o1.",
+            "function_implementation": ""
         }
     ],
     "clevrer_base": [
@@ -266,5 +311,70 @@
             "description": "Whether o0 is at the bottom of the frame.",
             "function_implementation": "def bottom(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 160 and cy1 <= 320"
         }
+    },
+    "charades": {
+        "HOLDING": {
+            "signature": "holding(o0, o1)",
+            "description": "Whether o0 is holding o1.",
+            "function_implementation": ""
+        },
+        "SITTINGON": {
+            "signature": "sitting_on(o0, o1)",
+            "description": "Whether o0 is sitting on o1.",
+            "function_implementation": ""
+        },
+        "STANDINGON": {
+            "signature": "standing_on(o0, o1)",
+            "description": "Whether o0 is standing on o1.",
+            "function_implementation": ""
+        },
+        "COVEREDBY": {
+            "signature": "covered_by(o0, o1)",
+            "description": "Whether o0 is covered by o1.",
+            "function_implementation": ""
+        },
+        "CARRYING": {
+            "signature": "carrying(o0, o1)",
+            "description": "Whether o0 is carrying o1.",
+            "function_implementation": ""
+        },
+        "EATING": {
+            "signature": "eating(o0, o1)",
+            "description": "Whether o0 is eating o1.",
+            "function_implementation": ""
+        },
+        "WIPING": {
+            "signature": "wiping(o0, o1)",
+            "description": "Whether o0 is wiping o1.",
+            "function_implementation": ""
+        },
+        "HAVEITONTHEBACK": {
+            "signature": "have_it_on_the_back(o0, o1)",
+            "description": "Whether o0 has it on the back of o1.",
+            "function_implementation": ""
+        },
+        "BENEATH": {
+            "signature": "beneath(o0, o1)",
+            "description": "Whether o0 is beneath o1.",
+            "function_implementation": ""
+        },
+        "BEHIND": {
+            "signature": "behind(o0, o1)",
+            "description": "Whether o0 is behind o1.",
+            "function_implementation": ""
+        },
+        "IN": {
+            "signature": "in(o0, o1)",
+            "description": "Whether o0 is in o1.",
+            "function_implementation": ""
+        }
     }
 }
+
+
+
+
+
+
+
+

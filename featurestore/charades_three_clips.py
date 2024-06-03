@@ -27,65 +27,6 @@ import torchvision.transforms as T
 import string
 import random
 
-# class CharadesDataset(IterableDataset):
-#     def __init__(self):
-#         conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
-#         self.df_metadata = conn.execute(f"""
-#             SELECT
-#                 vname, vid, fid, width, height, split
-#             FROM charades_metadata
-#             ORDER BY vid, fid
-#         """).df()
-#         self.start = 0
-#         self.end = len(self.df_metadata)
-#         self.df_grouped = conn.execute(f"""
-#             SELECT o1.vid AS vid, o1.fid AS fid,
-#                 o1.oid AS o1_oid, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-#                 o2.oid AS o2_oid, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2
-#             FROM charades_objects o1, charades_objects o2
-#             WHERE o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid != o2.oid
-#             ORDER BY o1.vid, o1.fid, o1.oid, o2.oid
-#         """).df().groupby(['vid', 'fid'])
-#         self.root_dir = "/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/frames"
-
-#     def __len__(self):
-#         return len(self.df_metadata)
-
-#     def __iter__(self):
-#         worker_info = torch.utils.data.get_worker_info()
-#         if worker_info is None:  # single-process data loading, return the full iterator
-#             iter_start = self.start
-#             iter_end = self.end
-#         else: # in a worker process
-#             # split workload
-#             per_worker = int(math.ceil((self.end - self.start) / float(worker_info.num_workers)))
-#             worker_id = worker_info.id
-#             iter_start = self.start + worker_id * per_worker
-#             iter_end = min(iter_start + per_worker, self.end)
-
-#         for meta_row in self.df_metadata.iloc[iter_start:iter_end]:
-#             img_name = os.path.join(self.root_dir, "{}.mp4".format(meta_row['vname']), f"{str(meta_row['fid']).zfill(6)}.png")
-#             image = io.imread(img_name)
-
-#             if (meta_row['vid'], meta_row['fid']) not in self.df_grouped.groups:
-#                 continue
-#             res = self.df_grouped.get_group((meta_row['vid'], meta_row['fid']))
-#             # NOTE: Due to data noise, multiple objects can have the same oid
-
-#             for _, row in res.iterrows():
-#                 o1_x1, o1_y1, o1_x2, o1_y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (meta_row['height'], meta_row['width']))
-#                 o2_x1, o2_y1, o2_x2, o2_y2 = expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], (meta_row['height'], meta_row['width']))
-#                 # Verify rois are correct
-#                 roi_x1 = min(o1_x1, o2_x1)
-#                 roi_y1 = min(o1_y1, o2_y1)
-#                 roi_x2 = max(o1_x2, o2_x2)
-#                 roi_y2 = max(o1_y2, o2_y2)
-#                 if 0 <= roi_x1 < roi_x2 and 0 <= roi_y1 < roi_y2:
-#                     new_o1x1, new_o1y1, new_o1x2, new_o1y2, new_o2x1, new_o2y1, new_o2x2, new_o2y2 = _compute_new_box_after_crop(row, (meta_row['height'], meta_row['width']))
-#                     batch_boxes.append([int(new_o1x1), int(new_o1y1), int(new_o1x2), int(new_o1y2), int(new_o2x1), int(new_o2y1), int(new_o2x2), int(new_o2y2)])
-
-#                 yield image, row['vid'], row['fid'], row['width'], row['height']
-
 
 def VideoFrameDaliDataloader(
     sequence_length=64,
@@ -384,4 +325,4 @@ if __name__ == "__main__":
 
     print("pa.cpu_count()", pa.cpu_count())
     print("pa.io_thread_count()", pa.io_thread_count())
-    extract_relationship_features(conn, config, sequence_length=256, batch_size=1, num_threads=1)
+    extract_relationship_features(conn, config, sequence_length=128, batch_size=1, num_threads=1)
