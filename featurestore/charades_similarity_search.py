@@ -134,7 +134,7 @@ def similarity_search(n_obj, num_workers, pred_batch_size, texts):
         for row, feature in tqdm(pred_loader):
             # ['vid', 'fid', 'o1_oid', 'o2_oid']
             for r, f in zip(row, feature):
-                if r[2] == 0 or r[3] == 0:
+                if r[2] == 0:
                     # convert to numpy array
                     image_embeddings.append(f.cpu().detach().numpy()[:512])
                     rows.append(r.tolist())
@@ -195,6 +195,7 @@ if __name__ == "__main__":
         ["wearing(o0, o1)", "Whether o0 is wearing o1.", "wearing"],
     ]
 
-    texts = [test_input[1] for test_input in test_inputs]
+    # texts = [test_input[1] for test_input in test_inputs]
+    texts = [test_input[2].replace("_", " ") for test_input in test_inputs]
     similarity_search(n_obj, num_workers, pred_batch_size, texts)
 

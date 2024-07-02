@@ -15,7 +15,7 @@ from sklearn.metrics import f1_score
 from typing import List
 import torch
 from vocaludf import mlp
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, Dataset, DataLoader
 import math
 import pandas as pd
 from collections import defaultdict
@@ -30,12 +30,35 @@ from nvidia.dali import pipeline_def
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
-
+from torchvision.io import read_image, ImageReadMode
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+class GQAImageDataset(Dataset):
+    def __init__(self, vids, img_dir):
+        self.vids = vids
+        self.img_dir = img_dir
+
+    def __len__(self):
+        return len(self.vids)
+
+    def __getitem__(self, idx):
+        frame = read_image(os.path.join(
+            self.img_dir,
+            f"{self.vids[idx] % 10}",
+            f"{self.vids[idx]}.jpg"
+        ), mode=ImageReadMode.RGB) # Tensor[image_channels, image_height, image_width]
+
+        # frame = np.array(Image.open(os.path.join(
+        #     self.img_dir,
+        #     f"{self.vids[idx] % 10}",
+        #     f"{self.vids[idx]}.jpg"
+        # ))) # Shape: (H, W, C)
+        # if len(frame.shape) == 2:
+        #     frame = np.stack([frame] * 3, axis=-1)
+        return frame, self.vids[idx], 1
 
 def ClevrerDaliDataloader(
     vids,
@@ -147,7 +170,7 @@ class QueryExecutor:
         )
         self.registered_functions = registered_functions
         self.available_udf_names = available_udf_names
-        self.materialized_udf_names = materialized_udf_names
+        self.materialized_udf_names = [f"udf_{udf_name}" for udf_name in materialized_udf_names]
         self.on_the_fly_udf_names = on_the_fly_udf_names
         logger.info(f"available_udf_names: {self.available_udf_names}")
         logger.info(f"materialized_udf_names: {self.materialized_udf_names}")
@@ -172,10 +195,10 @@ class QueryExecutor:
                     df = self.conn.execute(f"SELECT vid, fid, o1_oid, 1 as pred FROM one_object").df()
                 else:
                     df = self.conn.execute(f"SELECT vid, fid, o1_oid, o2_oid, 1 as pred FROM two_objects").df()
-                self.materialized_udfs[udf_name] = df
+                self.materialized_udfs[f"udf_{udf_name}"] = df
             elif func.get("semantic_interpretation", "") == "model":
                 df = self.get_materialized_df(func)
-                self.materialized_udfs[udf_name] = df
+                self.materialized_udfs[f"udf_{udf_name}"] = df
             else:
                 lines = func["function_implementation"].split("\n")
                 for i, line in enumerate(lines):
@@ -226,8 +249,8 @@ class QueryExecutor:
             SELECT
                 o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
                 o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-                COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
-                COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
+                COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
+                COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
                 {height_width_clause}
             FROM {self.dataset}_objects o1
             LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
@@ -243,7 +266,7 @@ class QueryExecutor:
             WITH obj_with_attrs AS (
                 SELECT
                     o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
-                    COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
+                    COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
                 FROM {self.dataset}_objects o
                 LEFT OUTER JOIN {self.dataset}_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
                 GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
@@ -251,8 +274,8 @@ class QueryExecutor:
             , relationships_expanded AS (
                 SELECT
                     vid, fid, oid1, oid2,
-                    COALESCE(ARRAY_AGG(rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames,
-                    ARRAY_AGG(rname) AS gt_rnames
+                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames,
+                    ARRAY_AGG(DISTINCT rname) AS gt_rnames
                 FROM {self.dataset}_relationships
                 GROUP BY vid, fid, oid1, oid2
             )
@@ -296,13 +319,14 @@ class QueryExecutor:
         with torch.no_grad():
             for row, feature in tqdm(pred_loader, file=sys.stdout):
                 feature = feature.to(self.device)
-                pred = best_mlp_model(feature)
+                pred, _ = best_mlp_model(feature)
                 rows.extend(row.tolist())
                 predictions.extend(pred.cpu().tolist())
         columns = ['vid', 'fid', 'o1_oid'] if n_obj == 1 else ['vid', 'fid', 'o1_oid', 'o2_oid']
         df_with_pred = pd.DataFrame(rows, columns=columns)
         df_with_pred['pred'] = predictions
-
+        # logger.info(f"df_with_pred: {df_with_pred.to_string()}")
+        # logger.info(f"# positive predictions: {df_with_pred['pred'].sum()}, # negative predictions: {len(df_with_pred) - df_with_pred['pred'].sum()}")
         return df_with_pred
 
     def run(self, program, y_true, debug=False):
@@ -327,21 +351,26 @@ class QueryExecutor:
                 input_vids = 1000
             else:
                 input_vids = 9601
+        elif self.dataset in ["gqa", "vaw"]:
+            exec_func = duckdb_execute_video_materialize
+            input_vids = self.conn.execute(f"SELECT DISTINCT vid FROM {self.dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
+            if debug:
+                input_vids = input_vids[:1000]
+            else:
+                input_vids = input_vids
         else:
             raise ValueError(
                 "Unknown dataset: {}".format(self.dataset)
             )
         logger.info("Running query: {}".format(program["query"]))
-        memo = [{} for _ in range(72159)]  # Not used
 
         if self.program_with_pixels:
             _start = time.time()
             # First, execute the query with all on-the-fly UDFs removed
             query_program = self.remove_on_the_fly_udfs(program["query"])
-            result, new_memo = exec_func(
+            result = exec_func(
                 self.conn,
                 query_program,
-                memo,
                 input_vids,
                 available_udf_names=self.available_udf_names,
                 materialized_udf_names=self.materialized_udf_names,
@@ -356,10 +385,9 @@ class QueryExecutor:
                     exec(f"{udf_name} = df")
                 _start = time.time()
                 # Then, execute the query with all on-the-fly UDFs over the result of the previous query
-                result, new_memo = exec_func(
+                result = exec_func(
                     self.conn,
                     program["query"],
-                    memo,
                     result, # matching vids from the previous query
                     available_udf_names=self.available_udf_names,
                     materialized_udf_names=self.materialized_udf_names,
@@ -370,10 +398,9 @@ class QueryExecutor:
                 logger.info("output vids: {}".format(result))
         else:
             _start = time.time()
-            result, new_memo = exec_func(
+            result = exec_func(
                 self.conn,
                 program["query"],
-                memo,
                 input_vids,
                 available_udf_names=self.available_udf_names,
                 materialized_udf_names=self.materialized_udf_names,
@@ -383,11 +410,12 @@ class QueryExecutor:
             result = sorted(result)
             logger.info("output vids: {}".format(result))
         # logger.info("output vids: {}".format(result))
-        y_pred = [1 if i in result else 0 for i in range(input_vids)]
+        if self.dataset in ["gqa", "vaw"]:
+            y_pred = [1 if vid in result else 0 for vid in input_vids]
+        else:
+            y_pred = [1 if i in result else 0 for i in range(input_vids)]
 
-        # logger.info("predictions: {}".format(y_pred))
-        # logger.info("true labels: {}".format(y_true[:input_vids]))
-        f1 = f1_score(y_true[:input_vids], y_pred)
+        f1 = f1_score(y_true[:len(y_pred)], y_pred)
         logger.info("F1 score: {}".format(f1))
         return y_pred
 
@@ -437,9 +465,7 @@ class QueryExecutor:
         # Create DALI pipeline for loading video frames
         if self.dataset == "clevrer":
             pipe = ClevrerDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
-        elif self.dataset == "charades":
-            pipe = CharadesDaliDataloader(vids, sequence_length=128, batch_size=1, num_threads=1)
-        video_iterator = DALIGenericIterator(
+            video_iterator = DALIGenericIterator(
             [pipe],
             ['frames', 'vid', 'fid'],
             last_batch_policy=LastBatchPolicy.PARTIAL,
@@ -447,7 +473,19 @@ class QueryExecutor:
             # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
             reader_name='reader'
         )
-
+        elif self.dataset == "charades":
+            pipe = CharadesDaliDataloader(vids, sequence_length=128, batch_size=1, num_threads=1)
+            video_iterator = DALIGenericIterator(
+            [pipe],
+            ['frames', 'vid', 'fid'],
+            last_batch_policy=LastBatchPolicy.PARTIAL,
+            # Required or iterator loops indefinitely (https://github.com/NVIDIA/DALI/issues/2873)
+            # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
+            reader_name='reader'
+        )
+        elif self.dataset in ["gqa", "vaw"]:
+            data = GQAImageDataset(vids, self.config[self.dataset]["video_frames_dir"])
+            video_iterator = DataLoader(data, batch_size=1, shuffle=False) # batch_size must be 1 because of variable image sizes
         udf_to_df_map = defaultdict(list)
         udf_to_pred_map = defaultdict(list)
 
@@ -460,16 +498,22 @@ class QueryExecutor:
         for batch in tqdm(video_iterator, file=sys.stdout, desc="load frames and materialize UDFs"):
             loading_time += time.time() - _start
             _start = time.time()
-            batch = batch[0]
-            _B, _T, _H, _W, _C = batch['frames'].shape
-            # logger.debug(f"batch['frames'].shape: {_B, _T, _H, _W, _C}")
-            frames = batch['frames'].reshape(-1, _H, _W, _C) # Shape: (B', H, W, C)
-            non_zero_mask = frames.sum(dim=(1, 2, 3)) != 0
-            frames = frames[non_zero_mask]
-            vids = torch.repeat_interleave(batch['vid'], _T)[non_zero_mask].tolist()
-            fids = (batch['fid'][:, None] + torch.arange(_T).to(self.device)).flatten()[non_zero_mask].tolist()
-            # logger.debug(f"frames.shape: {frames.shape}, len(vids): {len(vids)}, len(fids): {len(fids)}")
-            frames = frames.cpu().numpy()
+            if self.dataset in ["gqa", "clevr", "vaw"]:
+                frames, vids, fids = batch
+                frames = frames.permute(0, 2, 3, 1).cpu().numpy() # Shape: (B, C, H, W) --> (B, H, W, C)
+                vids = vids.tolist()
+                fids = fids.tolist()
+            else:
+                batch = batch[0]
+                _B, _T, _H, _W, _C = batch['frames'].shape
+                # logger.debug(f"batch['frames'].shape: {_B, _T, _H, _W, _C}")
+                frames = batch['frames'].reshape(-1, _H, _W, _C) # Shape: (B', H, W, C)
+                non_zero_mask = frames.sum(dim=(1, 2, 3)) != 0
+                frames = frames[non_zero_mask]
+                vids = torch.repeat_interleave(batch['vid'], _T)[non_zero_mask].tolist()
+                fids = (batch['fid'][:, None] + torch.arange(_T).to(self.device)).flatten()[non_zero_mask].tolist()
+                # logger.debug(f"frames.shape: {frames.shape}, len(vids): {len(vids)}, len(fids): {len(fids)}")
+                frames = frames.cpu().numpy()
             transform_time += time.time() - _start
             _start = time.time()
             for udf_name, (udf_obj, n_obj) in udf_map.items():
@@ -507,8 +551,8 @@ class QueryExecutor:
                 df = df[["vid", "fid", "o1_oid", "pred"]]
             elif n_obj == 2:
                 df = df[["vid", "fid", "o1_oid", "o2_oid", "pred"]]
-            self.materialized_udfs[udf_name] = df
-            self.materialized_udf_names.append(udf_name)
+            self.materialized_udfs[f"udf_{udf_name}"] = df
+            self.materialized_udf_names.append(f"udf_{udf_name}")
             logger.info(f"Materialized UDF: {udf_name}, shape: {df.shape}")
 
         self.on_the_fly_udf_names = []

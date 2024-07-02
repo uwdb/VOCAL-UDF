@@ -1,4 +1,5 @@
 import os
+import argparse
 import torch
 # import alpha_clip
 import numpy as np
@@ -120,21 +121,21 @@ def below(row: pd.Series):
     obj_c = get_obj_center(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'])
     return subj_c[1] > obj_c[1]
 
-# def left(subj: Dict, obj: Dict):
-#     '''
-#     subject's center is to the left of object's (i.e. subject center x < object center x)
-#     '''
-#     subj_c = get_obj_center(subj)
-#     obj_c = get_obj_center(obj)
-#     return subj_c[0] < obj_c[0]
+def left(row: pd.Series):
+    '''
+    subject's center is to the left of object's (i.e. subject center x < object center x)
+    '''
+    subj_c = get_obj_center(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'])
+    obj_c = get_obj_center(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'])
+    return subj_c[0] < obj_c[0]
 
-# def right(subj: Dict, obj: Dict):
-#     '''
-#     subject's center is to the right of object's (i.e. subject center x > object center x)
-#     '''
-#     subj_c = get_obj_center(subj)
-#     obj_c = get_obj_center(obj)
-#     return subj_c[0] > obj_c[0]
+def right(row: pd.Series):
+    '''
+    subject's center is to the right of object's (i.e. subject center x > object center x)
+    '''
+    subj_c = get_obj_center(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'])
+    obj_c = get_obj_center(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'])
+    return subj_c[0] > obj_c[0]
 
 def overlap(row: pd.Series):
     '''
@@ -225,7 +226,20 @@ class Verifier():
     def get_spatial_relationships(self):
         return self.spatial_relationships
 
-def main(vids):
+def get_frame(vid):
+    image_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/gqa/images"
+    image_file = os.path.join(
+        image_directory,
+        f"{vid % 10}",
+        f"{vid}.jpg",
+    )
+    frame = np.array(Image.open(image_file)) # Shape: (H, W, C)
+    if len(frame.shape) == 2:
+        frame = np.stack([frame] * 3, axis=-1)
+    return frame
+
+def run_charades():
+    vids = list(range(9601))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
     dataset = "charades"
@@ -286,6 +300,57 @@ def main(vids):
     spatial_relationships_df = pd.DataFrame(spatial_relationships, columns=["vid", "fid", "rid", "oid1", "rname", "oid2"])
     spatial_relationships_df.to_csv("/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/charades_spatial_relationships.csv", index=False)
 
+def run_vaw():
+    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    vids = conn.execute("SELECT DISTINCT vid FROM vaw_objects order by vid asc;").df()["vid"].tolist()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dataset = "vaw"
+
+    df_grouped = conn.execute(f"""
+        SELECT o1.vid AS vid, o1.fid AS fid,
+            o1.oid AS o1_oid, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+            o2.oid AS o2_oid, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2
+        FROM {dataset}_objects o1, {dataset}_objects o2
+        WHERE o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid != o2.oid
+        ORDER BY o1.vid, o1.fid, o1.oid, o2.oid
+    """).df().groupby(['vid', 'fid'])
+
+    # above, beneath, infrontof, behind
+    rules = {
+        "above": partial(above),
+        "beneath": partial(below),
+        "to_the_left_of": partial(left),
+        "to_the_right_of": partial(right),
+        "in_front_of": partial(in_front_of),
+        "behind": partial(behind),
+    }
+    verifier = Verifier(rules, device)
+
+    for vid in tqdm(vids):
+        fid = 1
+        if (vid, fid) not in df_grouped.groups:
+            continue
+        frame = get_frame(vid) # Shape: (H, W, C) as np.array
+
+        res = df_grouped.get_group((vid, fid))
+        image = Image.fromarray(frame)
+        # image = transforms.functional.to_pil_image(frame)
+        verifier.compute_depth(image)
+        for _, row in res.iterrows():
+            verifier.verify(row)
+
+    spatial_relationships = verifier.get_spatial_relationships()
+    spatial_relationships_df = pd.DataFrame(spatial_relationships, columns=["vid", "fid", "rid", "oid1", "rname", "oid2"])
+    spatial_relationships_df.to_csv("/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/vaw_spatial_relationships.csv", index=False)
+
 if __name__ == "__main__":
-    vids = list(range(9601))
-    main(vids)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--method", type=str, help="")
+    args = parser.parse_args()
+    method = args.method
+    if method == "charades":
+        run_charades()
+    elif method == "vaw":
+        run_vaw()
+    else:
+        raise ValueError(f"Invalid method: {method}")

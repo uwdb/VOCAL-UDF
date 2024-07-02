@@ -3,7 +3,9 @@ import os
 from vocaludf.utils import (
     replace_slot,
     parse_signature,
+    PredImageDataset,
 )
+from vocaludf.udf_proposer import UDFProposer, UDFCandidate, CustomImageDataset
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from PIL import Image
@@ -16,7 +18,7 @@ import re
 from collections import defaultdict
 import importlib
 import numpy as np
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, confusion_matrix
 import copy
 import cv2
 from tqdm import tqdm
@@ -42,8 +44,7 @@ from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_
 tqdm.pandas()
 client = OpenAI()
 
-logging.basicConfig()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
 @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
@@ -54,167 +55,145 @@ def using(point=""):
     usage=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return '''%s: mem=%s MB'''%(point, usage/1024.0 )
 
-class CustomImageDataset(Dataset):
-    def __init__(self, data, train):
-        self.X = [d["image_features"] for d in data]
-        if train:
-            self.y = [d["llm_label"] for d in data]
-        else:
-            self.y = [d["label"] for d in data]
-
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
-
-
-class UDFProposer:
-    llm_method = "gpt4v"
-    mlp_method = "three_clip"
-    # Propose new UDFs and generate semantic interpretations
-    def __init__(
-        self,
-        config,
-        prompt_config,
-        object_domain,
-        relationship_domain,
-        attribute_domain,
-        dataset,
-        query_id,
-        run_id,
-        num_workers,
-        save_labeled_data,
-        load_labeled_data,
-        n_train_distill,
-    ):
-        self.config = config
-        self.prompt_config = prompt_config
-        self.object_domain = object_domain
-        self.relationship_domain = relationship_domain
-        self.attribute_domain = attribute_domain
-        self.dataset = dataset
-        self.query_id = query_id
-        self.run_id = run_id
-        self.num_workers = num_workers
-
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-        self.conn = duckdb.connect(
-            database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
-            read_only=True,
-        )
-        self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
-
-        self.init_table()
-
-        # Create a train and test split
-        # NOTE: probably put these values in the config file
-        self.n_train = 10000
-        self.n_test = 10000
-
-        # Initialization for model distillation
-        self.n_train_distill = n_train_distill
-        self.n_test_distill = 1000
-        self.save_labeled_data = save_labeled_data
-        self.load_labeled_data = load_labeled_data
-        self.attribute_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "attribute")
-        self.relationship_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "relationship")
-        # Load the CLIP model
-        # clip_model_name = "openai/clip-vit-base-patch32"
-        clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
-        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
-
-        self.dim_in = self.clip_model.config.projection_dim
-
-        llava_model_name = os.path.join(self.config['model_dir'], 'llava-v1.6-34b-hf')
-        self.llava_model = LlavaNextForConditionalGeneration.from_pretrained(
-            llava_model_name,
-            torch_dtype=torch.float16,
-            # low_cpu_mem_usage=True,
-            # load_in_4bit=True,
-            # bnb_4bit_compute_dtype=torch.float16,
-            # attn_implementation="flash_attention_2",
-            device_map="auto",
-        )
-        # ).to(self.device)
-        logger.debug("llava_model.hf_device_map: {}".format(self.llava_model.hf_device_map))
-        self.llava_processor = LlavaNextProcessor.from_pretrained(llava_model_name)
-        self.llava_processor.tokenizer.padding_side = "left"
-
-
-        if self.dataset == "charades":
-            df_metadata = self.conn.execute(f"""
-                SELECT DISTINCT vname, vid
-                FROM charades_metadata
-            """).df()
-            self.vid_to_vname = {int(vid): vname for vid, vname in zip(df_metadata['vid'], df_metadata['vname'])}
-
-    def init_table(self):
-        metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
-        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
-        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
-        # TODO: use object_domain to filter out objects that are not in the domain
-        attr_parameters = ','.join('?' for _ in self.attribute_domain)
-        sql = f"""
-            SELECT
-                o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
-                o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-                COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
-                COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
-                {height_width_clause}
-            FROM {self.dataset}_objects o1
-            LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
-            {metadata_join_clause}
-            GROUP BY {group_by_clause}
-            ORDER BY o1.vid, o1.fid, o1.oid, o1.x1, o1.y1, o1.x2, o1.y2
-        """
-        logger.debug(f"Create one_object table:\n{sql}")
-        self.one_object_df = self.conn.execute(sql, self.attribute_domain).df()
-
-        rel_parameters = ','.join('?' for _ in self.relationship_domain)
-        sql = f"""
-            WITH obj_with_attrs AS (
-                SELECT
-                    o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
-                    COALESCE(ARRAY_AGG(a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
-                FROM {self.dataset}_objects o
-                LEFT OUTER JOIN {self.dataset}_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
-                GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
-            )
-            , relationships_expanded AS (
-                SELECT
-                    vid, fid, oid1, oid2,
-                    COALESCE(ARRAY_AGG(rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames,
-                    ARRAY_AGG(rname) AS gt_rnames
-                FROM {self.dataset}_relationships
-                GROUP BY vid, fid, oid1, oid2
-            )
-            SELECT
-                o1.vid AS vid, o1.fid AS fid,
-                o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2, o1.attributes AS o1_anames,
-                o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2, o2.attributes AS o2_anames,
-                COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
-                COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
-                COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
-                {height_width_clause}
-            FROM obj_with_attrs o1
-            JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
-            LEFT OUTER JOIN relationships_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
-            LEFT OUTER JOIN relationships_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
-            {metadata_join_clause}
-            WHERE o1.oid <> o2.oid
-            ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
-        """
-        logger.debug(f"Create two_objects table:\n{sql}")
-        self.two_objects_df = self.conn.execute(sql, self.attribute_domain + self.relationship_domain).df()
-
-    def _distill_model(self, udf_signature, udf_description, gt_udf_name=None):
+class TestDistillModel(UDFProposer):
+    def _distill_model(self, udf_signature, udf_description, gt_udf_name):
         """
         gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
         """
+        self.attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
+        self.relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
+
+        self.llm_positive_df = None
+        self.llm_negative_df = None
+
+        # Initialization for model distillation
+        udf_name, udf_vars = parse_signature(udf_signature)
+        self.udf_class = udf_name.lower()
+        self.n_obj = len(udf_vars)
+        assert self.n_obj in [1, 2], "n_obj must be 1 or 2"
+        self.udf_description = udf_description
+
+        # module_name, function_name = gt_udf_name.split(".")
+        # module_name = "udfs.{}".format(module_name)
+        # module = importlib.import_module(module_name)
+        # self.gt_udf = getattr(module, function_name)
+        self.gt_udf_name = gt_udf_name
+
+        # ask LLM about relevant object classes to the target relationships, and filter data
+        filtered_objects, filtered_subjects, filtered_targets = None, None, None
+        if self.dataset in ["charades"]:
+            filtered_objects = list(set(self.llm_filter_relevant_objects(udf_signature, udf_description) + ['person']))
+        elif self.dataset in ["gqa", "vaw"]:
+            if self.n_obj == 1:
+                filtered_objects = self.llm_filter_relevant_objects(udf_signature, udf_description)
+            else: # n_obj == 2
+                filtered_subjects, filtered_targets = self.llm_filter_relevant_subjects_targets(udf_signature, udf_description)
+        logger.debug(f"filtered_objects: {filtered_objects}, filtered_subjects: {filtered_subjects}, filtered_targets: {filtered_targets}")
+
+        num_active_learning_rounds = (self.n_train_distill - 1) // 100
+        labeled_indices = set()
+        for active_learning_round in range(num_active_learning_rounds + 1):
+            logger.info(f"Active learning round: {active_learning_round}")
+            if active_learning_round == 0:
+                # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 2) to ensure we have enough training samples
+                self.df_train = self.construct_train_and_test_data(self.n_obj, int(min(self.n_train_distill, 100)), df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
+                # self.df_train_unfiltered = self.construct_train_and_test_data(self.n_obj, int(min(self.n_train_distill, 100)*0.2), df_with_img_column=True)
+                # self.df_train = pd.concat([self.df_train, self.df_train_unfiltered], ignore_index=True)
+                # shuffle the training data
+                # self.df_train = self.df_train.sample(frac=1).reset_index(drop=True)
+            self.llm_annotate_data(active_learning_round=active_learning_round)
+            self.mlp_prepare_data()
+            best_ckpt = self.train(active_learning_round)
+
+            checkpoint = torch.load(best_ckpt)
+            hyper_parameters = checkpoint["hyper_parameters"]
+            best_mlp_model = mlp.MLPProd(**hyper_parameters)
+            best_mlp_model.load_state_dict(checkpoint["state_dict"])
+            best_mlp_model.eval()
+            best_mlp_model.to(self.device)
+
+            pred_dataset = PredImageDataset(self.conn, self.n_obj, self.attribute_features_dir, self.relationship_features_dir)
+            pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
+
+            rows = []
+            predictions = []
+            uncertainties = []
+            with torch.no_grad():
+                for row, feature in tqdm(pred_loader, file=sys.stdout):
+                    feature = feature.to(self.device)
+                    pred, uncertainty = best_mlp_model(feature)
+                    rows.extend(row.tolist())
+                    predictions.extend(pred.cpu().tolist())
+                    uncertainties.extend(uncertainty.cpu().tolist())
+
+            if self.n_obj == 1:
+                check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
+                check_df['aname'] = self.gt_udf_name
+                result = check_df.merge(self.attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
+                result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
+                result = result.rename(columns={"oid": "o1_oid"})
+            else:
+                check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
+                check_df['rname'] = self.gt_udf_name
+                result = check_df.merge(self.relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
+                result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
+                result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
+            result['label'] = (result['_merge'] == 'both').astype(int)
+            result = result.reset_index(drop=True)
+            labels = result['label'].tolist()
+
+            # Compute F1 score
+            f1 = f1_score(labels, predictions)
+            logger.info(f"F1 score: {f1}")
+            tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
+            logger.info(f"TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
+            if self.dataset == "charades":
+                result['pred'] = predictions
+                result['uncertainty'] = uncertainties
+                result_human_object = result[result["o1_oid"] == 0]
+                labels_human_object = result_human_object["label"].tolist()
+                predictions_human_object = result_human_object["pred"].tolist()
+                f1_human_object = f1_score(labels_human_object, predictions_human_object)
+                logger.info(f"[human-object only] F1 score: {f1_human_object}")
+                tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
+                logger.info(f"[human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
+
+            if active_learning_round < num_active_learning_rounds:
+                # TODO: for "charades", only select the rows with the highest uncertainty for the human-object relationship
+                # Active learning: select a batch of rows with the highest uncertainty that are not labeled
+                selected_indices = np.argsort(-np.array(uncertainties))
+                if self.dataset == "charades":
+                    mask = (result['o1_oid'] == 0)
+                    filtered_indices = set(result.index[mask].tolist())
+                    selected_indices = [i for i in selected_indices if i in filtered_indices and i not in labeled_indices]
+                else:
+                    selected_indices = [i for i in selected_indices if i not in labeled_indices]
+                selected_indices = selected_indices[:min(100, self.n_train_distill - 100 * active_learning_round)]
+                # Random sampling:
+                # selected_indices = np.random.choice(len(uncertainties), min(100, self.n_train_distill - 100 * active_learning_round), replace=False)
+                labeled_indices.update(selected_indices)
+                logger.info(f"labeled_indices: {sorted(labeled_indices)}, len(labeled_indices): {len(labeled_indices)}")
+                if self.n_obj == 1:
+                    columns = ['vid', 'fid', 'o1_oid']
+                    df_source = self.one_object_df
+                else:
+                    columns = ['vid', 'fid', 'o1_oid', 'o2_oid']
+                    df_source = self.two_objects_df
+                selected_rows = result.iloc[selected_indices][columns]
+                self.df_train = df_source.merge(selected_rows, on=columns, how='inner').reset_index(drop=True)
+                self.df_train = self.df_train.drop_duplicates(subset=columns)
+                self.df_train["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, self.df_train["vid"], self.df_train["fid"]), total=len(self.df_train), file=sys.stdout, desc="Processing frames"))
+
+    def _distill_model_balanced(self, udf_signature, udf_description, gt_udf_name):
+        """
+        gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
+        """
+        self.attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
+        self.relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
+
+        self.llm_positive_df = None
+        self.llm_negative_df = None
+
         # Initialization for model distillation
         udf_name, udf_vars = parse_signature(udf_signature)
         self.udf_class = udf_name.lower()
@@ -224,182 +203,78 @@ class UDFProposer:
 
         self.gt_udf_name = gt_udf_name
 
-        # TODO: ask LLM about relevant object classes to the target relationships, and filter data
-        # filtered_objects = ['laptop', 'television', 'person', 'phone/camera']
-        filtered_objects = None
-        if self.dataset in ["charades"]:
-            filtered_objects = list(set(self.llm_filter_relevant_objects(udf_signature, udf_description) + ['person']))
-        logger.debug(f"filtered_objects: {filtered_objects}")
-
-        # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 2) to ensure we have enough training samples
-        if gt_udf_name:
-            self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, self.n_test_distill, df_with_img_column=True, filtered_objects=filtered_objects)
-        else:
-            self.df_train = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, df_with_img_column=True, filtered_objects=filtered_objects)
-
+        self.df_train, self.df_test = self.construct_balanced_data(self.n_obj, self.n_train_distill, self.n_test_distill)
+        # self.df_train_unfiltered = self.construct_train_and_test_data(self.n_obj, int(min(self.n_train_distill, 100)*0.2), df_with_img_column=True)
+        # self.df_train = pd.concat([self.df_train, self.df_train_unfiltered], ignore_index=True)
+        # shuffle the training data
+        # self.df_train = self.df_train.sample(frac=1).reset_index(drop=True)
         self.llm_annotate_data()
-        # self.gt_annotate_data()
         self.mlp_prepare_data()
         best_ckpt = self.train()
-        if gt_udf_name:
+        if gt_udf_name and hasattr(self, 'df_test'):
             self.test()
 
-        udf_dict = {}
-        udf_dict["udf_name"] = udf_name
-        udf_dict["udf_signature"] = udf_signature
-        udf_dict["udf_description"] = udf_description
-        udf_dict["semantic_interpretation"] = 'model'
-        udf_dict["function_implementation"] = best_ckpt
+        checkpoint = torch.load(best_ckpt)
+        hyper_parameters = checkpoint["hyper_parameters"]
+        best_mlp_model = mlp.MLPProd(**hyper_parameters)
+        best_mlp_model.load_state_dict(checkpoint["state_dict"])
+        best_mlp_model.eval()
+        best_mlp_model.to(self.device)
 
-    def llm_filter_relevant_objects(self, udf_signature, udf_description):
-        filter_objects_prompt = replace_slot(
-            self.prompt_config["filter_training_data"],
-            {
-                "object_classes": self.object_domain,
-                "udf_signature": udf_signature,
-                "udf_description": udf_description,
-            },
-        )
-        logger.debug("filter_objects_prompt: {}".format(filter_objects_prompt))
-        for trial in range(3):  # Retry 3 times
-            response = None
-            try:
-                logger.debug(f"trial: {trial}")
-                response = self.client.chat.completions.create(
-                    model="gpt-4-turbo-2024-04-09",
-                    messages=[
-                        {"role": "user", "content": filter_objects_prompt},
-                    ],
-                    temperature=self.config["udf_generator"]["temperature"],
-                    top_p=self.config["udf_generator"]["top_p"],
-                    seed=self.run_id * 42 + trial,
-                )
-                filtered_objects = eval(
-                    "\n\n".join(
-                        re.findall(
-                            r"```json\n(.*?)```",
-                            response.choices[0].message.content,
-                            re.DOTALL,
-                        )
-                    )
-                )["answer"]
-                return filtered_objects
-            except Exception as e:
-                logger.exception("ERROR: failed to filter relevant objects: {}".format(e))
-                logger.debug(response)
+        pred_dataset = PredImageDataset(self.conn, self.n_obj, self.attribute_features_dir, self.relationship_features_dir)
+        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
 
-    def gt_annotate_data(self):
-        labeled_data = defaultdict(list)
-        self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN = 0, 0, 0, 0
-        # Training and validation data
-        self.label_count = 0
-        for _, row in self.df_train.iterrows():
-            logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
-            try:
-                gt_label = self._get_gt_label(row)
-                # Read and crop frame
-                logger.debug("row: {}".format(row.drop('img').to_dict()))
-                labeled_data['train'].append({"label": gt_label, "llm_label": gt_label, "base64_image": None, "image_prompt": "", "row": row})
-                self.label_count += 1
-                if self.label_count >= self.n_train_distill:
-                    break
-            except Exception as e:
-                logger.exception("Error: {}".format(e))
-                continue
-        if self.gt_udf_name is not None:
-            llm_f1 = 2*self.llm_TP/(2*self.llm_TP+self.llm_FP+self.llm_FN) if 2*self.llm_TP+self.llm_FP+self.llm_FN > 0 else 0.0
-            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN, llm_f1))
+        rows = []
+        predictions = []
+        uncertainties = []
+        with torch.no_grad():
+            for row, feature in tqdm(pred_loader, file=sys.stdout):
+                feature = feature.to(self.device)
+                pred, uncertainty = best_mlp_model(feature)
+                rows.extend(row.tolist())
+                predictions.extend(pred.cpu().tolist())
+                uncertainties.extend(uncertainty.cpu().tolist())
+
+        if self.n_obj == 1:
+            check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
+            check_df['aname'] = self.gt_udf_name
+            result = check_df.merge(self.attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
+            result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
+            result = result.rename(columns={"oid": "o1_oid"})
         else:
-            llm_f1 = -1
-        labeled_data["metadata"] = {"llm_TP": self.llm_TP, "llm_FP": self.llm_FP, "llm_TN": self.llm_TN, "llm_FN": self.llm_FN, "llm_f1": llm_f1}
+            check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
+            check_df['rname'] = self.gt_udf_name
+            result = check_df.merge(self.relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
+            result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
+            result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
+        result['label'] = (result['_merge'] == 'both').astype(int)
+        result = result.reset_index(drop=True)
+        labels = result['label'].tolist()
 
-        # Test data
-        if self.gt_udf_name is not None:
-            for _, row in self.df_test.iterrows():
-                try:
-                    gt_label = self._get_gt_label(row)
-                    labeled_data['test'].append({"label": gt_label, "row": row})
-                except Exception as e:
-                    logger.exception("Error: {}".format(e))
-                    continue
-            pos_count = sum([1 for data in labeled_data['test'] if data["label"] == 1])
-            neg_count = sum([1 for data in labeled_data['test'] if data["label"] == 0])
-            logger.debug("test_pos: {}, test_neg: {}".format(pos_count, neg_count))
-            labeled_data["metadata"]["test_pos"] = pos_count
-            labeled_data["metadata"]["test_neg"] = neg_count
-        self.labeled_data = labeled_data
-
-    def llm_annotate_data(self):
-        labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
-
-        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method)
-        labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_class, self.run_id, self.n_train_distill))
-        os.makedirs(labeled_data_dir, exist_ok=True)
-        if self.load_labeled_data and os.path.exists(labeled_data_path):
-            logger.info("Loading labeled data from {}".format(labeled_data_path))
-            labeled_data = torch.load(labeled_data_path)
-            for data in labeled_data['train']:
-                logger.debug("row: {}".format(data['row'].drop('img').to_dict()))
-                logger.debug("base64_image: {}".format(data["base64_image"]))
-                logger.debug("gt_label: {}, llm_label: {}".format(data["label"], data["llm_label"]))
-            logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(labeled_data["metadata"]["llm_TP"], labeled_data["metadata"]["llm_FP"], labeled_data["metadata"]["llm_TN"], labeled_data["metadata"]["llm_FN"], labeled_data["metadata"]["llm_f1"]))
-            if "test" in labeled_data:
-                logger.debug("test_pos: {}, test_neg: {}".format(labeled_data["metadata"]["test_pos"], labeled_data["metadata"]["test_neg"]))
-        else:
-            self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN = 0, 0, 0, 0
-            # Training and validation data
-            self.label_count = 0
-            for _, row in self.df_train.iterrows():
-                logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
-                try:
-                    gt_label = self._get_gt_label(row)
-                    # Read and crop frame
-                    logger.debug("row: {}".format(row.drop('img').to_dict()))
-                    frame, image_size = self.frame_processing_for_model(row)
-                    if frame is None:
-                        continue
-                    # llm_label, base64_image, image_prompt = self._llm_annotate_frame(frame, image_size, row, gt_label)
-                    llm_label, base64_image, image_prompt = self._llava_annotate_frame(frame, image_size, row, gt_label)
-                    labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
-                    if self.label_count >= self.n_train_distill:
-                        break
-                except Exception as e:
-                    logger.exception("Error: {}".format(e))
-                    continue
-            if self.gt_udf_name is not None:
-                llm_f1 = 2*self.llm_TP/(2*self.llm_TP+self.llm_FP+self.llm_FN) if 2*self.llm_TP+self.llm_FP+self.llm_FN > 0 else 0.0
-                logger.debug("llm_TP: {}, llm_FP: {}, llm_TN: {}, llm_FN: {}, llm_f1: {}".format(self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN, llm_f1))
-            else:
-                llm_f1 = -1
-            labeled_data["metadata"] = {"llm_TP": self.llm_TP, "llm_FP": self.llm_FP, "llm_TN": self.llm_TN, "llm_FN": self.llm_FN, "llm_f1": llm_f1}
-
-            # Test data
-            if self.gt_udf_name is not None:
-                for _, row in self.df_test.iterrows():
-                    try:
-                        gt_label = self._get_gt_label(row)
-                        labeled_data['test'].append({"label": gt_label, "row": row})
-                    except Exception as e:
-                        logger.exception("Error: {}".format(e))
-                        continue
-                pos_count = sum([1 for data in labeled_data['test'] if data["label"] == 1])
-                neg_count = sum([1 for data in labeled_data['test'] if data["label"] == 0])
-                logger.debug("test_pos: {}, test_neg: {}".format(pos_count, neg_count))
-                labeled_data["metadata"]["test_pos"] = pos_count
-                labeled_data["metadata"]["test_neg"] = neg_count
-            # save labeled_data to a file
-            if self.save_labeled_data:
-                logger.info("Saving labeled data to {}".format(labeled_data_path))
-                torch.save(labeled_data, labeled_data_path)
-        self.labeled_data = labeled_data
+        # Compute F1 score
+        f1 = f1_score(labels, predictions)
+        logger.info(f"F1 score: {f1}")
+        tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
+        logger.info(f"TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
+        if self.dataset == "charades":
+            result['pred'] = predictions
+            result['uncertainty'] = uncertainties
+            result_human_object = result[result["o1_oid"] == 0]
+            labels_human_object = result_human_object["label"].tolist()
+            predictions_human_object = result_human_object["pred"].tolist()
+            f1_human_object = f1_score(labels_human_object, predictions_human_object)
+            logger.info(f"[human-object only] F1 score: {f1_human_object}")
+            tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
+            logger.info(f"[human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
 
     def mlp_prepare_data(self):
-        # TODO: retrieve features directly from parquet files
         splits = ['train', 'test'] if self.gt_udf_name is not None else ['train']
         for split in splits:
             logger.info("Processing {} data".format(split))
             idx_to_remove = []
             for i in range(len(self.labeled_data[split])):
+                if "image_features" in self.labeled_data[split][i]:
+                    continue
                 try:
                     data = self.labeled_data[split][i]
                     row = data['row']
@@ -419,10 +294,25 @@ class UDFProposer:
                 del self.labeled_data[split][i]
 
         # use 20% of the training data as validation data
-        train_dataset = CustomImageDataset(self.labeled_data['train'], train=True)
-        train_set_size = int(len(train_dataset) * 0.8)
-        valid_set_size = len(train_dataset) - train_set_size
-        train_dataset, valid_dataset = torch.utils.data.random_split(train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id))
+        self.train_dataset = CustomImageDataset(self.labeled_data['train'], train=True)
+        if self.gt_udf_name is not None:
+            test_dataset = CustomImageDataset(self.labeled_data['test'], train=False)
+            self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=512, shuffle=False)
+
+    def train(self, active_learning_round=-1):
+        # logger.debug("mlp_config: {}".format(mlp_config))
+        mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 3
+        logger.debug("mlp_dim_in: {}".format(mlp_dim_in)) # should be 512 for clip-vit-base-patch32
+        self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, f"{self.llm_method}_{self.mlp_method}", self.udf_class)
+        if active_learning_round >= 0:
+            self.checkpoint_root = os.path.join(self.checkpoint_root, f"active_learning_round_{active_learning_round}")
+
+        # TODO: fine-tuning the learning rate
+        # learningrate_callback = pl.callbacks.LearningRateFinder()
+        # callbacks.append(learningrate_callback)
+
+        best_model_score = float('inf')
+        best_ckpt = None
 
         class_counts = [sum(data["llm_label"] == i for data in self.labeled_data['train']) for i in range(2)]
         try:
@@ -433,301 +323,160 @@ class UDFProposer:
 
         logger.debug("class_counts: {}, class_weights: {}".format(class_counts, self.class_weights))
 
-        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
-        self.val_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=32, shuffle=False)
-        if self.gt_udf_name is not None:
-            test_dataset = CustomImageDataset(self.labeled_data['test'], train=False)
-            self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False)
+        for i in range(10):
+            logger.debug("Training model: trial {}".format(i))
+            self.checkpoint_filename = "udf={}-run={}-ntrain={}-trial={}".format(self.udf_class, self.run_id, self.n_train_distill, i)
+            os.makedirs(self.checkpoint_root, exist_ok=True)
+            checkpoint_callback = pl.callbacks.ModelCheckpoint(
+                filename=self.checkpoint_filename,
+                monitor="val_loss",
+                mode="min",
+            )
+            callbacks=[checkpoint_callback]
+            earlystopping_callback = pl.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10)
+            callbacks.append(earlystopping_callback)
+            lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')
+            callbacks.append(lr_monitor)
 
-    def train(self, active_learning_round=-1):
-        # logger.debug("mlp_config: {}".format(mlp_config))
-        mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 3
-        logger.debug("mlp_dim_in: {}".format(mlp_dim_in)) # should be 512 for clip-vit-base-patch32
-        self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, f"{self.llm_method}_{self.mlp_method}", self.udf_class)
-        if active_learning_round >= 0:
-            self.checkpoint_root = os.path.join(self.checkpoint_root, f"active_learning_round_{active_learning_round}")
-        self.checkpoint_filename = "udf-{}_run-{}_ntrain-{}".format(self.udf_class, self.run_id, self.n_train_distill)
-        os.makedirs(self.checkpoint_root, exist_ok=True)
-        checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            filename=self.checkpoint_filename,
-            monitor="val_loss",
-            mode="min",
-        )
-        callbacks=[checkpoint_callback]
-        earlystopping_callback = pl.callbacks.EarlyStopping(monitor="val_loss", mode="min", patience=10)
-        callbacks.append(earlystopping_callback)
-        # TODO: fine-tuning the learning rate
-        # learningrate_callback = pl.callbacks.LearningRateFinder()
-        # callbacks.append(learningrate_callback)
+            train_set_size = int(len(self.train_dataset) * 0.8)
+            valid_set_size = len(self.train_dataset) - train_set_size
+            train_split, valid_split = torch.utils.data.random_split(self.train_dataset, [train_set_size, valid_set_size], generator=torch.Generator().manual_seed(self.run_id * 42 + i))
 
-        self.mlp_model = mlp.MLP(mlp_dim_in, 2, logger, self.class_weights) # binary classification
+            self.train_loader = torch.utils.data.DataLoader(train_split, batch_size=512, shuffle=True)
+            self.val_loader = torch.utils.data.DataLoader(valid_split, batch_size=512, shuffle=False)
 
-        self.trainer = pl.Trainer(
-            # deterministic=self.deterministic,
-            max_epochs=50,
-            devices=1,
-            accelerator="auto",
-            enable_progress_bar=True,
-            enable_checkpointing=True,
-            enable_model_summary=False,
-            # logger=pl_logger,
-            default_root_dir=self.checkpoint_root,
-            callbacks=callbacks,
-            # check_val_every_n_epoch=5,
-            # log_every_n_steps=min(50, len(dataset)-1),
-            log_every_n_steps=1
-        )
+            self.mlp_model = mlp.MLP(mlp_dim_in, 2, logger, self.class_weights) # binary classification
 
-        self.trainer.fit(
-            self.mlp_model,
-            train_dataloaders=self.train_loader,
-            val_dataloaders=self.val_loader
-        )
+            self.trainer = pl.Trainer(
+                # deterministic=self.deterministic,
+                max_epochs=50,
+                devices=1,
+                accelerator="auto",
+                enable_progress_bar=True,
+                enable_checkpointing=True,
+                enable_model_summary=False,
+                # logger=pl_logger,
+                default_root_dir=self.checkpoint_root,
+                callbacks=callbacks,
+                # check_val_every_n_epoch=5,
+                # log_every_n_steps=min(50, len(dataset)-1),
+                log_every_n_steps=1
+            )
 
-        # retrieve the best checkpoint after training
-        best_ckpt = checkpoint_callback.best_model_path
+            self.trainer.fit(
+                self.mlp_model,
+                train_dataloaders=self.train_loader,
+                val_dataloaders=self.val_loader
+            )
+
+            # retrieve the best checkpoint after training
+            current_model_score = checkpoint_callback.best_model_score
+            logger.debug(f"current_model_score: {current_model_score}, best_model_score: {min(best_model_score, current_model_score)}")
+            if current_model_score < best_model_score:
+                best_model_score = current_model_score
+                best_ckpt = checkpoint_callback.best_model_path
         logger.debug("Best model checkpoint: {}".format(best_ckpt))
         # best_mlp_model = mlp.MLP.load_from_checkpoint(best_ckpt)
         return best_ckpt
 
-    def test(self):
-        # Inference:
-        # model = mlp.MLP.load_from_checkpoint(self.dim_in, 2)
-        logger.debug("test with last model: ")
-        self.trainer.test(self.mlp_model, dataloaders=self.test_loader)
-        logger.debug("test with best model: ")
-        self.trainer.test(ckpt_path="best", dataloaders=self.test_loader)
-
-    def _get_gt_label(self, row):
-        if self.gt_udf_name is None:
-            return None
-        if self.n_obj == 1:
-            return int(self.gt_udf_name in row["o1_gt_anames"])
-        else:
-            return int(self.gt_udf_name in row["o1_o2_gt_rnames"])
-
-    def frame_processing_for_model(self, row):
-        frame = row['img']
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        image_size = frame.shape[:2]
-        if self.n_obj == 1:
-            x1, y1, x2, y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
-            frame = frame[y1:y2, x1:x2]
-        else:
-            o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
-            o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
-            frame = frame[min(o1_y1, o2_y1):max(o1_y2, o2_y2), min(o1_x1, o2_x1):max(o1_x2, o2_x2)]
-        # resize the frame to 224x224
-        frame = cv2.resize(frame, (224, 224))
-        return frame, image_size
-
-    def expand_box(self,x1,y1,x2,y2,img_size,factor=1.5):
-        H, W = img_size
-        dw = int(factor*(x2-x1)/2)
-        dh = int(factor*(y2-y1)/2)
-        cx = int((x1 + x2) / 2)
-        cy = int((y1 + y2) / 2)
-        x1 = max(0,cx - dw)
-        x2 = min(cx + dw,W)
-        y1 = max(0,cy - dh)
-        y2 = min(cy + dh,H)
-        return [x1,y1,x2,y2]
-
-    def _llm_annotate_frame(self, frame, image_size, row, gt_label):
-        # TODO: don't resize the frame here, resize it in the model
-        # Convert the frame to a base 64 encoded image
-        # TODO: Try different llm annotation prompt: draw bounding boxes on subject and object.
-        # frame = row['img']
-        # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        # if self.n_obj == 2:
-        #     cv2.rectangle(frame, (int(row['o1_x1']), int(row['o1_y1'])), (int(row['o1_x2']), int(row['o1_y2'])), color=(0, 0, 255), thickness=1)
-        #     cv2.rectangle(frame, (int(row['o2_x1']), int(row['o2_y1'])), (int(row['o2_x2']), int(row['o2_y2'])), color=(255, 0, 0), thickness=1)
-        # if self.n_obj == 2:
-        #     o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
-        #     cv2.rectangle(frame, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
-        #     cv2.rectangle(frame, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
-        _, buffer = cv2.imencode('.jpg', frame)
-        base64_image = base64.b64encode(buffer).decode('utf-8')
-        logger.debug("base64_image: {}".format(base64_image))
-        image_prompt = self._create_image_prompt(row, image_size)
-        logger.debug("Image prompt: {}".format(image_prompt))
-        response = completion_with_backoff(
-            model="gpt-4-turbo-2024-04-09",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": image_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            },
-                        },
-                    ],
-                }
-            ],
-            max_tokens=10,
-            temperature=0.2,
-            top_p=0.5,
-            seed=self.run_id
-        )
-        result = response.choices[0].message.content
-        logger.debug("Result: {}".format(result))
-        logger.debug("gt_label: {}".format(gt_label))
-        if "yes" in result.lower():
-            llm_label = 1
-            if self.gt_udf_name is not None:
-                if gt_label == 1:
-                    self.llm_TP += 1
-                else:
-                    self.llm_FP += 1
-        elif "no" in result.lower():
-            llm_label = 0
-            if self.gt_udf_name is not None:
-                if gt_label == 0:
-                    self.llm_TN += 1
-                else:
-                    self.llm_FN += 1
-        else:
-            raise ValueError("Invalid response", result)
-        self.label_count += 1
-        return llm_label, base64_image, image_prompt
-
-    def _llava_annotate_frame(self, frame, image_size, row, gt_label):
-        # Convert the frame to PIL image
-        o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
-        cv2.rectangle(frame, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
-        cv2.rectangle(frame, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame)
-        llava_image_prompt, last_word = self._create_llava_image_prompt(row, image_size)
-        logger.debug("Llava image prompt: {}".format(llava_image_prompt))
-        inputs = self.llava_processor(llava_image_prompt, pil_image, return_tensors="pt").to(self.device)
-        output = self.llava_model.generate(
-            **inputs,
-            max_new_tokens=10,
-            do_sample=True,
-            temperature=0.2,
-            top_p=0.7
-        )
-        result = self.llava_processor.decode(output[0], skip_special_tokens=True)
-        result = result.split(last_word)[-1].strip().lower()
-        logger.debug("Llava result: {}".format(result))
-        logger.debug("gt_label: {}".format(gt_label))
-        if "yes" in result.lower():
-            llm_label = 1
-            if self.gt_udf_name is not None:
-                if gt_label == 1:
-                    self.llm_TP += 1
-                else:
-                    self.llm_FP += 1
-        elif "no" in result.lower():
-            llm_label = 0
-            if self.gt_udf_name is not None:
-                if gt_label == 0:
-                    self.llm_TN += 1
-                else:
-                    self.llm_FN += 1
-        else:
-            raise ValueError("Invalid response", result)
-        self.label_count += 1
-        return llm_label, None, llava_image_prompt
-
-    def _create_image_prompt(self, row, image_size):
-        image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
-        return image_prompt
-
-    def _create_llava_image_prompt(self, row, image_size):
-        image_prompt = "<|im_start|>system\nAnswer the questions.<|im_end|><|im_start|>user\n<image>\n{}? Answer with 'yes' or 'no'.<|im_end|><|im_start|>assistant\n".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
-        return image_prompt, "assistant"
-
-    def replace_objects(self, input_string, row, image_size):
-        # Find all occurrences of "o" followed by integers
-        objects = re.findall(r'o\d+', input_string)
-        # Sort the objects based on the integer part of the identifier
-        sorted_objects = sorted(set(objects), key=lambda x: int(x[1:]))
-
-        h, w = image_size
-        if len(sorted_objects) == 1:
-            new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]}")
-        elif len(sorted_objects) == 2 and self.n_obj == 2:
-            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
-            # o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2']
-            # new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {int(o1x1), int(o1y1), int(o1x2), int(o1y2)}")
-            # new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {int(o2x1), int(o2y1), int(o2x2), int(o2y2)}")
-            new_string = input_string.replace(sorted_objects[0], f"{row['o1_oname']} {sorted_objects[0]} at {int(o1x1), int(o1y1), int(o1x2), int(o1y2)} in the red box")
-            new_string = new_string.replace(sorted_objects[1], f"{row['o2_oname']} {sorted_objects[1]} at {int(o2x1), int(o2y1), int(o2x2), int(o2y2)} in the blue box")
-        else:
-            new_string = input_string
-
-        return new_string
-
-    def extract_features(self, frame, row, image_size):
-        """
-        three CLIP features: original image, subject mask, target mask
-        """
-        if self.n_obj == 1:
-            inputs = self.clip_processor(images=frame, return_tensors="pt").to(self.device)
-            with torch.no_grad():
-                outputs = self.clip_model.get_image_features(**inputs)
-            outputs = outputs.squeeze(0)
-        else:
-            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            frame_subject = frame.copy()
-            frame_target = frame.copy()
-            # set the pixels outside the bounding box to 0
-            frame_subject[:int(o1y1), :] = 0
-            frame_subject[int(o1y2):, :] = 0
-            frame_subject[:, :int(o1x1)] = 0
-            frame_subject[:, int(o1x2):] = 0
-            frame_target[:int(o2y1), :] = 0
-            frame_target[int(o2y2):, :] = 0
-            frame_target[:, :int(o2x1)] = 0
-            frame_target[:, int(o2x2):] = 0
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_subject = cv2.cvtColor(frame_subject, cv2.COLOR_BGR2RGB)
-            frame_target = cv2.cvtColor(frame_target, cv2.COLOR_BGR2RGB)
-            inputs = self.clip_processor(images=[frame, frame_subject, frame_target], return_tensors="pt").to(self.device)
-            with torch.no_grad():
-                outputs = self.clip_model.get_image_features(**inputs)
-            outputs = outputs.reshape(-1)
-        return outputs
-
-    def _compute_new_box_after_crop(self, row, image_size):
-        o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
-        o2_x1, o2_y1, o2_x2, o2_y2 = self.expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
-        x_offset = min(o1_x1, o2_x1)
-        y_offset = min(o1_y1, o2_y1)
-        h_ratio = 224.0 / (max(o1_y2, o2_y2) - y_offset)
-        w_ratio = 224.0 / (max(o1_x2, o2_x2) - x_offset)
-        return (row['o1_x1'] - x_offset) * w_ratio, (row['o1_y1'] - y_offset) * h_ratio, (row['o1_x2'] - x_offset) * w_ratio, (row['o1_y2'] - y_offset) * h_ratio, (row['o2_x1'] - x_offset) * w_ratio, (row['o2_y1'] - y_offset) * h_ratio, (row['o2_x2'] - x_offset) * w_ratio, (row['o2_y2'] - y_offset) * h_ratio
-
-
-    def construct_train_and_test_data(self, n_obj, n_train=None, n_test=None, df_with_img_column=False, filtered_objects=None):
+    def construct_balanced_data(self, n_obj, n_train=None, n_test=None):
         if self.dataset == "charades":
-            if df_with_img_column:
-                return self._construct_train_and_test_data_with_images_person_object_relationships(n_obj, n_train, n_test, filtered_objects=filtered_objects)
-            else:
-                return self._construct_train_and_test_data_without_images_person_object_relationships(n_obj, n_train, n_test, filtered_objects=filtered_objects)
+            return self._construct_train_and_test_data_with_images_person_object_relationships(n_obj, n_train, n_test)
         else:
-            if df_with_img_column:
-                return self._construct_train_and_test_data_with_images(n_obj, n_train, n_test)
-            else:
-                return self._construct_train_and_test_data_without_images(n_obj, n_train, n_test)
+            return self._construct_balanced_data_with_images(n_obj, n_train, n_test)
 
-    def _construct_train_and_test_data_without_images(self, n_obj, n_train=None, n_test=None):
+    def _construct_balanced_data_with_images(self, n_obj, n_train=None, n_test=None):
+        if n_test:
+            df_train, df_test = self._construct_balanced_data_without_images(n_obj, n_train, n_test)
+            # construct the img column
+            for df in [df_train, df_test]:
+                df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
+            return df_train, df_test
+        else:
+            df = self._construct_balanced_data_without_images(n_obj, n_train)
+            df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
+            return df
+
+    def _construct_balanced_data_without_images(self, n_obj, n_train=None, n_test=None):
         # Construct training data and test data
         if n_obj == 1:
-            df_filtered = self.one_object_df
+            pos_sql = """
+                SELECT
+                    o1.vid AS vid, o1.fid AS fid,
+                    o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+                    ARRAY[a1.aname] AS o1_gt_anames
+                FROM {}_metadata m, {}_objects o1, {}_attributes a1
+                WHERE m.vid = o1.vid AND m.fid = o1.fid AND o1.vid = a1.vid AND o1.fid = a1.fid AND o1.oid = a1.oid AND a1.aname = '{}'
+                ORDER BY random()
+                LIMIT {}
+            """.format(
+                self.dataset, self.dataset, self.dataset, self.udf_class, (n_train + n_test) // 2 if n_test else (n_train) // 2
+            )
+            neg_sql = """
+                SELECT
+                    o1.vid AS vid, o1.fid AS fid,
+                    o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+                    ARRAY[]::varchar[] as o1_gt_anames
+                FROM {}_metadata m, {}_objects o1
+                WHERE m.vid = o1.vid AND m.fid = o1.fid
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM {}_attributes a1
+                        WHERE a1.vid = o1.vid AND a1.fid = o1.fid AND a1.oid = o1.oid AND a1.aname = '{}'
+                    )
+                ORDER BY random()
+                LIMIT {}
+            """.format(
+                self.dataset, self.dataset, self.dataset, self.udf_class, (n_train + n_test) // 2 if n_test else (n_train) // 2
+            )
         elif n_obj == 2:
-            df_filtered = self.two_objects_df
+            pos_sql = """
+                SELECT
+                    o1.vid AS vid, o1.fid AS fid,
+                    o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+                    o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2,
+                    ARRAY[r.rname] as o1_o2_gt_rnames
+                FROM {}_metadata m, {}_objects o1, {}_objects o2, {}_relationships r
+                WHERE m.vid = o1.vid AND m.fid = o1.fid AND o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid != o2.oid
+                    AND o1.vid = r.vid AND o1.fid = r.fid AND o1.oid = r.oid1 AND o2.oid = r.oid2 AND r.rname = '{}'
+                ORDER BY random()
+                LIMIT {}
+            """.format(
+                self.dataset, self.dataset, self.dataset, self.dataset, self.udf_class, n_train // 2
+            )
+            neg_sql = """
+                SELECT
+                    o1.vid AS vid, o1.fid AS fid,
+                    o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+                    o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2,
+                    ARRAY[]::varchar[] as o1_o2_gt_rnames
+                FROM {}_metadata m, {}_objects o1, {}_objects o2
+                WHERE m.vid = o1.vid AND m.fid = o1.fid AND o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid != o2.oid
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM {}_relationships r
+                        WHERE r.vid = o1.vid AND r.fid = o1.fid AND r.oid1 = o1.oid
+                            AND r.oid2 = o2.oid AND r.rname = '{}'
+                    )
+                ORDER BY random()
+                LIMIT {}
+            """.format(
+                self.dataset, self.dataset, self.dataset, self.dataset, self.udf_class, n_train // 2
+            )
         else:
             raise ValueError("Number of objects not supported: {}".format(n_obj))
 
-        if n_train or n_test:
-            df_filtered = df_filtered.sample(n_train + n_test if n_test else n_train, random_state=self.run_id)
+        # logger.debug("pos_sql: {}".format(pos_sql))
+        # logger.debug("neg_sql: {}".format(neg_sql))
+        df_pos = self.conn.execute(pos_sql).df()
+        df_neg = self.conn.execute(neg_sql).df()
+
+        # Interleave the rows of the two DataFrames
+        df_filtered = pd.concat([df_pos, df_neg], ignore_index=True)
+        max_length = max(len(df_pos), len(df_neg))
+        new_index = np.array([[i, i + max_length] for i in range(max_length)]).flatten()
+        new_index = new_index[new_index < len(df_filtered)]
+        df_filtered = df_filtered.iloc[new_index]
 
         if n_test:
             df_train = df_filtered[:n_train]
@@ -738,95 +487,28 @@ class UDFProposer:
         else:
             df_filtered = df_filtered.reset_index(drop=True)
             return df_filtered
-
-    def _construct_train_and_test_data_with_images(self, n_obj, n_train=None, n_test=None):
-        # Construct training data and test data
-        # dataframe consists of columns: img, o1 [, o2]
-        if n_test:
-            df_train, df_test = self._construct_train_and_test_data_without_images(n_obj, n_train, n_test)
-            # construct the img column
-            for df in [df_train, df_test]:
-                df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
-            return df_train, df_test
-        else:
-            df = self._construct_train_and_test_data_without_images(n_obj, n_train)
-            df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
-            return df
-
-    def _construct_train_and_test_data_without_images_person_object_relationships(self, n_obj, n_train=None, n_test=None, filtered_objects=None):
-        n_samples = n_train + n_test if n_test else n_train
-        # Construct training data and test data
-        if n_obj == 1: # Charades shouldn't need this, but just in case
-            df_filtered = self.one_object_df
-        elif n_obj == 2: # Only consider person-object relationships
-            # vid, fid, o1_oid, o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oid, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, o1_o2_gt_rnames, height, width
-            if filtered_objects:
-                # obj_parameters = ','.join('?' for _ in filtered_objects)
-                df_filtered = self.two_objects_df[((self.two_objects_df["o1_oid"] == 0) | (self.two_objects_df["o2_oid"] == 0)) & (self.two_objects_df["o1_oname"].isin(filtered_objects)) & (self.two_objects_df["o2_oname"].isin(filtered_objects))]
-                # self.conn.execute(f"""
-                #     SELECT *
-                #     FROM self.two_objects_df
-                #     WHERE (o1_oid = 0 OR o2_oid = 0) AND o1_oname = ANY([{obj_parameters}]) AND o2_oname = ANY([{obj_parameters}])
-                # """, filtered_objects + filtered_objects).df()
-            else:
-                df_filtered = self.two_objects_df[(self.two_objects_df["o1_oid"] == 0) | (self.two_objects_df["o2_oid"] == 0)]
-
-            if len(df_filtered) < n_samples:
-                logger.warning(f"Number of samples ({len(df_filtered)}) is less than n_samples ({n_samples}).")
-                df_filtered = self.two_objects_df
-        else:
-            raise ValueError("Number of objects not supported: {}".format(n_obj))
-
-        if n_train or n_test:
-            df_filtered = df_filtered.sample(n_samples, random_state=self.run_id)
-
-        if n_test:
-            df_train = df_filtered[:n_train]
-            df_train = df_train.reset_index(drop=True)
-            df_test = df_filtered[n_train:]
-            df_test = df_test.reset_index(drop=True)
-            return df_train, df_test
-        else:
-            df_filtered = df_filtered.reset_index(drop=True)
-            return df_filtered
-
-    def _construct_train_and_test_data_with_images_person_object_relationships(self, n_obj, n_train=None, n_test=None, filtered_objects=None):
-        # Construct training data and test data
-        # dataframe consists of columns: img, o1 [, o2]
-        if n_test:
-            df_train, df_test = self._construct_train_and_test_data_without_images_person_object_relationships(n_obj, n_train, n_test, filtered_objects=filtered_objects)
-            # construct the img column
-            for df in [df_train, df_test]:
-                df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
-            return df_train, df_test
-        else:
-            df = self._construct_train_and_test_data_without_images_person_object_relationships(n_obj, n_train, filtered_objects=filtered_objects)
-            df["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df["vid"], df["fid"]), total=len(df), file=sys.stdout, desc="Processing frames"))
-            return df
-
-    def frame_processing_for_program(self, vid, fid):
-        if self.dataset == "clevrer":
-            frame = np.array(Image.open(os.path.join(
-                self.config[self.dataset]["video_frames_dir"],
-                f"sim_{str(vid).zfill(5)}",
-                f"frame_{str(fid).zfill(5)}.png"
-            ))) # Shape: (H, W, C)
-        elif self.dataset == "charades":
-            frame = np.array(Image.open(os.path.join(
-                self.config[self.dataset]["video_frames_dir"],
-                f"{self.vid_to_vname[vid]}.mp4",
-                f"{str(fid).zfill(6)}.png"
-            ))) # Shape: (H, W, C)
-        else:
-            raise ValueError(f"Dataset {self.dataset} not supported")
-        return frame
 
 if __name__ == "__main__":
+
+    # python test_distill_model.py --dataset "vaw" --udf_idx 0 --labeling_strategy "user" --n_train_distill 1000 --balanced
     parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, help="dataset name")
     parser.add_argument("--udf_idx", type=int, help="udf_idx")
+    parser.add_argument("--labeling_strategy", type=str, choices=["user", "gpt4v", "llava"], default="user", help="labeling strategy for distill model annotations")
+    parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
+    parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
+    parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
+    parser.add_argument("--balanced", action="store_true", help="use balanced dataset")
 
     args = parser.parse_args()
+    dataset = args.dataset
     udf_idx = args.udf_idx
+    labeling_strategy =args.labeling_strategy
+    n_train_distill = args.n_train_distill
+    save_labeled_data = args.save_labeled_data
+    load_labeled_data = args.load_labeled_data
+    balanced = args.balanced
+
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -834,25 +516,47 @@ if __name__ == "__main__":
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
-    n_train_distill = 1000
-    test_inputs = [
-        ["not_looking_at(o0, o1)", "Whether o0 is not looking at o1. Return True if o0 is not looking at o1, otherwise return False.", "not_looking_at"],
-        ["looking_at(o0, o1)", "Whether object o0 is looking at object o1", "looking_at"],
-        ["holding(o0, o1)", "Whether o0 is holding o1", "holding"],
-        ["not_contacting(o0, o1)", "Whether o0 is not contacting o1. Return True if o0 is not contacting o1, otherwise return False.", "not_contacting"],
-        ["touching(o0, o1)", "Whether o0 is touching o1.", "touching"],
-        ["sitting_on(o0, o1)", "Whether o0 is sitting on o1.", "sitting_on"],
-        ["leaning_on(o0, o1)", "Whether o0 is leaning on o1.", "leaning_on"],
-        ["drinking_from(o0, o1)", "Whether o0 is drinking from o1.", "drinking_from"],
-        ["standing_on(o0, o1)", "Whether o0 is standing on o1.", "standing_on"],
-        ["wearing(o0, o1)", "Whether o0 is wearing o1.", "wearing"],
-    ]
+
+    if dataset == "charades":
+        test_inputs = [
+            ["holding(o0, o1)", "Whether o0 is holding o1.", "holding"],
+            ["sitting_on(o0, o1)", "Whether o0 is sitting on o1.", "sitting_on"],
+            ["standing_on(o0, o1)", "Whether o0 is standing on o1.", "standing_on"],
+            ["covered_by(o0, o1)", "Whether o0 is covered by o1.", "covered_by"],
+            ["carrying(o0, o1)", "Whether o0 is carrying o1.", "carrying"],
+            ["eating(o0, o1)", "Whether o0 is eating o1.", "eating"],
+            ["wiping(o0, o1)", "Whether object o0 is wiping o1", "wiping"],
+            ["have_it_on_the_back(o0, o1)", "Whether o0 has o1 on the back.", "have_it_on_the_back"],
+            ["leaning_on(o0, o1)", "Whether o0 is leaning on o1.", "leaning_on"],
+            ["wearing(o0, o1)", "Whether o0 is wearing o1.", "wearing"],
+        ]
+    elif dataset == "vaw":
+        test_inputs = [
+            ["white(o0)", "Whether the color of o0 is white.", "white"],
+            ["green(o0)", "Whether the color of o0 is green.", "green"],
+            ["large(o0)", "Whether the size of o0 is large.", "large"],
+            ["red(o0)", "Whether the color of o0 is red.", "red"],
+            ["wooden(o0)", "Whether the material of o0 is wooden.", "wooden"],
+            ["yellow(o0)", "Whether the color of o0 is yellow.", "yellow"],
+            ["tall(o0)", "Whether the height of o0 is tall.", "tall"],
+            ["silver(o0)", "Whether the color of o0 is silver.", "silver"],
+            ["standing(o0)", "Whether the pose of o0 is standing.", "standing"],
+            ["round(o0)", "Whether the shape of o0 is round.", "round"],
+        ]
     test_input = test_inputs[udf_idx]
     """
     Set up logging
     """
     # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(f"/gscratch/balazinska/enhaoz/VOCAL-UDF/tests/gt-ntrain_distill={n_train_distill}-udf_idx={udf_idx}-llava.log", mode="w")
+    log_dir = os.path.join(
+        config["log_dir"],
+        "distill_model",
+        dataset,
+        f"balanced={balanced}",
+    )
+    os.makedirs(log_dir, exist_ok=True)
+
+    file_handler = logging.FileHandler(os.path.join(log_dir, f"labeling={labeling_strategy}-udf_idx={udf_idx}-ntrain_distill={n_train_distill}.log"), mode="w")
     file_handler.setLevel(logging.DEBUG)
 
     # Create a console handler with a higher log level
@@ -874,30 +578,39 @@ if __name__ == "__main__":
     sys.stderr = StreamToLogger(logger, logging.ERROR)
     sys.excepthook = exception_hook
 
-    dataset = "charades"
     registered_functions = [{
         "signature": "object(o0, name)",
         "description": "Whether o0 is an object with the given name.",
         "function_implementation": ""
     }]
     object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
-    query_id = 0
-    run_id = 0
     num_workers = 8
-    save_labeled_data = False
-    load_labeled_data = False
-    up = UDFProposer(
-        config,
-        prompt_config,
-        object_domain,
-        relationship_domain,
-        attribute_domain,
-        dataset,
-        query_id,
-        run_id,
-        num_workers,
-        save_labeled_data,
-        load_labeled_data,
-        n_train_distill,
-    )
-    up._distill_model(test_input[0], test_input[1], test_input[2])
+    up = TestDistillModel(
+            config,
+            prompt_config,
+            registered_functions,
+            object_domain,
+            relationship_domain,
+            attribute_domain,
+            dataset,
+            0,
+            500,
+            0,
+            0,
+            False,
+            False,
+            0,
+            0,
+            num_workers,
+            save_labeled_data,
+            load_labeled_data,
+            n_train_distill,
+            selection_strategy='model',
+            selection_labels='none',
+            allow_kwargs_in_udf=False,
+            llm_method=labeling_strategy,
+        )
+    if balanced:
+        up._distill_model_balanced(*test_input)
+    else:
+        up._distill_model(*test_input)

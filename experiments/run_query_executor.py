@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 import resource
+import duckdb
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
@@ -23,9 +24,11 @@ if __name__ == '__main__':
     parser.add_argument("--query_id", type=int, help="query id")
     parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
+    parser.add_argument("--query_class_name", type=str, help="query class name")
     parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     parser.add_argument("--budget", type=int, help="labeling budget")
+    parser.add_argument("--n_selection_samples", type=int, default=500, help="number of sampled videos per selection iteration")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
     parser.add_argument("--program_with_pixels", action="store_true", help="program with pixels")
     parser.add_argument("--program_with_pretrained_models", action="store_true", help="program with pretrained models")
@@ -42,9 +45,11 @@ if __name__ == '__main__':
     query_id = args.query_id
     run_id = args.run_id
     dataset = args.dataset
+    query_class_name = args.query_class_name
     allow_kwargs_in_udf = args.allow_kwargs_in_udf
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
+    n_selection_samples = args.n_selection_samples
     llm_method = args.llm_method
     num_interpretations = args.num_interpretations
     program_with_pixels = args.program_with_pixels
@@ -65,13 +70,14 @@ if __name__ == '__main__':
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
 
-    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}-llm_method={}".format(
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-labels={}-budget={}-llm_method={}".format(
         num_interpretations,
         num_parameter_search,
         allow_kwargs_in_udf,
         program_with_pixels,
         program_with_pretrained_models,
         n_train_distill,
+        n_selection_samples,
         selection_strategy,
         selection_labels,
         labeling_budget,
@@ -81,11 +87,19 @@ if __name__ == '__main__':
     random.seed(run_id)
     np.random.seed(run_id)
 
-    input_query_file = config[dataset]["input_query_file"]
-    task_name = os.path.basename(input_query_file).split(".")[0]
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     positive_videos = input_query["positive_videos"]
-    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+    if dataset in ["gqa", "vaw"]:
+        conn = duckdb.connect(
+            database=os.path.join(config["db_dir"], "annotations.duckdb"),
+            read_only=True,
+        )
+        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
+        y_true = [1 if vid in positive_videos else 0 for vid in vids]
+    else:
+        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+
 
     """
     Set up logging
@@ -95,7 +109,7 @@ if __name__ == '__main__':
         config["log_dir"],
         "query_execution",
         dataset,
-        task_name,
+        query_class_name,
         "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
     )
@@ -129,7 +143,7 @@ if __name__ == '__main__':
             config["output_dir"],
             "udf_generation",
             dataset,
-            task_name,
+            query_class_name,
             "num_missing_udfs={}".format(num_missing_udfs),
             config_name,
             "qid={}-run={}.json".format(query_id, run_id),
@@ -146,6 +160,8 @@ if __name__ == '__main__':
     available_udf_names = generation_output["available_udf_names"]
     materialized_df_names = generation_output["materialized_df_names"]
     on_the_fly_udf_names = generation_output["on_the_fly_udf_names"]
+
+    logger.info("parsed_program: {}".format(parsed_program))
 
     qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size)
     qe.run(parsed_program, y_true, debug=False)

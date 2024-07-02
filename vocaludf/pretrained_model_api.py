@@ -3,7 +3,7 @@ from PIL import Image
 from typing import Dict, List, Union
 import numpy as np
 # from transformers import pipeline, ViTImageProcessor, ViTForImageClassification, BlipProcessor, BlipForQuestionAnswering, DetrImageProcessor, DetrForObjectDetection, DPTImageProcessor, DPTForDepthEstimation
-from transformers import pipeline, BlipProcessor, BlipForQuestionAnswering, DPTImageProcessor, DPTForDepthEstimation
+from transformers import pipeline, BlipProcessor, BlipForQuestionAnswering, GLPNImageProcessor, GLPNForDepthEstimation
 import transformers
 import easyocr
 import io
@@ -16,13 +16,13 @@ config = yaml.safe_load(
 
 # From https://github.com/RAIVNLab/mnms
 MODEL_SELECTION = {
-    "image_captioning": os.path.join(config['model_dir'], 'blip-image-captioning-large'),
+    "image_captioning": os.path.join(config['model_dir'], 'blip-image-captioning-base'),
     # "image_classification": "google/vit-base-patch16-224",
     "visual_question_answering": os.path.join(config['model_dir'], 'blip-vqa-base'),
     # "object_detection": "facebook/detr-resnet-101",
     # "image_segmentation": "facebook/maskformer-swin-base-coco",
     # "optical_character_recognition": "easyOCR",
-    "depth_estimation": os.path.join(config['model_dir'], 'dpt-large')
+    "depth_estimation": os.path.join(config['model_dir'], 'glpn-nyu')
 }
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -37,14 +37,14 @@ visual_question_answering_model = BlipForQuestionAnswering.from_pretrained(MODEL
 # image_segmentation_feature_extractor = transformers.MaskFormerFeatureExtractor.from_pretrained(MODEL_SELECTION["image_segmentation"])
 # image_segmentation_model = transformers.MaskFormerForInstanceSegmentation.from_pretrained(MODEL_SELECTION["image_segmentation"]).to(device)
 # image_segmentation_model.eval()
-depth_estimation_processor = DPTImageProcessor.from_pretrained(MODEL_SELECTION["depth_estimation"])
-depth_estimation_model = DPTForDepthEstimation.from_pretrained(MODEL_SELECTION["depth_estimation"]).to(device)
+depth_estimation_processor = GLPNImageProcessor.from_pretrained(MODEL_SELECTION["depth_estimation"])
+depth_estimation_model = GLPNForDepthEstimation.from_pretrained(MODEL_SELECTION["depth_estimation"], torch_dtype=torch.float16).to(device)
 
-# image_captioning_pipe.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'blip-image-captioning-large'))
+# image_captioning_pipe.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'blip-image-captioning-base'))
 # visual_question_answering_processor.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'blip-vqa-base'))
 # visual_question_answering_model.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'blip-vqa-base'))
-# depth_estimation_processor.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'dpt-large'))
-# depth_estimation_model.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'dpt-large'))
+# depth_estimation_processor.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'glpn-kitti'))
+# depth_estimation_model.save_pretrained(os.path.join("/gscratch/balazinska/enhaoz/VOCAL-UDF/data/models", 'glpn-kitti'))
 
 # -------------------------- Tool Functions --------------------------
 def image_captioning(image: np.ndarray):  # alternative: nlpconnect/vit-gpt2-image-captioning (testing, blip is better than vit-gpt2)
@@ -87,7 +87,7 @@ def visual_question_answering(image: np.ndarray, question: str):  # alternative:
     inputs = processor(raw_image, question, return_tensors="pt").to(
         device, torch.float16
     )
-    out = model.generate(**inputs)
+    out = model.generate(**inputs, max_new_tokens=20)
     result = processor.decode(out[0], skip_special_tokens=True)
 
     return result

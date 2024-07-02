@@ -24,7 +24,9 @@ def using(point=""):
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
 if __name__ == "__main__":
-    # python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "charades" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "llava"
+    # charades: python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "charades" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "llava"
+    # gqa: python main.py --num_missing_udfs 1 --query_id 0 --run_id 0 --dataset "gqa" --query_class_name "unavailable=2-npred=1-nattr_pred=1-nobj_pred=0-nvars=2-min_npos=100-max_npos=5000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
+    # vaw: python main.py --num_missing_udfs 1 --query_id 6 --run_id 0 --dataset "vaw" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -34,9 +36,11 @@ if __name__ == "__main__":
     parser.add_argument("--query_id", type=int, help="query id")
     parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
+    parser.add_argument("--query_class_name", type=str, help="query class name")
     parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     parser.add_argument("--budget", type=int, help="labeling budget")
+    parser.add_argument("--n_selection_samples", type=int, default=500, help="number of sampled videos per selection iteration")
     parser.add_argument("--ask_for_gt_udf", action="store_true", help="Ask for the gt_udf name interactively if enabled")
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
     parser.add_argument("--program_with_pixels", action="store_true", help="program with pixels")
@@ -55,9 +59,11 @@ if __name__ == "__main__":
     query_id = args.query_id
     run_id = args.run_id
     dataset = args.dataset
+    query_class_name = args.query_class_name
     allow_kwargs_in_udf = args.allow_kwargs_in_udf
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
+    n_selection_samples = args.n_selection_samples
     ask_for_gt_udf = args.ask_for_gt_udf
     num_interpretations = args.num_interpretations
     program_with_pixels = args.program_with_pixels
@@ -80,13 +86,14 @@ if __name__ == "__main__":
     elif selection_strategy == "model":
         assert selection_labels == "none"
 
-    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-selection={}-labels={}-budget={}-llm_method={}".format(
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-labels={}-budget={}-llm_method={}".format(
         num_interpretations,
         num_parameter_search,
         allow_kwargs_in_udf,
         program_with_pixels,
         program_with_pretrained_models,
         n_train_distill,
+        n_selection_samples,
         selection_strategy,
         selection_labels,
         labeling_budget,
@@ -96,13 +103,20 @@ if __name__ == "__main__":
     random.seed(run_id)
     np.random.seed(run_id)
 
-    input_query_file = config[dataset]["input_query_file"]
-    task_name = os.path.basename(input_query_file).split(".")[0]
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     gt_dsl = input_query["dsl"]
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
-    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+    if dataset in ["gqa", "vaw"]:
+        conn = duckdb.connect(
+            database=os.path.join(config["db_dir"], "annotations.duckdb"),
+            read_only=True,
+        )
+        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
+        y_true = [1 if vid in positive_videos else 0 for vid in vids]
+    else:
+        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
 
     """
     Set up logging
@@ -110,7 +124,7 @@ if __name__ == "__main__":
     base_dir = os.path.join(
         "udf_generation",
         dataset,
-        task_name,
+        query_class_name,
         "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
     )
@@ -149,7 +163,7 @@ if __name__ == "__main__":
         Loader=yaml.FullLoader,
     )
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
-    if "single_semantic" in task_name:
+    if "single_semantic" in query_class_name:
         registered_functions = [{
             "signature": "object(o0, name)",
             "description": "Whether o0 is an object with the given name.",
@@ -184,6 +198,7 @@ if __name__ == "__main__":
             attribute_domain,
             dataset,
             labeling_budget,
+            n_selection_samples,
             num_interpretations,
             num_parameter_search,
             program_with_pixels,
@@ -248,6 +263,8 @@ if __name__ == "__main__":
                         "beneath",
                         "behind",
                         "in",
+                        "inside",
+                        "inside_of",
                         "covered_by",
                         "eating",
                         "holding",
@@ -257,6 +274,88 @@ if __name__ == "__main__":
                         "wearing",
                         "writing_on",
                     ]
+                elif dataset == "gqa":
+                    if len(udf_vars) == 2:
+                        gt_udf_candidates = [
+                            "on",
+                            "near",
+                            "in_front_of",
+                            "next_to",
+                            "above",
+                            "below",
+                            "on_top_of",
+                            "sitting_on",
+                            "carrying",
+                            "to_the_left_of",
+                            "to_the_right_of",
+                            "wearing",
+                            "of",
+                            "behind",
+                            "in",
+                            "inside",
+                            "inside_of",
+                            "by",
+                            "on_the_side_of",
+                            "holding",
+                            "walking_on",
+                            "beside",
+                        ]
+                    else:
+                        gt_udf_candidates = [
+                            "black",
+                            "blue",
+                            "red",
+                            "large",
+                            "wood",
+                            "tall",
+                            "orange",
+                            "dark",
+                            "pink",
+                            "clear",
+                            "white",
+                            "green",
+                            "brown",
+                            "gray",
+                            "small",
+                            "yellow",
+                            "metal",
+                            "long",
+                            "silver",
+                            "standing",
+                        ]
+                elif dataset == "vaw":
+                    if len(udf_vars) == 2:
+                        gt_udf_candidates = [
+                            "above",
+                            "beneath",
+                            "to_the_left_of",
+                            "to_the_right_of",
+                            "in_front_of",
+                            "behind",
+                        ]
+                    else:
+                        gt_udf_candidates = [
+                            "black",
+                            "blue",
+                            "brown",
+                            "gray",
+                            "small",
+                            "metal",
+                            "long",
+                            "dark",
+                            "rounded",
+                            "orange",
+                            "white",
+                            "green",
+                            "large",
+                            "red",
+                            "wooden",
+                            "yellow",
+                            "tall",
+                            "silver",
+                            "standing",
+                            "round",
+                        ]
                 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
                 gt_udf_embeddings = model.encode(gt_udf_candidates)
                 implemented_udf_embedding = model.encode([udf_name])
@@ -274,8 +373,9 @@ if __name__ == "__main__":
                         ]
                     )
                 )
+                if gt_udf_name in ["inside", "inside_of"]:
+                    gt_udf_name = "in"
                 logger.info(f"Selected gt_udf_name: {gt_udf_name}")
-
             # Step 2.a: generate semantic interpretations and implementations. Save the generated UDFs to disk
             # Step 2.b: Distilled-model UDFs
             # udf_candidate_list = up.implement(udf_signature, udf_description)

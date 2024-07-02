@@ -615,7 +615,7 @@ def duckdb_execute_clevrer_cache_sequence(conn, current_query, memo, inputs_tabl
     return output_vids, new_memo
 
 
-def duckdb_execute_video_materialize(conn, current_query, memo, input_vids, available_udf_names, materialized_udf_names, on_the_fly_udf_names):
+def duckdb_execute_video_materialize(conn, current_query, input_vids, available_udf_names, materialized_udf_names, on_the_fly_udf_names):
     """
     There are three types of UDFs:
     - available_udf_names: available UDFs
@@ -624,41 +624,20 @@ def duckdb_execute_video_materialize(conn, current_query, memo, input_vids, avai
     """
     # Duration((LeftOf(o2, o0), Color_Red(o0), FrontOf(o1, o2)), 15); Duration((FarFrom(o1, o2), LeftOf(o0, o2)), 5); (Behind(o2, o0), Material_Metal(o1))
 
-
-    new_memo = [{} for _ in range(len(memo))]
-
     output_vids = []
-    # Prepare cache result
-    if isinstance(input_vids, int):
-        remaining_vids = set(range(input_vids))
-    else:
-        remaining_vids = set(input_vids)
-
-    signatures = []
-    for i in range(len(current_query)):
-        seq_signature = program_to_dsl(current_query[:(i+1)], True)
-        signatures.append(seq_signature)
-
-    filtered_vids = []
-    cached_output_vids = []
-    for vid in remaining_vids:
-        for i, seq_signature in enumerate(signatures):
-            if seq_signature not in memo[vid]:
-                filtered_vids.append(vid)
-            elif memo[vid][seq_signature] == 0:
-                break
-            elif i == len(signatures) - 1: # The full query predicates it as positive
-                cached_output_vids.append(vid)
 
     temp_tables = []
     # select input videos
-    if isinstance(input_vids, int):
+    if input_vids is None:
+        conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object;")
+        conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects;")
+    elif isinstance(input_vids, int):
         conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid < {input_vids};")
         conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid < {input_vids};")
-    else:
-        parameters = ','.join('?' for _ in filtered_vids)
-        conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid = ANY([{parameters}]);", filtered_vids)
-        conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid = ANY([{parameters}]);", filtered_vids)
+    else: # list of input_vids
+        parameters = ','.join('?' for _ in input_vids)
+        conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid = ANY([{parameters}]);", input_vids)
+        conn.execute(f"CREATE TEMPORARY TABLE rel_filtered AS SELECT * FROM two_objects WHERE vid = ANY([{parameters}]);", input_vids)
     temp_tables.append("obj_attr_filtered")
     temp_tables.append("rel_filtered")
     # Obj_filtered = conn.execute("SELECT * FROM {inputs_table_name} WHERE vid = ANY([{parameters}]);".format(inputs_table_name=inputs_table_name, parameters=parameters), filtered_vids).fetchdf()
@@ -709,12 +688,12 @@ def duckdb_execute_video_materialize(conn, current_query, memo, input_vids, avai
                         and {v1}.o1_oid = {pred_table}.o2_oid
                         and '{predicate}' = ANY({pred_table}.o1_o2_rnames)
                     """)
-            elif predicate in materialized_udf_names:
+            elif f"udf_{predicate}" in materialized_udf_names:
                 if len(variables) == 1:
                     # [where condition] new attribute UDFs (materialized)
                     v0 = variables[0]
                     pred_table = f"{v0}_{predicate}"
-                    table_list.append(f"{predicate} as {pred_table}")
+                    table_list.append(f"udf_{predicate} as {pred_table}")
                     where_clauses.append(f"""
                         {v0}.vid = {pred_table}.vid
                         and {v0}.fid = {pred_table}.fid
@@ -726,7 +705,7 @@ def duckdb_execute_video_materialize(conn, current_query, memo, input_vids, avai
                     v0 = variables[0]
                     v1 = variables[1]
                     pred_table = f"{v0}_{predicate}_{v1}"
-                    table_list.append(f"{predicate} as {pred_table}")
+                    table_list.append(f"udf_{predicate} as {pred_table}")
                     where_clauses.append(f"""
                         {v0}.vid = {pred_table}.vid
                         and {v0}.fid = {pred_table}.fid
@@ -854,16 +833,9 @@ def duckdb_execute_video_materialize(conn, current_query, memo, input_vids, avai
         conn.execute("SELECT DISTINCT vid FROM g{}_contiguous".format(graph_idx))
         res = conn.fetchall()
         output_vids = [row[0] for row in res]
-        # Store new cached results
-        for input_vid in filtered_vids:
-            if input_vid in output_vids:
-                new_memo[input_vid][signatures[graph_idx]] = 1
-            else:
-                new_memo[input_vid][signatures[graph_idx]] = 0
         encountered_variables_prev_graphs = obj_union
         encountered_variables_current_graph = []
-    output_vids.extend(cached_output_vids)
     # Drop tables
     for temp_table in temp_tables:
         conn.execute(f"DROP TABLE {temp_table}")
-    return output_vids, new_memo
+    return output_vids

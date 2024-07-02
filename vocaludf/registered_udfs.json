@@ -24,10 +24,189 @@
         "Material(o0, 'rubber')": "Whether the material of o0 is rubber.",
         "Material(o0, 'metal')": "Whether the material of o0 is metal."
     },
+    "gqa_base": [
+        {
+            "signature": "object(o0, name)",
+            "description": "Whether o0 is an object with the given name, where 'name' can be one of the following: ['window', 'man', 'shirt', 'tree', 'wall', 'person', 'building', 'ground', 'sky', 'sign', 'head', 'pole', 'hand', 'grass', 'hair', 'leg', 'car', 'woman', 'leaves', 'trees', 'table', 'ear', 'pants', 'people', 'eye', 'water', 'door', 'fence', 'nose', 'wheel', 'chair', 'floor', 'arm', 'jacket', 'hat', 'shoe', 'tail', 'clouds', 'leaf', 'face', 'letter', 'plate', 'number', 'windows', 'shorts', 'road', 'flower', 'sidewalk', 'bag', 'helmet'].",
+            "function_implementation": ""
+        },
+        {
+            "signature": "to_the_left_of(o0, o1)",
+            "description": "Whether o0 is to the left of o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "to_the_right_of(o0, o1)",
+            "description": "Whether o0 is to the right of o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "wearing(o0, o1)",
+            "description": "Whether o0 is wearing o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "of(o0, o1)",
+            "description": "Whether o0 is of o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "behind(o0, o1)",
+            "description": "Whether o0 is behind o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "in(o0, o1)",
+            "description": "Whether o0 is in o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "by(o0, o1)",
+            "description": "Whether o0 is by o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "on_the_side_of(o0, o1)",
+            "description": "Whether o0 is on the side of o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "holding(o0, o1)",
+            "description": "Whether o0 is holding o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "walking_on(o0, o1)",
+            "description": "Whether o0 is walking on o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "beside(o0, o1)",
+            "description": "Whether o0 is beside o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "white(o0)",
+            "description": "Whether o0 is white",
+            "function_implementation": ""
+        },
+        {
+            "signature": "green(o0)",
+            "description": "Whether o0 is green",
+            "function_implementation": ""
+        },
+        {
+            "signature": "brown(o0)",
+            "description": "Whether o0 is brown",
+            "function_implementation": ""
+        },
+        {
+            "signature": "gray(o0)",
+            "description": "Whether o0 is gray",
+            "function_implementation": ""
+        },
+        {
+            "signature": "small(o0)",
+            "description": "Whether o0 is small",
+            "function_implementation": ""
+        },
+        {
+            "signature": "yellow(o0)",
+            "description": "Whether o0 is yellow",
+            "function_implementation": ""
+        },
+        {
+            "signature": "metal(o0)",
+            "description": "Whether o0 is metal",
+            "function_implementation": ""
+        },
+        {
+            "signature": "long(o0)",
+            "description": "Whether o0 is long",
+            "function_implementation": ""
+        },
+        {
+            "signature": "silver(o0)",
+            "description": "Whether the color of o0 is silver",
+            "function_implementation": ""
+        },
+        {
+            "signature": "standing(o0)",
+            "description": "Whether o0 is standing",
+            "function_implementation": ""
+        }
+    ],
+    "vaw_base": [
+        {
+            "signature": "above(o0, o1)",
+            "description": "Whether o0 is above o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "beneath(o0, o1)",
+            "description": "Whether o0 is beneath o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "behind(o0, o1)",
+            "description": "Whether o0 is behind o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "black(o0)",
+            "description": "Whether the color of o0 is black",
+            "function_implementation": ""
+        },
+        {
+            "signature": "blue(o0)",
+            "description": "Whether the color of o0 is blue",
+            "function_implementation": ""
+        },
+        {
+            "signature": "brown(o0)",
+            "description": "Whether the color of o0 is brown",
+            "function_implementation": ""
+        },
+        {
+            "signature": "gray(o0)",
+            "description": "Whether the color of o0 is gray",
+            "function_implementation": ""
+        },
+        {
+            "signature": "small(o0)",
+            "description": "Whether the size of o0 is small",
+            "function_implementation": ""
+        },
+        {
+            "signature": "metal(o0)",
+            "description": "Whether the material of o0 is metal",
+            "function_implementation": ""
+        },
+        {
+            "signature": "long(o0)",
+            "description": "Whether the length of o0 is long",
+            "function_implementation": ""
+        },
+        {
+            "signature": "dark(o0)",
+            "description": "Whether the tone of o0 is dark",
+            "function_implementation": ""
+        },
+        {
+            "signature": "rounded(o0)",
+            "description": "Whether the shape of o0 is rounded",
+            "function_implementation": ""
+        },
+        {
+            "signature": "orange(o0)",
+            "description": "Whether the color of o0 is orange",
+            "function_implementation": ""
+        }
+    ],
     "charades_base": [
         {
             "signature": "object(o0, name)",
-            "description": "Whether o0 is an object with the given name.",
+            "description": "Whether o0 is an object with the given name, where 'name' can be one of the following: ['person', 'bag', 'bed', 'blanket', 'book', 'box', 'broom', 'chair', 'closet/cabinet', 'clothes', 'cup/glass/bottle', 'dish', 'door', 'doorknob', 'doorway', 'floor', 'food', 'groceries', 'laptop', 'light', 'medicine', 'mirror', 'paper/notebook', 'phone/camera', 'picture', 'pillow', 'refrigerator', 'sandwich', 'shelf', 'shoe', 'sofa/couch', 'table', 'television', 'towel', 'vacuum', 'window'].",
             "function_implementation": ""
         },
         {
@@ -310,6 +489,175 @@
             "signature": "location_bottom(o0)",
             "description": "Whether o0 is at the bottom of the frame.",
             "function_implementation": "def bottom(o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width):\n  cy1 = (o1_y1 + o1_y2) / 2\n  return cy1 >= 160 and cy1 <= 320"
+        }
+    },
+    "gqa": {
+        "ON": {
+            "signature": "on(o0, o1)",
+            "description": "Whether o0 is on o1.",
+            "function_implementation": ""
+        },
+        "NEAR": {
+            "signature": "near(o0, o1)",
+            "description": "Whether o0 is near o1.",
+            "function_implementation": ""
+        },
+        "INFRONTOF": {
+            "signature": "in_front_of(o0, o1)",
+            "description": "Whether o0 is in front of o1.",
+            "function_implementation": ""
+        },
+        "NEXTTO": {
+            "signature": "next_to(o0, o1)",
+            "description": "Whether o0 is next to o1.",
+            "function_implementation": ""
+        },
+        "ABOVE": {
+            "signature": "above(o0, o1)",
+            "description": "Whether o0 is above o1.",
+            "function_implementation": ""
+        },
+        "BELOW": {
+            "signature": "below(o0, o1)",
+            "description": "Whether o0 is below o1.",
+            "function_implementation": ""
+        },
+        "ONTOPOF": {
+            "signature": "on_top_of(o0, o1)",
+            "description": "Whether o0 is on top of o1.",
+            "function_implementation": ""
+        },
+        "SITTINGON": {
+            "signature": "sitting_on(o0, o1)",
+            "description": "Whether o0 is sitting on o1.",
+            "function_implementation": ""
+        },
+        "CARRYING": {
+            "signature": "carrying(o0, o1)",
+            "description": "Whether o0 is carrying o1.",
+            "function_implementation": ""
+        },
+        "BLACK": {
+            "signature": "black(o0)",
+            "description": "Whether the color of o0 is black.",
+            "function_implementation": ""
+        },
+        "BLUE": {
+            "signature": "blue(o0)",
+            "description": "Whether the color of o0 is blue.",
+            "function_implementation": ""
+        },
+        "RED": {
+            "signature": "red(o0)",
+            "description": "Whether the color of o0 is red.",
+            "function_implementation": ""
+        },
+        "LARGE": {
+            "signature": "large(o0)",
+            "description": "Whether the size of o0 is large.",
+            "function_implementation": ""
+        },
+        "WOOD": {
+            "signature": "wood(o0)",
+            "description": "Whether the material of o0 is wood.",
+            "function_implementation": ""
+        },
+        "TALL": {
+            "signature": "tall(o0)",
+            "description": "Whether o0 is tall.",
+            "function_implementation": ""
+        },
+        "ORANGE": {
+            "signature": "orange(o0)",
+            "description": "Whether the color of o0 is orange.",
+            "function_implementation": ""
+        },
+        "DARK": {
+            "signature": "dark(o0)",
+            "description": "Whether o0 is dark.",
+            "function_implementation": ""
+        },
+        "PINK": {
+            "signature": "pink(o0)",
+            "description": "Whether the color of o0 is pink.",
+            "function_implementation": ""
+        },
+        "CLEAR": {
+            "signature": "clear(o0)",
+            "description": "Whether o0 is clear.",
+            "function_implementation": ""
+        }
+    },
+    "vaw": {
+        "TOTHELEFTOF": {
+            "signature": "to_the_left_of(o0, o1)",
+            "description": "Whether o0 is to the left of o1.",
+            "function_implementation": ""
+        },
+        "TOTHERIGHTOF": {
+            "signature": "to_the_right_of(o0, o1)",
+            "description": "Whether o0 is to the right of o1.",
+            "function_implementation": ""
+        },
+        "INFRONTOF": {
+            "signature": "in_front_of(o0, o1)",
+            "description": "Whether o0 is in front of o1.",
+            "function_implementation": ""
+        },
+        "BEHIND": {
+            "signature": "behind(o0, o1)",
+            "description": "Whether o0 is behind o1.",
+            "function_implementation": ""
+        },
+        "WHITE": {
+            "signature": "white(o0)",
+            "description": "Whether the color o0 is white.",
+            "function_implementation": ""
+        },
+        "GREEN": {
+            "signature": "green(o0)",
+            "description": "Whether the color o0 is green.",
+            "function_implementation": ""
+        },
+        "LARGE": {
+            "signature": "large(o0)",
+            "description": "Whether the size of o0 is large.",
+            "function_implementation": ""
+        },
+        "RED": {
+            "signature": "red(o0)",
+            "description": "Whether the color o0 is red.",
+            "function_implementation": ""
+        },
+        "WOODEN": {
+            "signature": "wooden(o0)",
+            "description": "Whether the material of o0 is wooden.",
+            "function_implementation": ""
+        },
+        "YELLOW": {
+            "signature": "yellow(o0)",
+            "description": "Whether the color o0 is yellow.",
+            "function_implementation": ""
+        },
+        "TALL": {
+            "signature": "tall(o0)",
+            "description": "Whether the height of o0 is tall.",
+            "function_implementation": ""
+        },
+        "SILVER": {
+            "signature": "silver(o0)",
+            "description": "Whether the color of o0 is silver.",
+            "function_implementation": ""
+        },
+        "STANDING": {
+            "signature": "standing(o0)",
+            "description": "Whether the pose of o0 is standing.",
+            "function_implementation": ""
+        },
+        "ROUND": {
+            "signature": "round(o0)",
+            "description": "Whether the shape of o0 is round.",
+            "function_implementation": ""
         }
     },
     "charades": {

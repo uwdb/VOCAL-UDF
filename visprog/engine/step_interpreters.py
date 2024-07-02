@@ -32,6 +32,10 @@ from yolox.tracker.byte_tracker import BYTETracker
 from yolox.utils.visualize import plot_tracking, vis
 from argparse import Namespace
 import itertools
+import logging
+
+logger = logging.getLogger("vocaludf")
+logger.setLevel(logging.DEBUG)
 
 config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
@@ -1522,7 +1526,7 @@ class LocClevrInterpreter(LocInterpreter):
         return pd.DataFrame(objs)
 
     def predict_clevrer_precomputed(self,fid,obj_classes=None):
-        # Obj_clevr (fid INT, oid INT, shape varchar, color varchar, material varchar, x1 float, y1 float, x2 float, y2 float)
+        # Obj_clevr (vid INT, fid INT, oid INT, oname varchar, x1 int, y1 int, x2 int, y2 int)
         df = self.conn.execute("SELECT * FROM Obj_clevr WHERE fid = ?", (fid,)).df()
         if obj_classes:
             raise NotImplementedError("only object='object' is supported for precomputed bounding box")
@@ -2474,6 +2478,293 @@ class BeforeClevrerInterpreter():
         # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
+
+#### VAW modules ####
+class LocDuckdbInterpreter(LocInterpreter):
+    def __init__(self, use_precomputed, dataset):
+        self.dataset = dataset
+        print(f'Registering {self.step_name} step')
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.use_precomputed = use_precomputed
+        if self.use_precomputed:
+            self.conn = duckdb.connect(database=os.path.join(config['db_dir'], 'annotations.duckdb'), read_only=True)
+            metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
+            height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
+            group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
+
+            sql = f"""
+                CREATE TEMPORARY TABLE one_object AS
+                SELECT
+                    o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
+                    o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+                    COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
+                    {height_width_clause}
+                FROM {self.dataset}_objects o1
+                LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+                {metadata_join_clause}
+                GROUP BY {group_by_clause}
+            """
+            logger.debug(f"Create one_object table:\n{sql}")
+            self.conn.execute(sql).df()
+
+            sql = f"""
+                CREATE TEMPORARY TABLE two_objects AS
+                WITH relationships_expanded AS (
+                    SELECT
+                        vid, fid, oid1, oid2,
+                        ARRAY_AGG(DISTINCT rname) AS gt_rnames
+                    FROM {self.dataset}_relationships
+                    GROUP BY vid, fid, oid1, oid2
+                )
+                SELECT
+                    o1.vid AS vid, o1.fid AS fid,
+                    o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
+                    o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2,
+                    COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
+                    {height_width_clause}
+                FROM {self.dataset}_objects o1
+                JOIN {self.dataset}_objects o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
+                LEFT OUTER JOIN relationships_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
+                {metadata_join_clause}
+                WHERE o1.oid <> o2.oid
+            """
+            logger.debug(f"Create two_objects table:\n{sql}")
+            self.conn.execute(sql).df()
+        else:
+            raise NotImplementedError("Only precomputed bounding box is supported for VAW")
+
+class LocVawInterpreter(LocDuckdbInterpreter):
+    def __init__(self, use_precomputed):
+        super().__init__(use_precomputed, "vaw")
+
+    def predict_precomputed(self,vid,obj_classes=None):
+        one_object_df = self.conn.execute("SELECT * FROM one_object WHERE vid = ?", (vid,)).df()
+        two_objects_df = self.conn.execute("SELECT * FROM two_objects WHERE vid = ?", (vid,)).df()
+        if obj_classes:
+            raise NotImplementedError("only object='object' is supported for precomputed bounding box")
+        return one_object_df, two_objects_df
+
+    def execute(self,prog_step,inspect=False):
+        """
+        Return bounding box
+        """
+        img_var,obj_name,output_var = self.parse(prog_step)
+        img = prog_step.state[img_var]
+        if self.use_precomputed:
+            vid = prog_step.state['vid']
+            if obj_name=='object':
+                # Run clevrer object detector to detect all objects
+                one_object_df, two_objects_df = self.predict_precomputed(vid)
+            else:
+                raise NotImplementedError("Precomputed bounding box only supports clevrer attributes")
+        else:
+            raise NotImplementedError("Only precomputed bounding box is supported for VAW")
+        prog_step.state[output_var] = (one_object_df, two_objects_df)
+        if inspect:
+            raise NotImplementedError("inspect not supported for VAW")
+
+        return (one_object_df, two_objects_df)
+
+class AttrVawInterpreter():
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        obj_var = parse_result['args']['object']
+        bind_variable = eval(parse_result['args']['var'])
+        output_var = parse_result['output_var']
+        assert step_name.lower().replace("_", "") == self.step_name.lower().replace("_", "")
+        return obj_var, bind_variable, output_var
+
+    def html(self, obj_df, output_df, output_var):
+        step_name = html_step_name(self.step_name)
+        output_var = html_var_name(output_var)
+        obj_arg = html_arg_name('object')
+        obj_table = html_dataframe(obj_df)
+        output_table = html_dataframe(output_df)
+        return f"""<div>{output_var}={step_name}({obj_arg}={obj_table})={output_table}</div>"""
+
+    def box_image(self,img,boxes):
+        img1 = img.copy()
+        draw = ImageDraw.Draw(img1)
+        for i,box in enumerate(boxes):
+            draw.rectangle(box,outline='blue',width=5)
+
+        return img1
+
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        one_object_df, two_objects_df = prog_step.state[obj_var]
+        output_df = duckdb.execute(f"""
+            SELECT o1_oid as {bind_variable}_oid, vid, fid
+            FROM one_object_df
+            WHERE '{self.step_name.lower()}' = ANY(o1_gt_anames)
+        """).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for VAW")
+
+        return output_df
+
+class BlackVawInterpreter(AttrVawInterpreter):
+    step_name = 'black'
+
+class BlueVawInterpreter(AttrVawInterpreter):
+    step_name = 'blue'
+
+class BrownVawInterpreter(AttrVawInterpreter):
+    step_name = 'brown'
+
+class GrayVawInterpreter(AttrVawInterpreter):
+    step_name = 'gray'
+
+class SmallVawInterpreter(AttrVawInterpreter):
+    step_name = 'small'
+
+class MetalVawInterpreter(AttrVawInterpreter):
+    step_name = 'metal'
+
+class LongVawInterpreter(AttrVawInterpreter):
+    step_name = 'long'
+
+class DarkVawInterpreter(AttrVawInterpreter):
+    step_name = 'dark'
+
+class RoundedVawInterpreter(AttrVawInterpreter):
+    step_name = 'rounded'
+
+class OrangeVawInterpreter(AttrVawInterpreter):
+    step_name = 'orange'
+
+class WhiteVawInterpreter(AttrVawInterpreter):
+    step_name = 'white'
+
+class GreenVawInterpreter(AttrVawInterpreter):
+    step_name = 'green'
+
+class LargeVawInterpreter(AttrVawInterpreter):
+    step_name = 'large'
+
+class RedVawInterpreter(AttrVawInterpreter):
+    step_name = 'red'
+
+class WoodenVawInterpreter(AttrVawInterpreter):
+    step_name = 'wooden'
+
+class YellowVawInterpreter(AttrVawInterpreter):
+    step_name = 'yellow'
+
+class TallVawInterpreter(AttrVawInterpreter):
+    step_name = 'tall'
+
+class SilverVawInterpreter(AttrVawInterpreter):
+    step_name = 'silver'
+
+class StandingVawInterpreter(AttrVawInterpreter):
+    step_name = 'standing'
+
+class RoundVawInterpreter(AttrVawInterpreter):
+    step_name = 'round'
+
+class RelVawInterpreter():
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        output_var = parse_result['output_var']
+        object1_var = parse_result['args']['object1']
+        object2_var = parse_result['args']['object2']
+        bind_variable1 = eval(parse_result['args']['var1'])
+        bind_variable2 = eval(parse_result['args']['var2'])
+        assert step_name.lower().replace("_", "") ==self.step_name.lower().replace("_", "")
+        return object1_var, object2_var, bind_variable1, bind_variable2, output_var
+
+    def execute(self,prog_step,inspect=False):
+        object1_var, object2_var, bind_variable1, bind_variable2, output_var = self.parse(prog_step)
+        obj1_one_object_df, obj1_two_objects_df = prog_step.state[object1_var]
+        obj2_one_object_df, obj2_two_objects_df = prog_step.state[object2_var]
+        output_df = duckdb.execute(f"""
+            SELECT o1.o1_oid AS {bind_variable1}_oid, o2.o1_oid AS {bind_variable2}_oid, o1.vid AS vid, o1.fid AS fid
+            FROM obj1_one_object_df o1, obj2_one_object_df o2, obj1_two_objects_df rel
+            WHERE o1.vid = o2.vid AND o1.fid = o2.fid AND o1.o1_oid <> o2.o1_oid
+                AND o1.vid = rel.vid AND o1.fid = rel.fid
+                AND rel.o1_oid = o1.o1_oid AND rel.o2_oid = o2.o1_oid
+                AND '{self.step_name.lower()}' = ANY(rel.o1_o2_gt_rnames)
+        """).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df.to_string())
+        return output_df
+
+# "above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"
+class AboveVawInterpreter(RelVawInterpreter):
+    step_name = 'above'
+
+class BeneathVawInterpreter(RelVawInterpreter):
+    step_name = 'beneath'
+
+class ToTheLeftOfVawInterpreter(RelVawInterpreter):
+    step_name = 'to_the_left_of'
+
+class ToTheRightOfVawInterpreter(RelVawInterpreter):
+    step_name = 'to_the_right_of'
+
+class InFrontOfVawInterpreter(RelVawInterpreter):
+    step_name = 'in_front_of'
+
+class BehindVawInterpreter(RelVawInterpreter):
+    step_name = 'behind'
+
+class EventVawInterpreter():
+    step_name = 'EVENT'
+
+    def __init__(self):
+        print(f'Registering {self.step_name} step')
+
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        predicates_vars = parse_result['args']['predicates'][1:-1].split(',')
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return predicates_vars, output_var
+
+    def execute(self,prog_step,inspect=False):
+        predicates_vars, output_var = self.parse(prog_step)
+        variable_names = set()
+        # List of dataframes for each predicate
+        predicate_dfs = [prog_step.state[predicates_var] for predicates_var in predicates_vars]
+        # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
+        predicate_df_names = [f"pred{i}_df" for i in range(len(predicate_dfs))]
+        for predicate_df, predicate_df_name in zip(predicate_dfs, predicate_df_names):
+            # print(f"{predicate_df_name} dataframe ", predicate_df.to_string())
+            exec(f"{predicate_df_name} = predicate_df")
+            for col in predicate_df.columns:
+                if col.endswith('_oid'):
+                    variable_names.add(col)
+        # Compute natural join of dataframes. It's guaranteed that there are common columns for each pair of dataframes, as each dataframe has fid column.
+        from_join_clause = " natural join ".join(predicate_df_names)
+        where_clauses = []
+        for var_pair in itertools.combinations(variable_names, 2):
+                where_clauses.append(f"{var_pair[0]} <> {var_pair[1]}")
+        where_clauses = " and ".join(where_clauses)
+        if where_clauses:
+            output_df = duckdb.execute(f"SELECT * FROM {from_join_clause} WHERE {where_clauses}").df()
+        else:
+            output_df = duckdb.execute(f"SELECT * FROM {from_join_clause}").df()
+        # print("from_join_clause", from_join_clause)
+
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported for clevrer")
+        # print(f"{self.step_name} dataframe ", output_df)
+        return output_df
+
 #### Video counterparts ####
 class LocVideoInterpreter(LocInterpreter):
     def __init__(self,thresh=0.1,nms_thresh=0.5):
@@ -3061,6 +3352,44 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
         duckdb.create_function("FrontOf", front_of)
         duckdb.create_function("Behind", behind)
         duckdb.create_function("EqualSize", equal_size)
+        if module_list is None:
+            return all_modules
+        else:
+            registered_modules = {key: all_modules[key] for key in module_list}
+            return registered_modules
+    elif dataset=='vaw':
+        all_modules = dict(
+            LOC=LocVawInterpreter(use_precomputed),
+            BLACK=BlackVawInterpreter(),
+            BLUE=BlueVawInterpreter(),
+            BROWN=BrownVawInterpreter(),
+            GRAY=GrayVawInterpreter(),
+            SMALL=SmallVawInterpreter(),
+            METAL=MetalVawInterpreter(),
+            LONG=LongVawInterpreter(),
+            DARK=DarkVawInterpreter(),
+            ROUNDED=RoundedVawInterpreter(),
+            ORANGE=OrangeVawInterpreter(),
+            WHITE=WhiteVawInterpreter(),
+            GREEN=GreenVawInterpreter(),
+            LARGE=LargeVawInterpreter(),
+            RED=RedVawInterpreter(),
+            WOODEN=WoodenVawInterpreter(),
+            YELLOW=YellowVawInterpreter(),
+            TALL=TallVawInterpreter(),
+            SILVER=SilverVawInterpreter(),
+            STANDING=StandingVawInterpreter(),
+            ROUND=RoundVawInterpreter(),
+            ABOVE=AboveVawInterpreter(),
+            BENEATH=BeneathVawInterpreter(),
+            TOTHELEFTOF=ToTheLeftOfVawInterpreter(),
+            TOTHERIGHTOF=ToTheRightOfVawInterpreter(),
+            INFRONTOF=InFrontOfVawInterpreter(),
+            BEHIND=BehindVawInterpreter(),
+            EVENT=EventClevrInterpreter(),
+            EVAL=EvalInterpreter(),
+            RESULT=ResultInterpreter()
+        )
         if module_list is None:
             return all_modules
         else:

@@ -18,13 +18,19 @@ class MLPProd(nn.Module):
             nn.ReLU(),
             nn.Linear(128, out_features)
             )
+        # self.model = nn.Sequential(
+        #     nn.Linear(in_features, 16),
+        #     nn.ReLU(),
+        #     nn.Linear(16, out_features)
+        # )
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         logits = self.model(x)
         y_pred_probs = self.softmax(logits)
         y_pred = torch.argmax(y_pred_probs, axis=1)
-        return y_pred
+        uncertainty = 1 - torch.max(y_pred_probs, axis=1).values
+        return y_pred, uncertainty
         row, x = batch
         logits = self(x)
         y_pred_probs = self.softmax(logits)
@@ -36,17 +42,6 @@ class MLP(pl.LightningModule):
         super().__init__()
         self.my_logger = logger
         self.weight = weight
-        # self.lr = config['lr']
-        # self.n_layers = config['n_layers']
-        # self.hidden_features = config['hidden_features']
-        # self.model = nn.Sequential()
-        # for i in range(self.n_layers):
-        #     if i == 0:
-        #         self.model.add_module('input', nn.Linear(in_features, self.hidden_features))
-        #     else:
-        #         self.model.add_module(f'hidden_{i}', nn.Linear(self.hidden_features, self.hidden_features))
-        #     self.model.add_module(f'nonlinear_{i}', nn.ReLU())
-        # self.model.add_module('output', nn.Linear(self.hidden_features, out_features))
         self.model = nn.Sequential(
             nn.Linear(in_features, 128),
             nn.ReLU(),
@@ -56,9 +51,11 @@ class MLP(pl.LightningModule):
             nn.ReLU(),
             nn.Linear(128, out_features)
             )
-        # self.hidden = nn.Linear(in_features, 128)
-        # self.nonlinear = nn.ReLU()
-        # self.l1 = nn.Linear(hidden_features, out_features)
+        # self.model = nn.Sequential(
+        #     nn.Linear(in_features, 16),
+        #     nn.ReLU(),
+        #     nn.Linear(16, out_features)
+        # )
         self.softmax = nn.Softmax(dim=1)
 
         self.val_acc = torchmetrics.classification.BinaryAccuracy()
@@ -127,4 +124,9 @@ class MLP(pl.LightningModule):
 
     def configure_optimizers(self):
         # return torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return torch.optim.AdamW(self.parameters(), lr=3e-4)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=3e-4)
+        lr_scheduler = {
+            'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer),
+            'monitor': 'val_loss',
+        }
+        return [optimizer], [lr_scheduler]

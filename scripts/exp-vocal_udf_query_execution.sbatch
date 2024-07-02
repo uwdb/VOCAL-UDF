@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH --job-name=query_exec
-#SBATCH --partition=ckpt
+#SBATCH --partition=ckpt-all
 #SBATCH --account=cse
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8

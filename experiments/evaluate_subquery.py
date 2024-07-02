@@ -10,6 +10,7 @@ from src.utils import program_to_dsl
 import argparse
 import os
 import sys
+import duckdb
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
@@ -20,12 +21,14 @@ if __name__ == '__main__':
     parser.add_argument('--query_id', type=int, help='question id')
     parser.add_argument("--cpus", type=int, default=4, help="Maximum number of tasks to execute at once")
     parser.add_argument("--dataset", type=str, help="dataset name")
+    parser.add_argument("--query_class_name", type=str, help="query class name")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
     query_id = args.query_id
     dataset = args.dataset
+    query_class_name = args.query_class_name
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
 
@@ -35,12 +38,19 @@ if __name__ == '__main__':
     program_with_pixels = False
     num_workers = args.cpus
 
-    input_query_file = config[dataset]["input_query_file"]
-    task_name = os.path.basename(input_query_file).split(".")[0]
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     gt_dsl = input_query['dsl']
     positive_videos = input_query["positive_videos"]
-    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+    if dataset in ["gqa", "vaw"]:
+        conn = duckdb.connect(
+            database=os.path.join(config["db_dir"], "annotations.duckdb"),
+            read_only=True,
+        )
+        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
+        y_true = [1 if vid in positive_videos else 0 for vid in vids]
+    else:
+        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
 
     """
     Set up logging
@@ -50,7 +60,7 @@ if __name__ == '__main__':
         config["log_dir"],
         "query_execution",
         dataset,
-        task_name,
+        query_class_name,
         "num_missing_udfs={}".format(num_missing_udfs),
         "queries_unavailable_udfs_removed",
     )
@@ -80,7 +90,7 @@ if __name__ == '__main__':
     sys.excepthook = exception_hook
 
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
-    if "single_semantic" in task_name:
+    if "single_semantic" in query_class_name:
         registered_functions = [{
             "signature": "object(o0, name)",
             "description": "Whether o0 is an object with the given name.",

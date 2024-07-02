@@ -6,12 +6,12 @@ udf_definition:
   with_object: |
     A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
     - object predicate: objec(o0, oname). For example, object(o0, 'car') checks whether o0 is a car.
-    - relationship predicate: relationshipName(o0, o1). For example, left_of(o0, o1) checks whether o0 is on the left of o1.
-    - attribute predicate: key_value(o0). For example, color_red(o0) checks whether the color of o0 is red.
+    - relationship predicate: relationshipName(o0, o1). For example, jumping_in(o0, o1) checks whether o0 is jumping in o1.
+    - attribute predicate: key_value(o0). For example, color_bronze(o0) checks whether the color of o0 is bronze.
   without_object: |
     A function can take one of the following three formats, depending on if it is a relationship predicate or an attribute predicate:
-    - relationship predicate: relationshipName(o0, o1). For example, left_of(o0, o1) checks whether o0 is on the left of o1.
-    - attribute predicate: key_value(o0). For example, color_red(o0) checks whether the color of o0 is red.
+    - relationship predicate: relationshipName(o0, o1). For example, jumping_in(o0, o1) checks whether o0 is jumping in o1.
+    - attribute predicate: key_value(o0). For example, color_bronze(o0) checks whether the color of o0 is bronze.
 registered_udfs: |
   You have access to the following functions:
   {{functions}}
@@ -119,7 +119,7 @@ generate_udfs:
       - Available object names: {{object_domain}}
       - Available attribute names: {{attribute_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
-      - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
+      - You can use any python packages you want (except for sklearn). IT IS LIFE THREATENING THAT you do not use sklearn library. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
     relationship: |
       - The input to the function contains the following parameters:
           - img: np.ndarray of shape (H, W, C). The image is in the RGB color space, where H is the height, W is the width, and C is the number of channels.
@@ -144,7 +144,7 @@ generate_udfs:
       - Available attribute names: {{attribute_domain}}
       - Available relationship names: {{relationship_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
-      - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
+      - You can use any python packages you want (except for sklearn). IT IS LIFE THREATENING THAT you do not use sklearn library. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
   inputs_with_optional_kwargs:
     attribute: |
       - The input to the function contains the following parameters:
@@ -205,7 +205,7 @@ generate_udfs:
       - Available attribute names: {{attribute_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
-      - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
+      - You can use any python packages you want (except for sklearn). IT IS LIFE THREATENING THAT you do not use sklearn library. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
     relationship: |
       - The input to the function contains the following parameters:
           - img: np.ndarray of shape (H, W, C). The image is in the RGB color space, where H is the height, W is the width, and C is the number of channels.
@@ -232,7 +232,7 @@ generate_udfs:
       - Available relationship names: {{relationship_domain}}
       - The origin (x, y) = (0, 0) is located at the top left corner. The x axis is oriented from left to right; the y axis is oriented from top to bottom.
       - Include `**kwargs` in the function's arguments only if necessary. Only arguments of numeric data types are allowed in `**kwargs`. String, boolean, or object data types are not allowed in `**kwargs`.
-      - You can use any python packages you want. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
+      - You can use any python packages you want (except for sklearn). IT IS LIFE THREATENING THAT you do not use sklearn library. You do not need to install but only import them before using. You can not use supervised-learning method as there is no training data. Though, you can use frozen models if you want.
   pretrained_model_list: |
       - You also have access to the following functions to use in your implementation (use them only when needed):
           - image_captioning(image: np.ndarray) -> str: It takes an image in NumPy array with shape (H, W, C) and generates a text caption of the image. The image is in the RGB color space, and H is the height, W is the width, and C is the number of channels.
@@ -283,10 +283,23 @@ generate_udfs:
       }
     }
     ```
-filter_training_data: |
+filter_object: |
   Given a list of object classes: {{object_classes}}, and a function "{{udf_signature}}" that determines "{{udf_description}}", assume that objects are chosen from the object classes listed above. Your task is to identify and list all object classes that can possibly be involved in this concept. It's LIFE THREATENING not to remove object classes that can possibly be involved in this concept. Please format your answer in the JSON format shown below:
   ```json
   {"answer": [
+    "object_class1",
+    "object_class2",
+    // Add more object classes as needed.
+  ]}
+  ```
+filter_subject_target: |
+  Given a list of object classes: {{object_classes}}, and a function "{{udf_signature}}" that determines "{{udf_description}}", assume that objects are chosen from the object classes listed above. Your task is to identify and list all object classes that can possibly be involved in this concept. It's LIFE THREATENING not to remove object classes that can possibly be involved in this concept. Please format your answer in the JSON format shown below:
+  ```json
+  {"subjects": [
+    "object_class1",
+    "object_class2",
+    // Add more object classes as needed.
+  ], "targets": [
     "object_class1",
     "object_class2",
     // Add more object classes as needed.

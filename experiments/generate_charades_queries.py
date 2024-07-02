@@ -64,7 +64,7 @@ def generate_single_semantic_queries(ratio_lower_bound, ratio_upper_bound, npred
         obj_classes_shuffled = obj_classes.copy()
         random.shuffle(obj_classes_shuffled)
         unsupported_predicate["variables"] = ["o_0", "o_1"]
-        new_modules = [unsupported_predicate["predicate"]]
+        new_modules = [unsupported_predicate["predicate"].upper().replace("_", "")]
         for obj_class in obj_classes_shuffled:
             predicate_list = [
                 unsupported_predicate,
@@ -106,7 +106,7 @@ def generate_one_query(conn, ratio_lower_bound, ratio_upper_bound, npred, nobj_p
     unsupported_predicates = random.sample(unsupported_list, nunsupported_udfs)
     for pred in unsupported_predicates:
         pred["variables"] = ["o_0", random.choice(["o_{}".format(i) for i in range(1, nvars)])]
-    new_modules = [pred["predicate"] for pred in unsupported_predicates]
+    new_modules = [pred["predicate"].upper().replace("_", "") for pred in unsupported_predicates]
 
     candidate_predicate_list = []
     for pred in supported_list:
@@ -346,7 +346,7 @@ def init_table(conn, dataset):
     conn.execute(sql, attribute_domain + relationship_domain).df()
 
 def generate_charades_queries_with_unsupported_udfs():
-    # python generate_charades_queries.py --n_queries 10 --npred 5 --nobj_pred 1 --nvars 3 --depth 3 --nunsupported_udfs 3
+    # python generate_charades_queries.py --n_queries 10 --npred 3 --nobj_pred 1 --nvars 2 --depth 2 --nunsupported_udfs 2 --ratio_upper_bound 0.5
     ap = argparse.ArgumentParser()
     ap.add_argument("--n_queries", type=int, default=10, help="number of queries to generate")
     ap.add_argument("--ratio_lower_bound", type=float, default=0.05, help="minimum ratio of positive examples to all examples")

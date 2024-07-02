@@ -18,4 +18,5 @@ echo "method: $method"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/spatial_relationship_predictor.py
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/spatial_relationship_predictor.py \
+        --method $method
