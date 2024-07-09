@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# declare -a QueryClassArray=("unavailable=2-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000", "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000")
+# declare -a QueryClassArray=("unavailable=2-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000")
 declare -a QueryClassArray=("unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000")
 
 for query_class_name in "${QueryClassArray[@]}"; do

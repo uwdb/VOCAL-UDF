@@ -90,7 +90,7 @@ if __name__ == '__main__':
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     positive_videos = input_query["positive_videos"]
-    if dataset in ["gqa", "vaw"]:
+    if dataset in ["gqa", "vaw"]: # Deprecated
         conn = duckdb.connect(
             database=os.path.join(config["db_dir"], "annotations.duckdb"),
             read_only=True,
@@ -98,7 +98,7 @@ if __name__ == '__main__':
         vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
         y_true = [1 if vid in positive_videos else 0 for vid in vids]
     else:
-        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
 
 
     """

@@ -23,7 +23,7 @@ import copy
 import cv2
 from tqdm import tqdm
 import sys
-from transformers import CLIPProcessor, CLIPModel, LlavaNextForConditionalGeneration, LlavaNextProcessor
+from transformers import CLIPProcessor, CLIPModel, LlavaNextForConditionalGeneration, LlavaNextProcessor, CLIPTokenizer
 import torch
 from torch.utils.data import Dataset
 import base64
@@ -191,6 +191,9 @@ class TestDistillModel(UDFProposer):
         self.attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
         self.relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
 
+        clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
+        self.tokenizer = CLIPTokenizer.from_pretrained(clip_model_name)
+
         self.llm_positive_df = None
         self.llm_negative_df = None
 
@@ -229,6 +232,8 @@ class TestDistillModel(UDFProposer):
         uncertainties = []
         with torch.no_grad():
             for row, feature in tqdm(pred_loader, file=sys.stdout):
+                text_feature = self.extract_text_features(row)
+                feature = torch.cat([feature, text_feature], dim=-1)
                 feature = feature.to(self.device)
                 pred, uncertainty = best_mlp_model(feature)
                 rows.extend(row.tolist())
@@ -267,6 +272,95 @@ class TestDistillModel(UDFProposer):
             tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
             logger.info(f"[human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
 
+    def _distill_model_all(self, udf_signature, udf_description, gt_udf_name):
+        """
+        gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
+        """
+        self.attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
+        self.relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
+
+        clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
+        self.tokenizer = CLIPTokenizer.from_pretrained(clip_model_name)
+
+        self.llm_positive_df = None
+        self.llm_negative_df = None
+
+        # Initialization for model distillation
+        udf_name, udf_vars = parse_signature(udf_signature)
+        self.udf_class = udf_name.lower()
+        self.n_obj = len(udf_vars)
+        assert self.n_obj in [1, 2], "n_obj must be 1 or 2"
+        self.udf_description = udf_description
+
+        self.gt_udf_name = gt_udf_name
+
+        self.df_train, self.df_test = self.construct_balanced_data(self.n_obj, self.n_train_distill, self.n_test_distill)
+        # self.df_train_unfiltered = self.construct_train_and_test_data(self.n_obj, int(min(self.n_train_distill, 100)*0.2), df_with_img_column=True)
+        # self.df_train = pd.concat([self.df_train, self.df_train_unfiltered], ignore_index=True)
+        # shuffle the training data
+        # self.df_train = self.df_train.sample(frac=1).reset_index(drop=True)
+        self.llm_annotate_data()
+        self.mlp_prepare_data()
+        best_ckpt = self.train()
+        if gt_udf_name and hasattr(self, 'df_test'):
+            self.test()
+
+        checkpoint = torch.load(best_ckpt)
+        hyper_parameters = checkpoint["hyper_parameters"]
+        best_mlp_model = mlp.MLPProd(**hyper_parameters)
+        best_mlp_model.load_state_dict(checkpoint["state_dict"])
+        best_mlp_model.eval()
+        best_mlp_model.to(self.device)
+
+        pred_dataset = PredImageDataset(self.conn, self.n_obj, self.attribute_features_dir, self.relationship_features_dir)
+        pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
+
+        rows = []
+        predictions = []
+        uncertainties = []
+        with torch.no_grad():
+            for row, feature in tqdm(pred_loader, file=sys.stdout):
+                text_feature = self.extract_text_features(row)
+                feature = torch.cat([feature, text_feature], dim=-1)
+                feature = feature.to(self.device)
+                pred, uncertainty = best_mlp_model(feature)
+                rows.extend(row.tolist())
+                predictions.extend(pred.cpu().tolist())
+                uncertainties.extend(uncertainty.cpu().tolist())
+
+        if self.n_obj == 1:
+            check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
+            check_df['aname'] = self.gt_udf_name
+            result = check_df.merge(self.attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
+            result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
+            result = result.rename(columns={"oid": "o1_oid"})
+        else:
+            check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
+            check_df['rname'] = self.gt_udf_name
+            result = check_df.merge(self.relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
+            result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
+            result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
+        result['label'] = (result['_merge'] == 'both').astype(int)
+        result = result.reset_index(drop=True)
+        labels = result['label'].tolist()
+
+        # Compute F1 score
+        f1 = f1_score(labels, predictions)
+        logger.info(f"F1 score: {f1}")
+        tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
+        logger.info(f"TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
+        if self.dataset == "charades":
+            result['pred'] = predictions
+            result['uncertainty'] = uncertainties
+            result_human_object = result[result["o1_oid"] == 0]
+            labels_human_object = result_human_object["label"].tolist()
+            predictions_human_object = result_human_object["pred"].tolist()
+            f1_human_object = f1_score(labels_human_object, predictions_human_object)
+            logger.info(f"[human-object only] F1 score: {f1_human_object}")
+            tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
+            logger.info(f"[human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
+
+
     def mlp_prepare_data(self):
         splits = ['train', 'test'] if self.gt_udf_name is not None else ['train']
         for split in splits:
@@ -285,7 +379,8 @@ class TestDistillModel(UDFProposer):
                         continue
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     image_features = self.extract_features(frame, row, image_size)
-                    self.labeled_data[split][i]["image_features"] = image_features
+                    text_features = self.extract_text_features(row)
+                    self.labeled_data[split][i]["image_features"] = torch.cat([image_features, text_features], dim=-1)
                 except Exception as e:
                     logger.exception("Error: {}".format(e))
                     idx_to_remove.append(i)
@@ -299,9 +394,31 @@ class TestDistillModel(UDFProposer):
             test_dataset = CustomImageDataset(self.labeled_data['test'], train=False)
             self.test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=512, shuffle=False)
 
+    def extract_text_features(self, row):
+        if self.n_obj == 1:
+            text = row["o1_oname"]
+            inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs = self.clip_model.get_text_features(**inputs)
+            outputs = outputs.squeeze(0)
+        else:
+            text1 = row["o1_oname"]
+            text2 = row["o2_oname"]
+            inputs1 = self.tokenizer(text1, return_tensors="pt").to(self.device)
+            inputs2 = self.tokenizer(text2, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs1 = self.clip_model.get_text_features(**inputs1)
+                outputs2 = self.clip_model.get_text_features(**inputs2)
+            outputs1 = outputs1.squeeze(0)
+            outputs2 = outputs2.squeeze(0)
+            outputs = torch.cat([outputs1, outputs2], dim=-1)
+
+        return outputs
+
     def train(self, active_learning_round=-1):
         # logger.debug("mlp_config: {}".format(mlp_config))
-        mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 3
+        # mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 3
+        mlp_dim_in = self.dim_in * 2 if self.n_obj == 1 else self.dim_in * 5
         logger.debug("mlp_dim_in: {}".format(mlp_dim_in)) # should be 512 for clip-vit-base-patch32
         self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, f"{self.llm_method}_{self.mlp_method}", self.udf_class)
         if active_learning_round >= 0:
@@ -490,7 +607,7 @@ class TestDistillModel(UDFProposer):
 
 if __name__ == "__main__":
 
-    # python test_distill_model.py --dataset "vaw" --udf_idx 0 --labeling_strategy "user" --n_train_distill 1000 --balanced
+    # python test_distill_model.py --dataset "charades" --udf_idx 0 --labeling_strategy "user" --n_train_distill 1000 --balanced
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, help="dataset name")
     parser.add_argument("--udf_idx", type=int, help="udf_idx")
@@ -527,8 +644,13 @@ if __name__ == "__main__":
             ["eating(o0, o1)", "Whether o0 is eating o1.", "eating"],
             ["wiping(o0, o1)", "Whether object o0 is wiping o1", "wiping"],
             ["have_it_on_the_back(o0, o1)", "Whether o0 has o1 on the back.", "have_it_on_the_back"],
+            ["touching(o0, o1)", "Whether o0 is touching o1.", "touching"],
             ["leaning_on(o0, o1)", "Whether o0 is leaning on o1.", "leaning_on"],
             ["wearing(o0, o1)", "Whether o0 is wearing o1.", "wearing"],
+            ["drinking_from(o0, o1)", "Whether o0 is drinking from o1.", "drinking_from"],
+            ["lying_on(o0, o1)", "Whether o0 is lying on o1.", "lying_on"],
+            ["writing_on(o0, o1)", "Whether o0 is writing on o1.", "writing_on"],
+            ["twisting(o0, o1)", "Whether o0 is twisting o1.", "twisting"],
         ]
     elif dataset == "vaw":
         test_inputs = [
@@ -610,7 +732,11 @@ if __name__ == "__main__":
             allow_kwargs_in_udf=False,
             llm_method=labeling_strategy,
         )
-    if balanced:
-        up._distill_model_balanced(*test_input)
+    if n_train_distill is None:
+        assert labeling_strategy == "user", "n_train_distill must be provided for labeling_strategy != 'user'"
+        up._distill_model_all(*test_input)
     else:
-        up._distill_model(*test_input)
+        if balanced:
+            up._distill_model_balanced(*test_input)
+        else:
+            up._distill_model(*test_input)

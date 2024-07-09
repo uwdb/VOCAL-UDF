@@ -29,7 +29,7 @@ class QueryParser:
                 registered_function["signature"].split("(")[0].lower()
             )
         self.object_domain = object_domain
-        if dataset in ["clevrer", "charades"]:  # video dataset
+        if dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
             dsl_definition_prompt = prompt_config["dsl_definition"]
         elif dataset in ["clevr", "gqa", "vaw"]:  # image dataset
             dsl_definition_prompt = prompt_config["dsl_definition_image"]
@@ -40,7 +40,7 @@ class QueryParser:
                 " ".join(
                     [
                         dsl_definition_prompt,
-                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer", "vaw"] else prompt_config["udf_definition"]["with_object"],
+                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer", "vaw", "cityflow"] else prompt_config["udf_definition"]["with_object"],
                         prompt_config["registered_udfs"],
                         prompt_config["parse_query"],
                     ]
@@ -63,7 +63,7 @@ class QueryParser:
                 " ".join(
                     [
                         dsl_definition_prompt,
-                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer", "vaw"] else prompt_config["udf_definition"]["with_object"],
+                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer", "vaw", "cityflow"] else prompt_config["udf_definition"]["with_object"],
                         prompt_config["registered_udfs"],
                         prompt_config["force_parse_query"],
                     ]

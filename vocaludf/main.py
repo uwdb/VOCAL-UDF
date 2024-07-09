@@ -24,7 +24,9 @@ def using(point=""):
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
 if __name__ == "__main__":
-    # charades: python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "charades" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "llava"
+    # clevrer: python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
+    # cityflow: python main.py --num_missing_udfs 1 --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
+    # charades: python main.py --num_missing_udfs 1 --query_id 3 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     # gqa: python main.py --num_missing_udfs 1 --query_id 0 --run_id 0 --dataset "gqa" --query_class_name "unavailable=2-npred=1-nattr_pred=1-nobj_pred=0-nvars=2-min_npos=100-max_npos=5000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     # vaw: python main.py --num_missing_udfs 1 --query_id 6 --run_id 0 --dataset "vaw" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     config = yaml.safe_load(
@@ -172,7 +174,7 @@ if __name__ == "__main__":
     else:
         registered_functions = registered_udfs_json[f"{dataset}_base"]
         new_modules = input_query["new_modules"]
-        assert num_missing_udfs >= 0 and num_missing_udfs <= 3, "num_missing_udfs must be between 0 and 3"
+        assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"
         for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
             registered_functions.append(registered_udfs_json[dataset][new_module])
     logger.info("Registered functions: {}".format(registered_functions))
@@ -227,6 +229,10 @@ if __name__ == "__main__":
                     gt_udf_name = input(
                         'Please enter gt_udf_name (options: "looking_at", "above", "in_front_of", "on_the_side_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "not_contacting", "standing_on", "twisting", "wiping", "not_looking_at", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"): '
                     )
+                elif dataset == "cityflow":
+                    gt_udf_name = input(
+                        'Please enter gt_udf_name (options: "suv", "white", "grey", "van", "sedan",  "black",  "red",  "blue", "pickup_truck", "above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"): '
+                    )
             else:
                 # HACK: Use a LM to automatically resolve the ground truth UDF
                 # NOTE: Correctness is not guaranteed
@@ -244,6 +250,28 @@ if __name__ == "__main__":
                             "color_yellow",
                             "shape_cylinder",
                             "material_metal",
+                        ]
+                elif dataset == "cityflow":
+                    if len(udf_vars) == 1:
+                        gt_udf_candidates = [
+                            "suv",
+                            "white",
+                            "grey",
+                            "van",
+                            "sedan",
+                            "black",
+                            "red",
+                            "blue",
+                            "pickup_truck",
+                        ]
+                    else:
+                        gt_udf_candidates = [
+                            "above",
+                            "beneath",
+                            "to_the_left_of",
+                            "to_the_right_of",
+                            "in_front_of",
+                            "behind",
                         ]
                 elif dataset == "charades":
                     gt_udf_candidates = [
@@ -445,7 +473,7 @@ if __name__ == "__main__":
         # Save the generation output to disk
         with open(os.path.join(output_dir, "qid={}-run={}.json".format(query_id, run_id)), "w") as f:
             json.dump(generation_output, f)
-    else:
+    else: # Deprecated
         try:
             parsed_program = qp.get_parsed_program()
             parsed_dsl = qp.get_parsed_query()

@@ -31,7 +31,7 @@ import copy
 import cv2
 from tqdm import tqdm
 import sys
-from transformers import CLIPProcessor, CLIPModel, LlavaNextForConditionalGeneration, LlavaNextProcessor, AlignModel, AlignProcessor
+from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, LlavaNextForConditionalGeneration, LlavaNextProcessor, AlignModel, AlignProcessor
 import torch
 from torch.utils.data import Dataset
 import base64
@@ -157,8 +157,9 @@ class UDFProposer:
 
         # Create a train and test split
         # NOTE: probably put these values in the config file
-        self.n_train = 10000
-        self.n_test = 10000
+        # cityflow has higher resolution images, so we use fewer samples
+        self.n_train = 5000 if self.dataset == "cityflow" else 10000
+        self.n_test = 5000 if self.dataset == "cityflow" else 10000
 
         # Initialization for model distillation
         self.n_train_distill = n_train_distill
@@ -174,6 +175,9 @@ class UDFProposer:
         clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
         self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
         self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
+        if self.dataset == "charades":
+            self.tokenizer = CLIPTokenizer.from_pretrained(clip_model_name)
+
         # clip_model_name = "openai/clip-vit-base-patch32"
         # self.clip_model.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
         # self.clip_processor.save_pretrained(os.path.join(self.config['model_dir'], 'clip-vit-base-patch32'))
@@ -204,6 +208,12 @@ class UDFProposer:
                 FROM charades_metadata
             """).df()
             self.vid_to_vname = {int(vid): vname for vid, vname in zip(df_metadata['vid'], df_metadata['vname'])}
+        elif self.dataset == "cityflow":
+            df_metadata = self.conn.execute(f"""
+                SELECT vname, vid, fid
+                FROM cityflow_metadata
+            """).df()
+            self.vid_to_vname = {(vid, fid): vname for vid, fid, vname in zip(df_metadata['vid'], df_metadata['fid'], df_metadata['vname'])}
 
     def init_table(self):
         metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
@@ -211,7 +221,16 @@ class UDFProposer:
         group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
         obj_parameters = ','.join('?' for _ in self.object_domain)
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
-        where_clause = "" if self.dataset == 'vaw' else f"WHERE o1.oname = ANY([{obj_parameters}])"
+        if self.dataset == 'vaw':
+            where_clause = ""
+        elif self.dataset == 'clevrer':
+            where_clause = f"WHERE o1.oname = ANY([{obj_parameters}]) AND o1.vid < 5000"
+        elif self.dataset == 'charades':
+            where_clause = f"WHERE o1.oname = ANY([{obj_parameters}]) AND o1.vid < 4800"
+        elif self.dataset == 'cityflow':
+            where_clause = f"WHERE o1.oname = ANY([{obj_parameters}]) AND o1.vid < 824"
+        else:
+            where_clause = f"WHERE o1.oname = ANY([{obj_parameters}])"
         select_neg_attr_clause = f"COALESCE(ARRAY_AGG(DISTINCT a2.aname) FILTER (WHERE a2.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames_negative," if self.dataset == 'vaw' else ""
         join_neg_attr_clause = f"LEFT OUTER JOIN {self.dataset}_attributes_negative a2 ON o1.vid = a2.vid AND o1.fid = a2.fid AND o1.oid = a2.oid" if self.dataset == 'vaw' else ""
         sql = f"""
@@ -220,10 +239,11 @@ class UDFProposer:
                 o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
                 COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
                 {select_neg_attr_clause}
-                COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
+                COALESCE(ARRAY_AGG(DISTINCT ap.aname) FILTER (WHERE ap.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
                 {height_width_clause}
             FROM {self.dataset}_objects o1
             LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+            LEFT OUTER JOIN {self.dataset}_attribute_predictions ap ON o1.vid = ap.vid AND o1.fid = ap.fid AND o1.oid = ap.oid
             {join_neg_attr_clause}
             {metadata_join_clause}
             {where_clause}
@@ -235,22 +255,36 @@ class UDFProposer:
 
         rel_parameters = ','.join('?' for _ in self.relationship_domain)
         where_clause = "" if self.dataset == 'vaw' else f"WHERE o.oname = ANY([{obj_parameters}])"
+        if self.dataset == 'clevrer':
+            filter_train_vid_clause = "AND o1.vid < 5000"
+        elif self.dataset == 'charades':
+            filter_train_vid_clause = "AND o1.vid < 4800"
+        elif self.dataset == 'cityflow':
+            filter_train_vid_clause = "AND o1.vid < 824"
+        else:
+            filter_train_vid_clause = ""
         sql = f"""
             WITH obj_with_attrs AS (
                 SELECT
                     o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
                     COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
                 FROM {self.dataset}_objects o
-                LEFT OUTER JOIN {self.dataset}_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
+                LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
                 {where_clause}
                 GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
             )
             , relationships_expanded AS (
                 SELECT
                     vid, fid, oid1, oid2,
-                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames,
                     ARRAY_AGG(DISTINCT rname) AS gt_rnames
                 FROM {self.dataset}_relationships
+                GROUP BY vid, fid, oid1, oid2
+            )
+            , relationship_predictions_expanded AS (
+                SELECT
+                    vid, fid, oid1, oid2,
+                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
+                FROM {self.dataset}_relationship_predictions
                 GROUP BY vid, fid, oid1, oid2
             )
             SELECT
@@ -259,14 +293,16 @@ class UDFProposer:
                 o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2, o2.attributes AS o2_anames,
                 COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
                 COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
-                COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
+                COALESCE(r3.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
                 {height_width_clause}
             FROM obj_with_attrs o1
             JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
-            LEFT OUTER JOIN relationships_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
-            LEFT OUTER JOIN relationships_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
+            LEFT OUTER JOIN relationship_predictions_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
+            LEFT OUTER JOIN relationship_predictions_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
+            LEFT OUTER JOIN relationships_expanded r3 ON o1.vid = r3.vid AND o1.fid = r3.fid AND o1.oid = r3.oid1 AND o2.oid = r3.oid2
             {metadata_join_clause}
             WHERE o1.oid <> o2.oid
+            {filter_train_vid_clause}
             ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         """
         logger.debug(f"Create two_objects table:\n{sql}")
@@ -281,15 +317,17 @@ class UDFProposer:
     def propose(self, user_query):
         # Step 1: propose new UDFs
         logger.info("Proposing new UDFs")
-        if self.dataset in ["clevrer", "charades"]:  # video dataset
+        if self.dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
             dsl_definition_prompt = self.prompt_config["dsl_definition"]
         elif self.dataset in ["clevr", "gqa", "vaw"]:  # image dataset
             dsl_definition_prompt = self.prompt_config["dsl_definition_image"]
+        else:
+            raise ValueError(f"Dataset {self.dataset} not supported")
         system_message = replace_slot(
             " ".join(
                 [
                     dsl_definition_prompt,
-                    self.prompt_config["udf_definition"]["without_object"] if self.dataset in ["clevr", "clevrer", "vaw"] else self.prompt_config["udf_definition"]["with_object"],
+                    self.prompt_config["udf_definition"]["without_object"] if self.dataset in ["clevr", "clevrer", "vaw", "cityflow"] else self.prompt_config["udf_definition"]["with_object"],
                     self.prompt_config["registered_udfs"],
                     self.prompt_config["propose_udfs"],
                 ]
@@ -784,69 +822,73 @@ class UDFProposer:
             if gt_udf_name and hasattr(self, 'df_test'):
                 self.test()
 
-            checkpoint = torch.load(best_ckpt)
-            hyper_parameters = checkpoint["hyper_parameters"]
-            best_mlp_model = mlp.MLPProd(**hyper_parameters)
-            best_mlp_model.load_state_dict(checkpoint["state_dict"])
-            best_mlp_model.eval()
-            best_mlp_model.to(self.device)
-
-            pred_dataset = PredImageDataset(self.conn, self.n_obj, self.attribute_features_dir, self.relationship_features_dir)
-            pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
-
-            rows = []
-            predictions = []
-            uncertainties = []
-            with torch.no_grad():
-                for row, feature in tqdm(pred_loader, file=sys.stdout):
-                    feature = feature.to(self.device)
-                    pred, uncertainty = best_mlp_model(feature)
-                    rows.extend(row.tolist())
-                    predictions.extend(pred.cpu().tolist())
-                    uncertainties.extend(uncertainty.cpu().tolist())
-
-            if self.n_obj == 1:
-                check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
-                check_df['aname'] = self.gt_udf_name
-                result = check_df.merge(attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
-                result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
-                result = result.rename(columns={"oid": "o1_oid"})
-            else:
-                check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
-                check_df['rname'] = self.gt_udf_name
-                result = check_df.merge(relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
-                result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
-                result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
-            result['label'] = (result['_merge'] == 'both').astype(int)
-            result = result.reset_index(drop=True)
-            labels = result['label'].tolist()
-
-            # Compute F1 score
-            f1 = f1_score(labels, predictions)
-            logger.info(f"F1 score: {f1}")
-            tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
-            logger.info(f"TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
-            if self.dataset == "charades":
-                result['pred'] = predictions
-                result['uncertainty'] = uncertainties
-                result_human_object = result[result["o1_oid"] == 0]
-                labels_human_object = result_human_object["label"].tolist()
-                predictions_human_object = result_human_object["pred"].tolist()
-                f1_human_object = f1_score(labels_human_object, predictions_human_object)
-                logger.info(f"[human-object only] F1 score: {f1_human_object}")
-                tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
-                logger.info(f"[human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
-
             if active_learning_round < num_active_learning_rounds:
+                checkpoint = torch.load(best_ckpt)
+                hyper_parameters = checkpoint["hyper_parameters"]
+                best_mlp_model = mlp.MLPProd(**hyper_parameters)
+                best_mlp_model.load_state_dict(checkpoint["state_dict"])
+                best_mlp_model.eval()
+                best_mlp_model.to(self.device)
+
+                # Predict on the training split
+                pred_dataset = PredImageDataset(self.conn, self.n_obj, self.attribute_features_dir, self.relationship_features_dir)
+                pred_loader = torch.utils.data.DataLoader(pred_dataset, batch_size=4096, num_workers=self.num_workers, shuffle=False)
+
+                rows = []
+                predictions = []
+                uncertainties = []
+                with torch.no_grad():
+                    for row, feature in tqdm(pred_loader, file=sys.stdout):
+                        feature = feature.to(self.device)
+                        pred, uncertainty = best_mlp_model(feature)
+                        rows.extend(row.tolist())
+                        predictions.extend(pred.cpu().tolist())
+                        uncertainties.extend(uncertainty.cpu().tolist())
+
+                if self.n_obj == 1:
+                    check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
+                    check_df['aname'] = self.gt_udf_name
+                    result = check_df.merge(attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
+                    result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
+                    result = result.rename(columns={"oid": "o1_oid"})
+                else:
+                    check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
+                    check_df['rname'] = self.gt_udf_name
+                    result = check_df.merge(relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
+                    result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
+                    result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
+                result['label'] = (result['_merge'] == 'both').astype(int)
+                result = result.reset_index(drop=True)
+                labels = result['label'].tolist()
+
+                # Compute F1 score
+                f1 = f1_score(labels, predictions)
+                logger.info(f"F1 score: {f1}")
+                tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
+                logger.info(f"TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
+                if self.dataset == "charades":
+                    result['pred'] = predictions
+                    result['uncertainty'] = uncertainties
+                    result_human_object = result[result["o1_oid"] == 0]
+                    labels_human_object = result_human_object["label"].tolist()
+                    predictions_human_object = result_human_object["pred"].tolist()
+                    f1_human_object = f1_score(labels_human_object, predictions_human_object)
+                    logger.info(f"[human-object only] F1 score: {f1_human_object}")
+                    tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
+                    logger.info(f"[human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
+
                 # Active learning: select a batch of rows with the highest uncertainty that are not labeled
                 selected_indices = np.argsort(-np.array(uncertainties))
                 if self.dataset == "charades":
                     # "charades": only select the rows with the highest uncertainty for the human-object relationship
-                    mask = (result['o1_oid'] == 0)
+                    mask = (result['o1_oid'] == 0) & (result['vid'] < self.config[self.dataset]["dataset_size"] // 2)
                     filtered_indices = set(result.index[mask].tolist())
                     selected_indices = [i for i in selected_indices if i in filtered_indices and i not in labeled_indices]
                 else:
-                    selected_indices = [i for i in selected_indices if i not in labeled_indices]
+                    # The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+                    mask = (result['vid'] < self.config[self.dataset]["dataset_size"] // 2)
+                    filtered_indices = set(result.index[mask].tolist())
+                    selected_indices = [i for i in selected_indices if i in filtered_indices and i not in labeled_indices]
                 selected_indices = selected_indices[:min(100, self.n_train_distill - 100 * active_learning_round)]
                 # Random sampling:
                 # selected_indices = np.random.choice(len(uncertainties), min(100, self.n_train_distill - 100 * active_learning_round), replace=False)
@@ -1092,7 +1134,12 @@ class UDFProposer:
                         continue
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     image_features = self.extract_features(frame, row, image_size)
-                    self.labeled_data[split][i]["image_features"] = image_features
+                    if self.dataset == "charades" and self.n_obj == 2:
+                        # For charades, also include object class embeddings
+                        text_features = self.extract_text_features(row)
+                        self.labeled_data[split][i]["image_features"] = torch.cat([image_features, text_features], dim=-1)
+                    else:
+                        self.labeled_data[split][i]["image_features"] = image_features
                 except Exception as e:
                     logger.exception("Error: {}".format(e))
                     idx_to_remove.append(i)
@@ -1108,7 +1155,10 @@ class UDFProposer:
 
     def train(self, active_learning_round=-1):
         # logger.debug("mlp_config: {}".format(mlp_config))
-        mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 3
+        if self.dataset == "charades":
+            mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 5
+        else:
+            mlp_dim_in = self.dim_in if self.n_obj == 1 else self.dim_in * 3
         logger.debug("mlp_dim_in: {}".format(mlp_dim_in)) # should be 512 for clip-vit-base-patch32
         self.checkpoint_root = os.path.join(self.config["model_dir"], "model_udf", self.dataset, f"{self.llm_method}_{self.mlp_method}", self.udf_class)
         if active_learning_round >= 0:
@@ -1207,7 +1257,8 @@ class UDFProposer:
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         image_size = frame.shape[:2]
         if self.n_obj == 1:
-            x1, y1, x2, y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size, factor=1)
+            factor = 1 if self.dataset == "cityflow" else 1.5
+            x1, y1, x2, y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size, factor=factor)
             frame = frame[y1:y2, x1:x2]
         else:
             o1_x1, o1_y1, o1_x2, o1_y2 = self.expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
@@ -1395,6 +1446,21 @@ class UDFProposer:
             with torch.no_grad():
                 outputs = self.clip_model.get_image_features(**inputs)
             outputs = outputs.reshape(-1)
+        return outputs
+
+    def extract_text_features(self, row):
+        if self.n_obj == 1:
+            text = row["o1_oname"]
+            inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs = self.clip_model.get_text_features(**inputs)
+            outputs = outputs.squeeze(0)
+        else:
+            inputs = self.tokenizer([row["o1_oname"], row["o2_oname"]], padding=True, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                outputs = self.clip_model.get_text_features(**inputs) # 2 x 512
+            outputs = outputs.reshape(-1)
+
         return outputs
 
     def _compute_new_box_after_crop(self, row, image_size):
@@ -1843,6 +1909,8 @@ class UDFProposer:
             batch_end = batch_start + batch_size
             idxs_to_predict = []
             batch_boxes = []
+            batch_o1_onames = []
+            batch_o2_onames = []
             image_patches = []
 
             for i, (_, row) in enumerate(df.iloc[batch_start:batch_end].iterrows()):
@@ -1859,6 +1927,8 @@ class UDFProposer:
                     rois = [[0, roi_x1, roi_y1, roi_x2, roi_y2]]
                     new_o1x1, new_o1y1, new_o1x2, new_o1y2, new_o2x1, new_o2y1, new_o2x2, new_o2y2 = self._compute_new_box_after_crop(row, (frame.shape[0], frame.shape[1]))
                     batch_boxes.append([int(new_o1x1), int(new_o1y1), int(new_o1x2), int(new_o1y2), int(new_o2x1), int(new_o2y1), int(new_o2x2), int(new_o2y2)])
+                    batch_o1_onames.append(row['o1_oname'])
+                    batch_o2_onames.append(row['o2_oname'])
 
                     single_frame = torch.tensor(frame, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(self.device) # Shape: (1, C, H, W)
                     rois_tensor = torch.tensor(rois, dtype=torch.float).to(self.device)
@@ -1885,10 +1955,16 @@ class UDFProposer:
             batch_frames_target = batch_frames * target_masks.unsqueeze(1).expand(N, C, H, W)
             images = torch.cat([batch_frames, batch_frames_subject, batch_frames_target], dim=0) # (3N, C, H, W)
             inputs = transforms(images)
+            if self.dataset == "charades":
+                text_inputs = self.tokenizer(batch_o1_onames + batch_o2_onames, padding=True, return_tensors="pt").to(self.device)
             with torch.no_grad():
                 outputs = self.clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (3N, 512)
+                if self.dataset == "charades":
+                    text_outputs = self.clip_model.get_text_features(**text_inputs) # torch.FloatTensor of shape (2N, 512)
             features = outputs.reshape(3, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 3 * 512)
-
+            if self.dataset == "charades":
+                text_features = text_outputs.reshape(2, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 2 * 512)
+                features = torch.cat([features, text_features], dim=1) # (N, 5 * 512)
             all_features.append(features)
             all_idxs_to_predict.extend(idxs_to_predict)
 
@@ -2204,6 +2280,15 @@ class UDFProposer:
                 f"{vid % 10}",
                 f"{vid}.jpg"
             ))) # Shape: (H, W, C)
+            if len(frame.shape) == 2:
+                frame = np.stack([frame] * 3, axis=-1)
+        elif self.dataset == "cityflow":
+            vname = self.vid_to_vname[(vid, fid)]
+            image_file = os.path.join(
+                self.config[self.dataset]["video_frames_dir"],
+                vname
+            )
+            frame = np.array(Image.open(image_file)) # Shape: (H, W, C)
             if len(frame.shape) == 2:
                 frame = np.stack([frame] * 3, axis=-1)
         else:

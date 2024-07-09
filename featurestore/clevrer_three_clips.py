@@ -1,5 +1,6 @@
 import os
 import argparse
+import shutil
 import numpy as np
 from nvidia.dali import pipeline_def
 import nvidia.dali.fn as fn
@@ -144,7 +145,9 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
     # Remove existing feature files
 
     feature_file_dir = os.path.join(config["db_dir"], "features", "clevrer_three_clips", "attribute")
-    os.makedirs(feature_file_dir, exist_ok=True)
+    if os.path.exists(feature_file_dir):
+        shutil.rmtree(feature_file_dir)
+    os.makedirs(feature_file_dir)
     feature_file_path = os.path.join(feature_file_dir, "0.parquet")
     partition_id = 0
     bytes_written = 0
@@ -301,7 +304,9 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
     ])
 
     feature_file_dir = os.path.join(config["db_dir"], "features", "clevrer_three_clips", "relationship")
-    os.makedirs(feature_file_dir, exist_ok=True)
+    if os.path.exists(feature_file_dir):
+        shutil.rmtree(feature_file_dir)
+    os.makedirs(feature_file_dir)
     feature_file_path = os.path.join(feature_file_dir, "0.parquet")
     partition_id = 0
     bytes_written = 0

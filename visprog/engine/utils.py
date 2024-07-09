@@ -109,7 +109,7 @@ class ProgramGenerator():
                 logprobs=1,
                 seed=retry*42+self.run_id
             )
-
+            logger.info(f"response: {response.choices[0].message.content}")
             prob = self.compute_prob(response)
             prog = response.choices[0].text.lstrip('\n').rstrip('\n')
         elif self.llm_model in ["gpt-3.5-turbo-1106", "gpt-4-turbo-2024-04-09"]:
@@ -128,7 +128,7 @@ class ProgramGenerator():
                 max_tokens=512,
                 seed=retry*42+self.run_id
             )
-
+            logger.info(f"response: {response.choices[0].message.content}")
             prob = None
             # prog = response.choices[0].message.content.lstrip('\n').rstrip('\n')
             prog = "\n\n".join(re.findall(r"```python\n(.*?)```", response.choices[0].message.content, re.DOTALL))

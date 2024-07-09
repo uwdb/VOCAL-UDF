@@ -26,6 +26,7 @@ logger.setLevel(logging.DEBUG)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--use_precomputed', action='store_true', help='use precomputed object detection results')
+    parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
     parser.add_argument('--save_output', action='store_true', help='save the output')
     parser.add_argument('--output_dir', type=str, help='where to save the results')
     parser.add_argument('--run_id', type=int, help='run id')

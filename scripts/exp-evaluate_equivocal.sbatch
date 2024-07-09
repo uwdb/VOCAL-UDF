@@ -1,10 +1,10 @@
 #!/bin/bash -l
 #SBATCH --job-name=equivocal
-#SBATCH --partition=gpu-a40
-#SBATCH --account=balazinska
+#SBATCH --partition=ckpt-all
+#SBATCH --account=cse
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=50G
+#SBATCH --mem=100G
 #SBATCH --time=1:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"
 

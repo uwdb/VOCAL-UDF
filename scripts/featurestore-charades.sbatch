@@ -19,4 +19,4 @@ echo "--------------------"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/featurestore/charades_clip_with_bboxes.py
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/featurestore/charades_three_clips.py --include_text_features

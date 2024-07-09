@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name=charades
 #SBATCH --partition=gpu-a40
-#SBATCH --account=balazinska
+#SBATCH --account=krishna
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:a40:1
@@ -44,9 +44,9 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --generate \
         --cpus 8 \
         --save_labeled_data \
-        --n_train_distill 100 \
+        --n_train_distill 500 \
         --selection_strategy "both" \
         --selection_labels "user" \
         --llm_method "gpt4v"
 
-# python main.py --num_missing_udfs 1 --query_id 3 --run_id 0 --dataset "charades" --budget 20 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 10  --generate --cpus 8 --save_labeled_data --n_train_distill 1000 --selection_strategy "both" --selection_labels "user" --llm_method "llava"
+# python main.py --num_missing_udfs 1 --query_id 3 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"

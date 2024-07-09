@@ -28,6 +28,7 @@ data/gqa/*
 *.duckdb*
 duckdb_dir/*
 */build/*
+*/lightning_logs/*
 *.out
 LLaVA/
 */.cache/*
@@ -36,3 +37,4 @@ experiments/lightning_logs/
 # Un-ignore the following
 !LICENSE.txt
 !data/clevr/vocab_clevrer.json
+*.ckpt

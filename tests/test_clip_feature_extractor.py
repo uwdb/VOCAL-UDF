@@ -23,7 +23,7 @@ import copy
 import cv2
 from tqdm import tqdm
 import sys
-from transformers import CLIPProcessor, CLIPModel, LlavaNextForConditionalGeneration, LlavaNextProcessor, CLIPTokenizer
+from transformers import CLIPProcessor, CLIPModel, LlavaNextForConditionalGeneration, LlavaNextProcessor, CLIPTokenizer, BlipProcessor, BlipForQuestionAnswering
 import torch
 from torch.utils.data import Dataset
 import base64
@@ -60,6 +60,10 @@ class TestDistillModel(UDFProposer):
         """
         gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
         """
+        if self.llm_method == "blip":
+            self.blip_processor = BlipProcessor.from_pretrained(os.path.join(self.config['model_dir'], 'blip-vqa-base'))
+            self.blip_model = BlipForQuestionAnswering.from_pretrained(os.path.join(self.config['model_dir'], 'blip-vqa-base')).to(self.device)
+
         self.attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
         self.relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
 
@@ -75,6 +79,7 @@ class TestDistillModel(UDFProposer):
 
         self.gt_udf_name = gt_udf_name
         self.candidate_classes = candidate_classes
+
         self.texts = [f"a photo of a {c} object" for c in candidate_classes]
         self.df_train = self.construct_data(self.n_obj, n_train)
         self.clip_predict()
@@ -95,47 +100,194 @@ class TestDistillModel(UDFProposer):
         self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN = 0, 0, 0, 0
         # Training and validation data
         self.label_count = 0
-        for _, row in self.df_train.iterrows():
-            logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
-            try:
-                gt_label = self._get_gt_label(row)
-                # Read and crop frame
-                logger.debug("row: {}".format(row.drop('img').to_dict()))
-                frame, image_size = self.frame_processing_for_model(row)
-                if frame is None: # failed to read the frame
-                    continue
-                _, buffer = cv2.imencode('.jpg', frame)
-                base64_image = base64.b64encode(buffer).decode('utf-8')
-                logger.debug("base64_image: {}".format(base64_image))
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image_features = self.extract_features(frame, row, image_size)
-                image_features = image_features.cpu().detach().numpy()
-                # Compute the similarity between the image and the text
-                image_features = image_features / np.linalg.norm(image_features)
-                similarities = np.dot(text_embeddings, image_features)
-                logger.debug("similarities: {}".format(similarities))
-                sorted_indices = np.argsort(similarities)[::-1]
-                logger.debug("sorted_classes: {}".format([self.candidate_classes[i] for i in sorted_indices]))
+        if self.llm_method == "clip":
+            for _, row in self.df_train.iterrows():
+                logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
+                try:
+                    gt_label = self._get_gt_label(row)
+                    # Read and crop frame
+                    logger.debug("row: {}".format(row.drop('img').to_dict()))
+                    frame, image_size = self.frame_processing_for_model(row)
+                    if frame is None: # failed to read the frame
+                        continue
+                    _, buffer = cv2.imencode('.jpg', frame)
+                    base64_image = base64.b64encode(buffer).decode('utf-8')
+                    logger.debug("base64_image: {}".format(base64_image))
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    image_features = self.extract_features(frame, row, image_size)
+                    image_features = image_features.cpu().detach().numpy()
+                    # Compute the similarity between the image and the text
+                    image_features = image_features / np.linalg.norm(image_features)
+                    similarities = np.dot(text_embeddings, image_features)
+                    logger.debug("similarities: {}".format(similarities))
+                    sorted_indices = np.argsort(similarities)[::-1]
+                    logger.debug("sorted_classes: {}".format([self.candidate_classes[i] for i in sorted_indices]))
 
-                # find the text with the highest similarity
-                max_idx = np.argmax(similarities)
-                logger.debug("max_idx: {}, pred_class: {}".format(max_idx, self.candidate_classes[max_idx]))
-                pred = int(self.candidate_classes[max_idx] == self.gt_udf_name)
-                logger.debug("pred: {}".format(pred))
-                logger.debug("gt_label: {}".format(gt_label))
-                if gt_label == 1 and pred == 1:
-                    self.llm_TP += 1
-                elif gt_label == 0 and pred == 1:
-                    self.llm_FP += 1
-                elif gt_label == 0 and pred == 0:
-                    self.llm_TN += 1
-                elif gt_label == 1 and pred == 0:
-                    self.llm_FN += 1
-            except Exception as e:
-                logger.exception("Error: {}".format(e))
-                continue
+                    # find the text with the highest similarity
+                    max_idx = np.argmax(similarities)
+                    logger.debug("max_idx: {}, pred_class: {}".format(max_idx, self.candidate_classes[max_idx]))
+                    pred = int(self.candidate_classes[max_idx] == self.gt_udf_name)
+                    logger.debug("pred: {}".format(pred))
+                    logger.debug("gt_label: {}".format(gt_label))
+                    if gt_label == 1 and pred == 1:
+                        self.llm_TP += 1
+                    elif gt_label == 0 and pred == 1:
+                        self.llm_FP += 1
+                    elif gt_label == 0 and pred == 0:
+                        self.llm_TN += 1
+                    elif gt_label == 1 and pred == 0:
+                        self.llm_FN += 1
+                except Exception as e:
+                    logger.exception("Error: {}".format(e))
+                    continue
+        elif self.llm_method == "llava":
+            batch_size = 64
+            batched_rows = []
+            batched_frames = []
+            batched_image_sizes = []
+            batched_gt_labels = []
+            for _, row in self.df_train.iterrows():
+                try:
+                    # Read and crop frame
+                    frame, image_size = self.frame_processing_for_model(row)
+                    if frame is None:
+                        continue
+                    gt_label = self._get_gt_label(row)
+                    batched_rows.append(row)
+                    batched_frames.append(frame)
+                    batched_image_sizes.append(image_size)
+                    batched_gt_labels.append(gt_label)
+                    if len(batched_rows) == batch_size:
+                        generated_text, llm_labels, base64_images, image_prompts = self._llava_annotate_frame(batched_frames, batched_image_sizes, batched_rows, batched_gt_labels)
+                        for i in range(len(batched_rows)):
+                            if llm_labels[i] == -1:
+                                # If the model fails to generate a label, set the label to 0
+                                llm_labels[i] = 0
+                            logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
+                            logger.debug("row: {}".format(batched_rows[i].drop('img').to_dict()))
+                            logger.debug("base64_image: {}".format(base64_images[i]))
+                            logger.debug("Llava image prompt: {}".format(image_prompts[i]))
+                            logger.debug("Llava result: {}".format(generated_text[i]))
+                            logger.debug("gt_label: {}".format(batched_gt_labels[i]))
+                            logger.debug("pred: {}".format(llm_labels[i]))
+                            if batched_gt_labels[i] == 1 and llm_labels[i] == 1:
+                                self.llm_TP += 1
+                            elif batched_gt_labels[i] == 0 and llm_labels[i] == 1:
+                                self.llm_FP += 1
+                            elif batched_gt_labels[i] == 0 and llm_labels[i] == 0:
+                                self.llm_TN += 1
+                            elif batched_gt_labels[i] == 1 and llm_labels[i] == 0:
+                                self.llm_FN += 1
+                        batched_rows = []
+                        batched_frames = []
+                        batched_image_sizes = []
+                        batched_gt_labels = []
+                except Exception as e:
+                    logger.exception("Error: {}".format(e))
+                    continue
+        elif self.llm_method == "blip":
+            batch_size = 8
+            batched_rows = []
+            batched_frames = []
+            batched_image_sizes = []
+            batched_gt_labels = []
+            for _, row in self.df_train.iterrows():
+                try:
+                    # Read and crop frame
+                    frame, image_size = self.frame_processing_for_model(row)
+                    if frame is None:
+                        continue
+                    gt_label = self._get_gt_label(row)
+                    batched_rows.append(row)
+                    batched_frames.append(frame)
+                    batched_image_sizes.append(image_size)
+                    batched_gt_labels.append(gt_label)
+                    if len(batched_rows) == batch_size:
+                        generated_text, llm_labels, base64_images, image_prompts = self._blip_annotate_frame(batched_frames, batched_image_sizes, batched_rows, batched_gt_labels)
+                        for i in range(len(batched_rows)):
+                            if llm_labels[i] == -1:
+                                # If the model fails to generate a label, set the label to 0
+                                llm_labels[i] = 0
+                            logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
+                            logger.debug("row: {}".format(batched_rows[i].drop('img').to_dict()))
+                            logger.debug("base64_image: {}".format(base64_images[i]))
+                            logger.debug("Llava image prompt: {}".format(image_prompts[i]))
+                            logger.debug("Llava result: {}".format(generated_text[i]))
+                            logger.debug("gt_label: {}".format(batched_gt_labels[i]))
+                            logger.debug("pred: {}".format(llm_labels[i]))
+                            if batched_gt_labels[i] == 1 and llm_labels[i] == 1:
+                                self.llm_TP += 1
+                            elif batched_gt_labels[i] == 0 and llm_labels[i] == 1:
+                                self.llm_FP += 1
+                            elif batched_gt_labels[i] == 0 and llm_labels[i] == 0:
+                                self.llm_TN += 1
+                            elif batched_gt_labels[i] == 1 and llm_labels[i] == 0:
+                                self.llm_FN += 1
+                        batched_rows = []
+                        batched_frames = []
+                        batched_image_sizes = []
+                        batched_gt_labels = []
+                except Exception as e:
+                    logger.exception("Error: {}".format(e))
+                    continue
         llm_f1 = 2*self.llm_TP/(2*self.llm_TP+self.llm_FP+self.llm_FN) if 2*self.llm_TP+self.llm_FP+self.llm_FN > 0 else 0.0
         logger.debug("TP: {}, FP: {}, TN: {}, FN: {}, f1: {}".format(self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN, llm_f1))
+
+    def _blip_annotate_frame(self, batched_frames, batched_image_sizes, batched_rows, batched_gt_labels):
+        llm_labels, base64_images, llava_image_prompts = [], [], []
+        pil_images = []
+        for i in range(len(batched_frames)):
+            if self.n_obj == 2:
+                # Draw bounding boxes on subject and object
+                o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(batched_rows[i], batched_image_sizes[i])
+                cv2.rectangle(batched_frames[i], (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
+                cv2.rectangle(batched_frames[i], (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
+            _, buffer = cv2.imencode('.jpg', batched_frames[i])
+            base64_image = base64.b64encode(buffer).decode('utf-8')
+            base64_images.append(base64_image)
+            batched_frames[i] = cv2.cvtColor(batched_frames[i], cv2.COLOR_BGR2RGB)
+            # Convert the frame to PIL image
+            pil_image = Image.fromarray(batched_frames[i])
+            pil_images.append(pil_image)
+            llava_image_prompt, last_word = self._create_blip_image_prompt(batched_rows[i], batched_image_sizes[i])
+            llava_image_prompts.append(llava_image_prompt)
+        inputs = self.blip_processor(pil_images, llava_image_prompts, padding=True, return_tensors="pt").to(self.device)
+        output = self.blip_model.generate(
+            **inputs,
+            max_new_tokens=10,
+            do_sample=True,
+            temperature=0.2,
+            top_p=0.7
+        )
+        generated_text = self.blip_processor.batch_decode(output, skip_special_tokens=True)
+        results = []
+        for i, result in enumerate(generated_text):
+            result = result.split(last_word)[-1].strip().lower()
+            results.append(result)
+            if "yes" in result.lower():
+                llm_label = 1
+                if self.gt_udf_name is not None:
+                    if batched_gt_labels[i] == 1:
+                        self.llm_TP += 1
+                    else:
+                        self.llm_FP += 1
+                self.label_count += 1
+            elif "no" in result.lower():
+                llm_label = 0
+                if self.gt_udf_name is not None:
+                    if batched_gt_labels[i] == 0:
+                        self.llm_TN += 1
+                    else:
+                        self.llm_FN += 1
+                self.label_count += 1
+            else:
+                llm_label = -1
+            llm_labels.append(llm_label)
+        return results, llm_labels, base64_images, llava_image_prompts
+
+    def _create_blip_image_prompt(self, row, image_size):
+        image_prompt = "{}? Answer with 'yes' or 'no'.".format(self.replace_objects(self.udf_description.rstrip(string.punctuation), row, image_size))
+        return image_prompt, "assistant"
 
     def construct_data(self, n_obj, n_train=None):
         if self.dataset == "charades":
@@ -236,14 +388,16 @@ class TestDistillModel(UDFProposer):
 
 
 if __name__ == "__main__":
-    # python test_clip_feature_extractor.py --dataset "vaw" --udf_idx 0
+    # python test_clip_feature_extractor.py --dataset "vaw" --udf_idx 0 --method "llava"
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, help="dataset name")
     parser.add_argument("--udf_idx", type=int, help="udf_idx")
+    parser.add_argument("--method", type=str, help="method")
 
     args = parser.parse_args()
     dataset = args.dataset
     udf_idx = args.udf_idx
+    method = args.method
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -288,7 +442,8 @@ if __name__ == "__main__":
     log_dir = os.path.join(
         config["log_dir"],
         "clip_feature_extractor",
-        dataset
+        dataset,
+        method,
     )
     os.makedirs(log_dir, exist_ok=True)
 
@@ -345,6 +500,6 @@ if __name__ == "__main__":
             selection_strategy='model',
             selection_labels='none',
             allow_kwargs_in_udf=False,
-            llm_method='user',
+            llm_method=method,
         )
     up._distill_model(*test_input, n_train=1000)

@@ -427,6 +427,163 @@ def show_sequence(sequence, parquet_vids, parquet_fids, parquet_o1_oids, parquet
     res = ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
     plt.savefig(f"sequence_{res}.png")
 
+def predict_attribute(conn, config, feature_extractor, batch_size, num_threads, dataset="vaw"):
+    df_grouped = conn.execute(f"""
+        SELECT
+            vid, fid, oid, x1, y1, x2, y2
+        FROM {dataset}_objects
+        ORDER BY vid, fid, oid
+    """).df().groupby(['vid', 'fid'])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if feature_extractor == "clip":
+        clip_model_name = os.path.join(config['model_dir'], "clip-vit-base-patch32")
+        clip_model = CLIPModel.from_pretrained(clip_model_name).to(device)
+        patch_size = (224, 224)
+    else:
+        clip_model_name = os.path.join(config['model_dir'], "align-base")
+        clip_model = AlignModel.from_pretrained(clip_model_name).to(device)
+        patch_size = (346, 346)
+
+    image_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/gqa/images"
+    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata").df()["vid"].tolist()
+    image_files = [
+        os.path.join(
+            image_directory,
+            f"{vid % 10}",
+            f"{vid}.jpg",
+        )
+        for vid in vids
+    ]
+    num_samples = len(image_files)
+
+    # Copied from https://github.com/openai/CLIP/blob/main/clip/clip.py
+    # Specific values from print(model.transform)
+    if feature_extractor == "clip":
+        transforms = T.Compose([
+            # T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
+            # T.CenterCrop(224),
+            T.Lambda(lambda x: x / 255.0),        # Scale image data to [0, 1]
+            T.Normalize(
+                mean=[0.48145466, 0.4578275, 0.40821073],
+                std=[0.26862954, 0.26130258, 0.27577711],
+            ),
+        ])
+    else:
+        transforms = T.Compose([
+            # T.Resize(346, interpolation=T.InterpolationMode.BICUBIC),
+            # T.CenterCrop(346),
+            T.Lambda(lambda x: x / 255.0),        # Scale image data to [0, 1]
+            T.Normalize(
+                mean=[0.5, 0.5, 0.5],
+                std=[0.5, 0.5, 0.5],
+            ),
+        ])
+
+    schema = pa.schema([
+        ('vid', pa.uint32()),
+        ('fid', pa.uint32()),
+        ('o1_oid', pa.uint32()),
+        ('o1_x1', pa.uint32()),
+        ('o1_y1', pa.uint32()),
+        ('o1_x2', pa.uint32()),
+        ('o1_y2', pa.uint32()),
+        ('feature', pa.list_(pa.float32())),
+    ])
+    # Remove existing feature files
+
+    feature_file_dir = os.path.join(config["db_dir"], "features", f"{dataset}_three_{feature_extractor}s", "attribute")
+    os.makedirs(feature_file_dir, exist_ok=True)
+    feature_file_path = os.path.join(feature_file_dir, "0.parquet")
+    partition_id = 0
+    bytes_written = 0
+    writer = pq.ParquetWriter(feature_file_path, schema=schema)
+    time4 = time.time()
+    for batch_start in tqdm(range(0, num_samples, batch_size)):
+        batch_end = batch_start + batch_size
+        time0 = time.time()
+        print("time0", time0 - time4)
+
+        batch_vids = vids[batch_start:batch_end]
+
+        parquet_vids =[]
+        parquet_fids = []
+        parquet_oids = []
+        parquet_x1s = []
+        parquet_y1s = []
+        parquet_x2s = []
+        parquet_y2s = []
+        image_patches = []
+        df_time = 0
+        for i in range(len(batch_vids)):
+            rois = []
+            df_start = time.time()
+            print("batch_vids[i]", batch_vids[i])
+            frame = get_frame(batch_vids[i])
+            _H, _W, _C = frame.shape
+            if (batch_vids[i], 1) not in df_grouped.groups:
+                continue
+            res = df_grouped.get_group((batch_vids[i], 1))
+            # NOTE: Due to data noise, multiple objects can have the same oid
+            df_time += time.time() - df_start
+            for _, row in res.iterrows():
+                x1, y1, x2, y2 = expand_box(row['x1'], row['y1'], row['x2'], row['y2'], (_H, _W))
+                rois.append([0, x1, y1, x2, y2])
+                parquet_vids.append(np.uint32(batch_vids[i]))
+                parquet_fids.append(np.uint32(1))
+                parquet_oids.append(np.uint32(row['oid']))
+                parquet_x1s.append(np.uint32(row['x1']))
+                parquet_y1s.append(np.uint32(row['y1']))
+                parquet_x2s.append(np.uint32(row['x2']))
+                parquet_y2s.append(np.uint32(row['y2']))
+
+            single_frame = torch.tensor(frame, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device) # Shape: (1, C, H, W)
+            if len(rois) == 0:
+                time4 = time.time()
+                continue
+            rois_tensor = torch.tensor(rois, dtype=torch.float).to(device)
+            # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
+            # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
+            signle_frame_patches = ops.roi_align(single_frame, rois_tensor, output_size=patch_size, spatial_scale=1.0)
+            image_patches.append(signle_frame_patches)
+
+        if len(image_patches) == 0:
+            time4 = time.time()
+            continue
+        image_patches = torch.cat(image_patches, dim=0)
+
+        print("df_time", df_time)
+
+        # show_sequence(image_patches, parquet_vids, parquet_fids, parquet_oids)
+        time1 = time.time()
+        print("time1", time1 - time0)
+
+        # Run CLIP model
+        inputs = transforms(image_patches)
+        time2 = time.time()
+        print("time2", time2 - time1)
+        time3 = time.time()
+        with torch.no_grad():
+            features = clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (batch_size, output_dim)
+        print("time3", time3 - time2)
+
+        # Save into Parquet file
+        # Split it if too large
+        features = list(features.cpu().numpy())
+
+        if bytes_written >= 500000000: # 500MB, start a new file
+            writer.close()
+            partition_id += 1
+            feature_file_path = os.path.join(feature_file_dir, f"{partition_id}.parquet")
+            writer = pq.ParquetWriter(feature_file_path, schema=schema)
+            bytes_written = 0
+
+        batch = pa.record_batch([parquet_vids, parquet_fids, parquet_oids, parquet_x1s, parquet_y1s, parquet_x2s, parquet_y2s, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'feature'])
+        writer.write_batch(batch)
+        bytes_written += batch.nbytes
+        time4 = time.time()
+        print("time4", time4 - time3)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--method", type=str, help="")
@@ -445,3 +602,7 @@ if __name__ == "__main__":
         extract_attribute_features(conn, config, feature_extractor, batch_size=8, num_threads=1)
     elif method == "relationship":
         extract_relationship_features(conn, config, feature_extractor, batch_size=1024, num_threads=1)
+    elif method == "predict_attribute":
+        pass
+    else:
+        raise ValueError(f"Unknown method: {method}")

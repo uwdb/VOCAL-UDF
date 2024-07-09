@@ -43,7 +43,7 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --allow_kwargs_in_udf \
         --num_parameter_search 5 \
         --cpus 8 \
-        --n_train_distill 100 \
+        --n_train_distill 500 \
         --selection_strategy "both" \
         --selection_labels "user" \
         --pred_batch_size 4096 \

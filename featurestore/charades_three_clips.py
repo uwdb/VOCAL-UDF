@@ -15,7 +15,7 @@ import torchvision.ops as ops
 import duckdb
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
@@ -26,7 +26,7 @@ import math
 import torchvision.transforms as T
 import string
 import random
-
+import shutil
 
 def VideoFrameDaliDataloader(
     sequence_length=64,
@@ -121,19 +121,21 @@ def test(batch_size, num_threads):
         print("batch['data'].shape", batch['data'].shape)
         print("batch['label']", batch['label'])
 
-def extract_relationship_features(conn, config, sequence_length, batch_size, num_threads, dataset="charades", patch_size=(224, 224)):
+def extract_relationship_features(conn, config, sequence_length, batch_size, num_threads, dataset="charades", patch_size=(224, 224), include_text_features=False):
     df_grouped = conn.execute(f"""
         SELECT o1.vid AS vid, o1.fid AS fid,
-            o1.oid AS o1_oid, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-            o2.oid AS o2_oid, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2
+            o1.oid AS o1_oid, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2, o1.oname AS o1_oname,
+            o2.oid AS o2_oid, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2, o2.oname AS o2_oname
         FROM {dataset}_objects o1, {dataset}_objects o2
         WHERE o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid != o2.oid
         ORDER BY o1.vid, o1.fid, o1.oid, o2.oid
     """).df().groupby(['vid', 'fid'])
 
-    clip_model_name = os.path.join(config['model_dir'], "clip-vit-base-patch32")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    clip_model_name = os.path.join(config['model_dir'], "clip-vit-base-patch32")
     clip_model = CLIPModel.from_pretrained(clip_model_name).to(device)
+    if include_text_features:
+        tokenizer = CLIPTokenizer.from_pretrained(clip_model_name)
 
     _start = time.time()
     pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, batch_size=batch_size, num_threads=num_threads)
@@ -166,16 +168,23 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         ('o1_y1', pa.uint32()),
         ('o1_x2', pa.uint32()),
         ('o1_y2', pa.uint32()),
+        ('o1_oname', pa.string()),
         ('o2_oid', pa.uint32()),
         ('o2_x1', pa.uint32()),
         ('o2_y1', pa.uint32()),
         ('o2_x2', pa.uint32()),
         ('o2_y2', pa.uint32()),
+        ('o2_oname', pa.string()),
         ('feature', pa.list_(pa.float32())),
     ])
 
-    feature_file_dir = os.path.join(config["db_dir"], "features", "charades_three_clips", "relationship")
-    os.makedirs(feature_file_dir, exist_ok=True)
+    if include_text_features:
+        feature_file_dir = os.path.join(config["db_dir"], "features", "charades_five_clips", "relationship")
+    else:
+        feature_file_dir = os.path.join(config["db_dir"], "features", "charades_three_clips", "relationship")
+    if os.path.exists(feature_file_dir):
+        shutil.rmtree(feature_file_dir)
+    os.makedirs(feature_file_dir)
     feature_file_path = os.path.join(feature_file_dir, "0.parquet")
     partition_id = 0
     bytes_written = 0
@@ -212,6 +221,8 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         parquet_o2_y1s = []
         parquet_o2_x2s = []
         parquet_o2_y2s = []
+        parquet_o1_onames = []
+        parquet_o2_onames = []
         batch_boxes = []
         df_time = 0
         for i in range(len(vids)):
@@ -244,6 +255,8 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
                     parquet_o2_y1s.append(np.uint32(row['o2_y1']))
                     parquet_o2_x2s.append(np.uint32(row['o2_x2']))
                     parquet_o2_y2s.append(np.uint32(row['o2_y2']))
+                    parquet_o1_onames.append(row['o1_oname'])
+                    parquet_o2_onames.append(row['o2_oname'])
                     new_o1x1, new_o1y1, new_o1x2, new_o1y2, new_o2x1, new_o2y1, new_o2x2, new_o2y2 = _compute_new_box_after_crop(row, (_H, _W))
                     batch_boxes.append([int(new_o1x1), int(new_o1y1), int(new_o1x2), int(new_o1y2), int(new_o2x1), int(new_o2y1), int(new_o2x2), int(new_o2y2)])
 
@@ -275,12 +288,19 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         images = torch.cat([batch_frames, batch_frames_subject, batch_frames_target], dim=0) # (3N, C, H, W)
         time2 = time.time()
         print("time2", time2 - time1)
-        inputs = transforms(images)
+        image_inputs = transforms(images)
+        if include_text_features:
+            text_inputs = tokenizer(parquet_o1_onames + parquet_o2_onames, padding=True, return_tensors="pt").to(device)
         time2_5 = time.time()
         print("time2_5", time2_5 - time2)
         with torch.no_grad():
-            outputs = clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (3N, 512)
-        features = outputs.reshape(3, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 3 * 512)
+            image_outputs = clip_model.get_image_features(pixel_values=image_inputs) # torch.FloatTensor of shape (3N, 512)
+            if include_text_features:
+                text_outputs = clip_model.get_text_features(**text_inputs) # torch.FloatTensor of shape (2N, 512)
+        features = image_outputs.reshape(3, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 3 * 512)
+        if include_text_features:
+            text_features = text_outputs.reshape(2, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 2 * 512)
+            features = torch.cat([features, text_features], dim=1) # (N, 5 * 512)
         time3 = time.time()
         print("time3", time3 - time2_5)
 
@@ -295,7 +315,7 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
             writer = pq.ParquetWriter(feature_file_path, schema=schema)
             bytes_written = 0
 
-        batch = pa.record_batch([parquet_vids, parquet_fids, parquet_o1_oids, parquet_o1_x1s, parquet_o1_y1s, parquet_o1_x2s, parquet_o1_y2s, parquet_o2_oids, parquet_o2_x1s, parquet_o2_y1s, parquet_o2_x2s, parquet_o2_y2s, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o2_oid', 'o2_x1', 'o2_y1', 'o2_x2', 'o2_y2', 'feature'])
+        batch = pa.record_batch([parquet_vids, parquet_fids, parquet_o1_oids, parquet_o1_x1s, parquet_o1_y1s, parquet_o1_x2s, parquet_o1_y2s, parquet_o1_onames, parquet_o2_oids, parquet_o2_x1s, parquet_o2_y1s, parquet_o2_x2s, parquet_o2_y2s, parquet_o2_onames, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o1_oname', 'o2_oid', 'o2_x1', 'o2_y1', 'o2_x2', 'o2_y2', 'o2_oname', 'feature'])
         writer.write_batch(batch)
         bytes_written += batch.nbytes
         time4 = time.time()
@@ -318,6 +338,11 @@ def show_sequence(sequence, parquet_vids, parquet_fids, parquet_o1_oids, parquet
     plt.savefig(f"sequence_{res}.png")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--include_text_features", action="store_true", help="Include text features")
+    args = parser.parse_args()
+    include_text_features = args.include_text_features
+
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -325,4 +350,4 @@ if __name__ == "__main__":
 
     print("pa.cpu_count()", pa.cpu_count())
     print("pa.io_thread_count()", pa.io_thread_count())
-    extract_relationship_features(conn, config, sequence_length=128, batch_size=1, num_threads=1)
+    extract_relationship_features(conn, config, sequence_length=128, batch_size=1, num_threads=1, include_text_features=include_text_features)

@@ -3,8 +3,8 @@
 #SBATCH --partition=ckpt-all
 #SBATCH --account=cse
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=50G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=100G
 #SBATCH --time=4:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"
 
@@ -26,7 +26,7 @@ echo "query_class_name: $query_class_name"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/visprog_vaw.py \
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/evaluate_visprog.py \
         --use_precomputed \
         --num_missing_udfs $num_missing_udfs \
         --dataset "$dataset" \

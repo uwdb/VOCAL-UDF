@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Charades
-# declare -a QueryClassArray=("unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2", "unavailable=2-npred=4-nobj_pred=1-nvars=2-depth=2" "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2")
+# declare -a QueryClassArray=("unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" "unavailable=2-npred=4-nobj_pred=1-nvars=2-depth=2" "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2")
 # declare -a QueryClassArray=("unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2")
 
 # for query_class_name in "${QueryClassArray[@]}"; do
@@ -13,7 +13,7 @@
 # done
 
 # GQA
-# declare -a QueryClassArray=("unavailable=2-npred=1-nattr_pred=1-nobj_pred=0-nvars=2-min_npos=100-max_npos=5000", "unavailable=2-npred=1-nattr_pred=2-nobj_pred=0-nvars=3-min_npos=100-max_npos=5000")
+# declare -a QueryClassArray=("unavailable=2-npred=1-nattr_pred=1-nobj_pred=0-nvars=2-min_npos=100-max_npos=5000" "unavailable=2-npred=1-nattr_pred=2-nobj_pred=0-nvars=3-min_npos=100-max_npos=5000")
 # declare -a QueryClassArray=("unavailable=2-npred=1-nattr_pred=2-nobj_pred=0-nvars=3-min_npos=100-max_npos=5000")
 
 # for query_class_name in "${QueryClassArray[@]}"; do
@@ -25,7 +25,7 @@
 # done
 
 # VAW
-# declare -a QueryClassArray=("unavailable=2-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000", "")
+# declare -a QueryClassArray=("unavailable=2-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" "")
 declare -a QueryClassArray=("unavailable=2-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000")
 
 for query_class_name in "${QueryClassArray[@]}"; do

@@ -255,6 +255,43 @@
             "function_implementation": ""
         }
     ],
+    "cityflow_base": [
+        {
+            "signature": "above(o0, o1)",
+            "description": "Whether o0 is above o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "beneath(o0, o1)",
+            "description": "Whether o0 is beneath o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "behind(o0, o1)",
+            "description": "Whether o0 is behind o1.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "suv(o0)",
+            "description": "Whether the type of o0 is an SUV.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "white(o0)",
+            "description": "Whether the color of o0 is white.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "grey(o0)",
+            "description": "Whether the color of o0 is grey.",
+            "function_implementation": ""
+        },
+        {
+            "signature": "van(o0)",
+            "description": "Whether the type of o0 is a van.",
+            "function_implementation": ""
+        }
+    ],
     "clevrer_base": [
         {
             "signature": "left_of(o0, o1)",
@@ -714,6 +751,48 @@
         "IN": {
             "signature": "in(o0, o1)",
             "description": "Whether o0 is in o1.",
+            "function_implementation": ""
+        }
+    },
+    "cityflow": {
+        "TOTHELEFTOF": {
+            "signature": "to_the_left_of(o0, o1)",
+            "description": "Whether o0 is to the left of o1.",
+            "function_implementation": ""
+        },
+        "TOTHERIGHTOF": {
+            "signature": "to_the_right_of(o0, o1)",
+            "description": "Whether o0 is to the right of o1.",
+            "function_implementation": ""
+        },
+        "INFRONTOF": {
+            "signature": "in_front_of(o0, o1)",
+            "description": "Whether o0 is in front of o1.",
+            "function_implementation": ""
+        },
+        "SEDAN": {
+            "signature": "sedan(o0)",
+            "description": "Whether the type of o0 is a sedan.",
+            "function_implementation": ""
+        },
+        "BLACK": {
+            "signature": "black(o0)",
+            "description": "Whether the color of o0 is black.",
+            "function_implementation": ""
+        },
+        "RED": {
+            "signature": "red(o0)",
+            "description": "Whether the color of o0 is red.",
+            "function_implementation": ""
+        },
+        "BLUE": {
+            "signature": "blue(o0)",
+            "description": "Whether the color of o0 is blue.",
+            "function_implementation": ""
+        },
+        "PICKUPTRUCK": {
+            "signature": "pickup_truck(o0)",
+            "description": "Whether the type of o0 is a pickup truck.",
             "function_implementation": ""
         }
     }

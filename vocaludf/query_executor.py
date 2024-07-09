@@ -51,14 +51,24 @@ class GQAImageDataset(Dataset):
             f"{self.vids[idx]}.jpg"
         ), mode=ImageReadMode.RGB) # Tensor[image_channels, image_height, image_width]
 
-        # frame = np.array(Image.open(os.path.join(
-        #     self.img_dir,
-        #     f"{self.vids[idx] % 10}",
-        #     f"{self.vids[idx]}.jpg"
-        # ))) # Shape: (H, W, C)
-        # if len(frame.shape) == 2:
-        #     frame = np.stack([frame] * 3, axis=-1)
         return frame, self.vids[idx], 1
+
+class CityFlowImageDataset(Dataset):
+    def __init__(self, vids, img_dir, df_metadata):
+        self.vids = vids
+        self.img_dir = img_dir
+        self.df_metadata = df_metadata
+
+    def __len__(self):
+        return len(self.df_metadata)
+
+    def __getitem__(self, idx):
+        row = self.df_metadata.iloc[idx]
+        frame = read_image(os.path.join(
+            self.img_dir,
+            row['vname']
+        ), mode=ImageReadMode.RGB) # Tensor[image_channels, image_height, image_width]
+        return frame, row['vid'], row['fid']
 
 def ClevrerDaliDataloader(
     vids,
@@ -249,11 +259,10 @@ class QueryExecutor:
             SELECT
                 o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
                 o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-                COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
                 COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
                 {height_width_clause}
             FROM {self.dataset}_objects o1
-            LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+            LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
             {metadata_join_clause}
             GROUP BY {group_by_clause}
         """
@@ -268,7 +277,7 @@ class QueryExecutor:
                     o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
                     COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
                 FROM {self.dataset}_objects o
-                LEFT OUTER JOIN {self.dataset}_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
+                LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
                 GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
             )
             , relationships_expanded AS (
@@ -276,7 +285,7 @@ class QueryExecutor:
                     vid, fid, oid1, oid2,
                     COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames,
                     ARRAY_AGG(DISTINCT rname) AS gt_rnames
-                FROM {self.dataset}_relationships
+                FROM {self.dataset}_relationship_predictions
                 GROUP BY vid, fid, oid1, oid2
             )
             SELECT
@@ -285,7 +294,6 @@ class QueryExecutor:
                 o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2, o2.attributes AS o2_anames,
                 COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
                 COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
-                COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
                 {height_width_clause}
             FROM obj_with_attrs o1
             JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
@@ -336,10 +344,10 @@ class QueryExecutor:
         if self.dataset == "clevrer":
             exec_func = duckdb_execute_video_materialize
             if debug:
-                input_vids = 1000
+                input_vids = list(range(5000, 6000))
             else:
-                input_vids = 10000
-        elif self.dataset == "clevr":
+                input_vids = list(range(5000, 10000))
+        elif self.dataset == "clevr": # Deprecated
             exec_func = duckdb_execute_cache_sequence
             if debug:
                 input_vids = 1500
@@ -348,10 +356,16 @@ class QueryExecutor:
         elif self.dataset == "charades":
             exec_func = duckdb_execute_video_materialize
             if debug:
-                input_vids = 1000
+                input_vids = list(range(4800, 6000))
             else:
-                input_vids = 9601
-        elif self.dataset in ["gqa", "vaw"]:
+                input_vids = list(range(4800, 9601))
+        elif self.dataset == "cityflow":
+            exec_func = duckdb_execute_video_materialize
+            if debug:
+                input_vids = list(range(824, 1648))
+            else:
+                input_vids = list(range(824, 1648))
+        elif self.dataset in ["gqa", "vaw"]: # Deprecated
             exec_func = duckdb_execute_video_materialize
             input_vids = self.conn.execute(f"SELECT DISTINCT vid FROM {self.dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
             if debug:
@@ -379,7 +393,7 @@ class QueryExecutor:
             logger.info("Time to execute first query: {}".format(time.time() - _start))
             result = sorted(result)
             logger.info("output vids: {}".format(result))
-            if len(self.on_the_fly_udf_names) > 0:
+            if len(self.on_the_fly_udf_names) > 0 and len(result) > 0:
                 self.materialize_on_the_fly_udfs(result)
                 for udf_name, df in self.materialized_udfs.items():
                     exec(f"{udf_name} = df")
@@ -410,10 +424,7 @@ class QueryExecutor:
             result = sorted(result)
             logger.info("output vids: {}".format(result))
         # logger.info("output vids: {}".format(result))
-        if self.dataset in ["gqa", "vaw"]:
-            y_pred = [1 if vid in result else 0 for vid in input_vids]
-        else:
-            y_pred = [1 if i in result else 0 for i in range(input_vids)]
+        y_pred = [1 if vid in result else 0 for vid in input_vids]
 
         f1 = f1_score(y_true[:len(y_pred)], y_pred)
         logger.info("F1 score: {}".format(f1))
@@ -483,6 +494,14 @@ class QueryExecutor:
             # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
             reader_name='reader'
         )
+        elif self.dataset == "cityflow":
+            df_metadata = self.conn.execute(f"""
+                SELECT vname, vid, fid
+                FROM cityflow_metadata
+                WHERE vid = ANY([{parameters}])
+            """, vids).df()
+            data = CityFlowImageDataset(vids, self.config[self.dataset]["video_frames_dir"], df_metadata)
+            video_iterator = DataLoader(data, batch_size=1, shuffle=False) # batch_size must be 1 because of variable image sizes
         elif self.dataset in ["gqa", "vaw"]:
             data = GQAImageDataset(vids, self.config[self.dataset]["video_frames_dir"])
             video_iterator = DataLoader(data, batch_size=1, shuffle=False) # batch_size must be 1 because of variable image sizes
@@ -498,7 +517,7 @@ class QueryExecutor:
         for batch in tqdm(video_iterator, file=sys.stdout, desc="load frames and materialize UDFs"):
             loading_time += time.time() - _start
             _start = time.time()
-            if self.dataset in ["gqa", "clevr", "vaw"]:
+            if self.dataset in ["gqa", "clevr", "vaw", "cityflow"]:
                 frames, vids, fids = batch
                 frames = frames.permute(0, 2, 3, 1).cpu().numpy() # Shape: (B, C, H, W) --> (B, H, W, C)
                 vids = vids.tolist()
