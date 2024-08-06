@@ -8,7 +8,7 @@
 # done
 
 # cityflow
-declare -a UDFArray=("suv" "white" "grey" "van" "sedan" "black" "red" "blue" "pickup-truck")
+declare -a UDFArray=("suv" "white" "grey" "van" "sedan" "black" "red" "blue" "pickup_truck")
 
 for udf_name in "${UDFArray[@]}"; do
     sbatch train_udf.sbatch "cityflow" $udf_name

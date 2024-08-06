@@ -309,7 +309,7 @@ def generate_cityflow_queries_with_unsupported_udfs():
     ap.add_argument("--nunsupported_pred", type=int, default=0, help="number of unsupported UDFs in each query")
     ap.add_argument("--nunsupported_attr_pred", type=int, default=0, help="number of unsupported attribute UDFs in each query")
     ap.add_argument("--max_workers", type=int, default=1, help="number of workers")
-    ap.add_argument("--dataset_name", type=str, default="cityflow", help="dataset name")
+    ap.add_argument("--dataset", type=str, default="cityflow", help="dataset name")
     ap.add_argument("--strategy", type=str, help="")
 
     args = ap.parse_args()
@@ -327,7 +327,7 @@ def generate_cityflow_queries_with_unsupported_udfs():
     nunsupported_pred = args.nunsupported_pred
     nunsupported_attr_pred = args.nunsupported_attr_pred
     max_workers = args.max_workers
-    dataset_name = args.dataset_name
+    dataset = args.dataset
     strategy = args.strategy
     print("strategy", strategy)
 
@@ -355,7 +355,7 @@ def generate_cityflow_queries_with_unsupported_udfs():
             {"predicate": "blue", "parameter": None, "nargs": 1},
             {"predicate": "pickup_truck", "parameter": None, "nargs": 1},
         ]
-    generate_cityflow_queries(n_queries, min_npos, max_npos, npred, nattr_pred, nvars, depth, max_duration, nunsupported_pred, nunsupported_attr_pred, supported_list, unsupported_list, supported_attr_list, unsupported_attr_list, max_workers, dataset_name)
+    generate_cityflow_queries(n_queries, min_npos, max_npos, npred, nattr_pred, nvars, depth, max_duration, nunsupported_pred, nunsupported_attr_pred, supported_list, unsupported_list, supported_attr_list, unsupported_attr_list, max_workers, dataset)
 
 # def generate_cityflow_queries_udf_exclusion():
 #     # python generate_cityflow_queries.py --udf "EqualShape"

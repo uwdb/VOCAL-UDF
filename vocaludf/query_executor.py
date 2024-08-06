@@ -283,8 +283,7 @@ class QueryExecutor:
             , relationships_expanded AS (
                 SELECT
                     vid, fid, oid1, oid2,
-                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames,
-                    ARRAY_AGG(DISTINCT rname) AS gt_rnames
+                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
                 FROM {self.dataset}_relationship_predictions
                 GROUP BY vid, fid, oid1, oid2
             )

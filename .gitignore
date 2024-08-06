@@ -38,3 +38,4 @@ experiments/lightning_logs/
 !LICENSE.txt
 !data/clevr/vocab_clevrer.json
 *.ckpt
+*.DS_Store

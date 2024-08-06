@@ -583,6 +583,7 @@ class UDFProposer:
                     seed=self.run_id * 42 + trial,
                 )
                 # NOTE: Sometimes GPT generates more UDFs than requested, so we remove the extra ones
+                verifed_implemented_udfs = []
                 implemented_udfs = eval(
                     "\n\n".join(
                         re.findall(
@@ -593,7 +594,6 @@ class UDFProposer:
                     )
                 )["answer"][:self.num_interpretations]
                 logger.debug(f"implemented_udfs: {implemented_udfs}")
-                verifed_implemented_udfs = []
                 for idx in range(len(implemented_udfs)):
                     implemented_udf = implemented_udfs[idx]
                     implemented_udf, success = self.verify_syntax_correctness(implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt)
@@ -1490,6 +1490,8 @@ class UDFProposer:
 
 
     def _select(self, gt_udf_name, udf_candidate_list, df_with_img_column):
+        if len(udf_candidate_list) == 0:
+            return None
         # if len(udf_candidate_list) == 1:
         #     selected_udf_candidate = udf_candidate_list[0]
         # else:
@@ -1538,16 +1540,16 @@ class UDFProposer:
             logger.info("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(llm_negative_labeled_index)) + len(set(labeled_index))))
             if n_obj == 1:
                 labeled_df_list = [df_train.iloc[labeled_index]['o1_gt_anames']]
-                if self.llm_positive_df is not None:
+                if self.llm_positive_df is not None and len(self.llm_positive_df):
                     labeled_df_list.append(self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_gt_anames'])
-                if self.llm_negative_df is not None:
+                if self.llm_negative_df is not None and len(self.llm_negative_df):
                     labeled_df_list.append(self.llm_negative_df.iloc[llm_negative_labeled_index]['o1_gt_anames'])
                 y_true = pd.Series([gt_udf_name in anames for anames in pd.concat(labeled_df_list)])
             elif n_obj == 2:
                 labeled_df_list = [df_train.iloc[labeled_index]['o1_o2_gt_rnames']]
-                if self.llm_positive_df is not None:
+                if self.llm_positive_df is not None and len(self.llm_positive_df):
                     labeled_df_list.append(self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_o2_gt_rnames'])
-                if self.llm_negative_df is not None:
+                if self.llm_negative_df is not None and len(self.llm_negative_df):
                     labeled_df_list.append(self.llm_negative_df.iloc[llm_negative_labeled_index]['o1_o2_gt_rnames'])
                 logger.debug(f"pd.concat(labeled_df_list): {pd.concat(labeled_df_list)}")
                 y_true = pd.Series([gt_udf_name in rnames for rnames in pd.concat(labeled_df_list)])
@@ -1570,9 +1572,9 @@ class UDFProposer:
             indices_to_remove = []
             for i in range(len(udf_candidate_list)):
                 labeled_df = [df_train.iloc[labeled_index]]
-                if self.llm_positive_df is not None:
+                if self.llm_positive_df is not None and len(self.llm_positive_df):
                     labeled_df.append(self.llm_positive_df.iloc[llm_positive_labeled_index])
-                if self.llm_negative_df is not None:
+                if self.llm_negative_df is not None and len(self.llm_negative_df):
                     labeled_df.append(self.llm_negative_df.iloc[llm_negative_labeled_index])
                 labeled_df = pd.concat(labeled_df)
                 try:
@@ -1634,9 +1636,9 @@ class UDFProposer:
             # Compute final f1 score (without adding one)
             for i in range(len(udf_candidate_list)):
                 labeled_df = [df_train.iloc[labeled_index]]
-                if self.llm_positive_df is not None:
+                if self.llm_positive_df is not None and len(self.llm_positive_df):
                     labeled_df.append(self.llm_positive_df.iloc[llm_positive_labeled_index])
-                if self.llm_negative_df is not None:
+                if self.llm_negative_df is not None and len(self.llm_negative_df):
                     labeled_df.append(self.llm_negative_df.iloc[llm_negative_labeled_index])
                 labeled_df = pd.concat(labeled_df)
                 try:

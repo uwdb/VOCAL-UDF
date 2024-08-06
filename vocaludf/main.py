@@ -241,149 +241,24 @@ if __name__ == "__main__":
                     if len(udf_vars) == 2:
                         gt_udf_candidates = ["near", "far", "right_of", "behind"]
                     else:
-                        gt_udf_candidates = [
-                            "location_right",
-                            "location_bottom",
-                            "color_brown",
-                            "color_purple",
-                            "color_cyan",
-                            "color_yellow",
-                            "shape_cylinder",
-                            "material_metal",
-                        ]
+                        gt_udf_candidates = ["location_right", "location_bottom", "color_brown", "color_purple", "color_cyan", "color_yellow", "shape_cylinder", "material_metal"]
                 elif dataset == "cityflow":
                     if len(udf_vars) == 1:
-                        gt_udf_candidates = [
-                            "suv",
-                            "white",
-                            "grey",
-                            "van",
-                            "sedan",
-                            "black",
-                            "red",
-                            "blue",
-                            "pickup_truck",
-                        ]
+                        gt_udf_candidates = ["suv", "white", "grey", "van", "sedan", "black", "red", "blue", "pickup_truck"]
                     else:
-                        gt_udf_candidates = [
-                            "above",
-                            "beneath",
-                            "to_the_left_of",
-                            "to_the_right_of",
-                            "in_front_of",
-                            "behind",
-                        ]
+                        gt_udf_candidates = ["above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"]
                 elif dataset == "charades":
-                    gt_udf_candidates = [
-                        "looking_at",
-                        "above",
-                        "in_front_of",
-                        "on_the_side_of",
-                        "carrying",
-                        "drinking_from",
-                        "have_it_on_the_back",
-                        "leaning_on",
-                        "not_contacting",
-                        "standing_on",
-                        "twisting",
-                        "wiping",
-                        "not_looking_at",
-                        "beneath",
-                        "behind",
-                        "in",
-                        "inside",
-                        "inside_of",
-                        "covered_by",
-                        "eating",
-                        "holding",
-                        "lying_on",
-                        "sitting_on",
-                        "touching",
-                        "wearing",
-                        "writing_on",
-                    ]
+                    gt_udf_candidates = ["looking_at", "above", "in_front_of", "on_the_side_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "not_contacting", "standing_on", "twisting", "wiping", "not_looking_at", "beneath", "behind", "in", "inside", "inside_of", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"]
                 elif dataset == "gqa":
                     if len(udf_vars) == 2:
-                        gt_udf_candidates = [
-                            "on",
-                            "near",
-                            "in_front_of",
-                            "next_to",
-                            "above",
-                            "below",
-                            "on_top_of",
-                            "sitting_on",
-                            "carrying",
-                            "to_the_left_of",
-                            "to_the_right_of",
-                            "wearing",
-                            "of",
-                            "behind",
-                            "in",
-                            "inside",
-                            "inside_of",
-                            "by",
-                            "on_the_side_of",
-                            "holding",
-                            "walking_on",
-                            "beside",
-                        ]
+                        gt_udf_candidates = ["on", "near", "in_front_of", "next_to", "above", "below", "on_top_of", "sitting_on", "carrying", "to_the_left_of", "to_the_right_of", "wearing", "of", "behind", "in", "inside", "inside_of", "by", "on_the_side_of", "holding", "walking_on", "beside"]
                     else:
-                        gt_udf_candidates = [
-                            "black",
-                            "blue",
-                            "red",
-                            "large",
-                            "wood",
-                            "tall",
-                            "orange",
-                            "dark",
-                            "pink",
-                            "clear",
-                            "white",
-                            "green",
-                            "brown",
-                            "gray",
-                            "small",
-                            "yellow",
-                            "metal",
-                            "long",
-                            "silver",
-                            "standing",
-                        ]
+                        gt_udf_candidates = ["black", "blue", "red", "large", "wood", "tall", "orange", "dark", "pink", "clear", "white", "green", "brown", "gray", "small", "yellow", "metal", "long", "silver", "standing"]
                 elif dataset == "vaw":
                     if len(udf_vars) == 2:
-                        gt_udf_candidates = [
-                            "above",
-                            "beneath",
-                            "to_the_left_of",
-                            "to_the_right_of",
-                            "in_front_of",
-                            "behind",
-                        ]
+                        gt_udf_candidates = ["above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"]
                     else:
-                        gt_udf_candidates = [
-                            "black",
-                            "blue",
-                            "brown",
-                            "gray",
-                            "small",
-                            "metal",
-                            "long",
-                            "dark",
-                            "rounded",
-                            "orange",
-                            "white",
-                            "green",
-                            "large",
-                            "red",
-                            "wooden",
-                            "yellow",
-                            "tall",
-                            "silver",
-                            "standing",
-                            "round",
-                        ]
+                        gt_udf_candidates = ["black", "blue", "brown", "gray", "small", "metal", "long", "dark", "rounded", "orange", "white", "green", "large", "red", "wooden", "yellow", "tall", "silver", "standing", "round"]
                 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
                 gt_udf_embeddings = model.encode(gt_udf_candidates)
                 implemented_udf_embedding = model.encode([udf_name])
@@ -414,7 +289,9 @@ if __name__ == "__main__":
 
             # TODO: since we already precomputed the UDF results, we can directly retrieve them from the database
             selected_udf_candidate = up.select(gt_udf_name, udf_candidate_list)
-
+            if selected_udf_candidate is None:
+                logger.warning("No UDF candidate is selected. Skipping...")
+                continue
             semantic_interpretation = selected_udf_candidate.semantic_interpretation
             function_implementation = selected_udf_candidate.function_implementation
 

@@ -6,6 +6,17 @@ import pyparsing as pp
 import logging
 import os
 
+def behind(o1_y1, o1_y2, o2_y1, o2_y2):
+    o1_center_y = (o1_y1 + o1_y2) / 2
+    o2_center_y = (o2_y1 + o2_y2) / 2
+    return o1_center_y < o2_center_y
+
+def behind(o1_y1, o1_y2, o2_y1, o2_y2, **kwargs):
+    threshold = kwargs.get('threshold', 50)
+    o1_cy = (o1_y1 + o1_y2) / 2
+    o2_cy = (o2_y1 + o2_y2) / 2
+    return o2_cy - o1_cy > threshold
+
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)

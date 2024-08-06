@@ -225,7 +225,7 @@ def generate_gt_labels_given_target_query(conn, query_str, ratio_lower_bound, ra
     ratio: minimum ratio of positive examples to negative examples
     """
     program = dsl_to_program(query_str)
-    available_udf_names = ["looking_at", "above", "in_front_of", "on_the_side_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "not_contacting", "standing_on", "twisting", "wiping", "not_looking_at", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"]
+    available_udf_names = ["above", "in_front_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "standing_on", "twisting", "wiping", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"]
     # TODO: add object UDFs. We should coalesce the objects into one UDF: object(o1, 'oname')
     input_vids = 9601
     _start = time.time()
@@ -307,7 +307,7 @@ def init_table(conn, dataset):
     print(f"Create one_object table:\n{sql}")
     conn.execute(sql, attribute_domain).df()
 
-    relationship_domain = ["looking_at", "above", "in_front_of", "on_the_side_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "not_contacting", "standing_on", "twisting", "wiping", "not_looking_at", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"]
+    relationship_domain = ["above", "in_front_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "standing_on", "twisting", "wiping", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"]
     rel_parameters = ','.join('?' for _ in relationship_domain)
     sql = f"""
         CREATE TEMPORARY TABLE two_objects AS

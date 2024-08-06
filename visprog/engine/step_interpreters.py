@@ -2074,26 +2074,7 @@ class TrackClevrerInterpreter():
         if self.use_precomputed:
             output_df = obj_df
         else:
-            # object tracking with ByteTrack
-            output = []
-            obj_df['score'] = 1
-            for fid, df_fid in obj_df.groupby('fid'):
-                dets = df_fid[['x1', 'y1', 'x2', 'y2', 'score', 'color', 'material', 'shape']].values
-                if dets is not None:
-                    online_targets = self.tracker.update(
-                        dets,
-                        self.args.img_info,
-                        self.args.img_info
-                    )
-                    for t in online_targets:
-                        tlwh = t._original_tlwh
-                        tid = t.track_id
-                        attrs = t.attrs
-                        vertical = tlwh[2] / tlwh[3] > self.args.aspect_ratio_thresh
-                        if tlwh[2] * tlwh[3] > self.args.min_box_area and not vertical:
-                            output.append([fid, tid, tlwh[0], tlwh[1], tlwh[0] + tlwh[2], tlwh[1] + tlwh[3], *attrs])
-            output_df = pd.DataFrame(output, columns=['fid', 'oid', 'x1', 'y1', 'x2', 'y2', 'color', 'material', 'shape'])
-            # TODO: Store output to database
+            raise NotImplementedError("only precomputed object tracking is supported for clevrer")
         prog_step.state[output_var] = output_df
         if inspect:
             raise NotImplementedError("inspect not supported for clevrer")
@@ -2478,8 +2459,7 @@ class BeforeClevrerInterpreter():
         # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
-
-#### VAW modules ####
+#### Charades modules ####
 class LocDuckdbInterpreter(LocInterpreter):
     def __init__(self, use_precomputed, dataset):
         self.dataset = dataset
@@ -2497,10 +2477,10 @@ class LocDuckdbInterpreter(LocInterpreter):
                 SELECT
                     o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
                     o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-                    COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
+                    COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_anames,
                     {height_width_clause}
                 FROM {self.dataset}_objects o1
-                LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+                LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
                 {metadata_join_clause}
                 GROUP BY {group_by_clause}
             """
@@ -2512,15 +2492,15 @@ class LocDuckdbInterpreter(LocInterpreter):
                 WITH relationships_expanded AS (
                     SELECT
                         vid, fid, oid1, oid2,
-                        ARRAY_AGG(DISTINCT rname) AS gt_rnames
-                    FROM {self.dataset}_relationships
+                        ARRAY_AGG(DISTINCT rname) AS rnames
+                    FROM {self.dataset}_relationship_predictions
                     GROUP BY vid, fid, oid1, oid2
                 )
                 SELECT
                     o1.vid AS vid, o1.fid AS fid,
                     o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
                     o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2,
-                    COALESCE(r1.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
+                    COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
                     {height_width_clause}
                 FROM {self.dataset}_objects o1
                 JOIN {self.dataset}_objects o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
@@ -2533,9 +2513,14 @@ class LocDuckdbInterpreter(LocInterpreter):
         else:
             raise NotImplementedError("Only precomputed bounding box is supported for VAW")
 
-class LocVawInterpreter(LocDuckdbInterpreter):
-    def __init__(self, use_precomputed):
-        super().__init__(use_precomputed, "vaw")
+    def parse(self,prog_step):
+        parse_result = parse_step(prog_step.prog_str)
+        step_name = parse_result['step_name']
+        video_var = parse_result['args']['video']
+        obj_name = eval(parse_result['args']['object'])
+        output_var = parse_result['output_var']
+        assert(step_name==self.step_name)
+        return video_var,obj_name,output_var
 
     def predict_precomputed(self,vid,obj_classes=None):
         one_object_df = self.conn.execute("SELECT * FROM one_object WHERE vid = ?", (vid,)).df()
@@ -2548,24 +2533,26 @@ class LocVawInterpreter(LocDuckdbInterpreter):
         """
         Return bounding box
         """
-        img_var,obj_name,output_var = self.parse(prog_step)
-        img = prog_step.state[img_var]
+        video_var,obj_name,output_var = self.parse(prog_step)
         if self.use_precomputed:
             vid = prog_step.state['vid']
             if obj_name=='object':
-                # Run clevrer object detector to detect all objects
                 one_object_df, two_objects_df = self.predict_precomputed(vid)
             else:
-                raise NotImplementedError("Precomputed bounding box only supports clevrer attributes")
+                raise NotImplementedError("Only object='object' is supported for precomputed bounding box")
         else:
-            raise NotImplementedError("Only precomputed bounding box is supported for VAW")
+            raise NotImplementedError("Only precomputed bounding box is supported for Charades")
         prog_step.state[output_var] = (one_object_df, two_objects_df)
         if inspect:
             raise NotImplementedError("inspect not supported for VAW")
 
         return (one_object_df, two_objects_df)
 
-class AttrVawInterpreter():
+class LocCharadesInterpreter(LocDuckdbInterpreter):
+    def __init__(self, use_precomputed):
+        super().__init__(use_precomputed, "charades")
+
+class AttrDuckdbInterpreter():
     def __init__(self):
         print(f'Registering {self.step_name} step')
 
@@ -2575,7 +2562,7 @@ class AttrVawInterpreter():
         obj_var = parse_result['args']['object']
         bind_variable = eval(parse_result['args']['var'])
         output_var = parse_result['output_var']
-        assert step_name.lower().replace("_", "") == self.step_name.lower().replace("_", "")
+        assert step_name.lower().replace("_", "") == self.step_name.lower().replace("/", "")
         return obj_var, bind_variable, output_var
 
     def html(self, obj_df, output_df, output_var):
@@ -2600,75 +2587,138 @@ class AttrVawInterpreter():
         output_df = duckdb.execute(f"""
             SELECT o1_oid as {bind_variable}_oid, vid, fid
             FROM one_object_df
-            WHERE '{self.step_name.lower()}' = ANY(o1_gt_anames)
+            WHERE '{self.step_name.lower()}' = ANY(o1_anames)
         """).df()
         prog_step.state[output_var] = output_df
         if inspect:
-            raise NotImplementedError("inspect not supported for VAW")
+            raise NotImplementedError("inspect not supported")
 
         return output_df
 
-class BlackVawInterpreter(AttrVawInterpreter):
-    step_name = 'black'
+class ObjDuckdbInterpreter(AttrDuckdbInterpreter):
+    def execute(self,prog_step,inspect=False):
+        obj_var, bind_variable, output_var = self.parse(prog_step)
+        one_object_df, two_objects_df = prog_step.state[obj_var]
+        output_df = duckdb.execute(f"""
+            SELECT o1_oid as {bind_variable}_oid, vid, fid
+            FROM one_object_df
+            WHERE o1_oname = '{self.step_name.lower()}'
+        """).df()
+        prog_step.state[output_var] = output_df
+        if inspect:
+            raise NotImplementedError("inspect not supported")
 
-class BlueVawInterpreter(AttrVawInterpreter):
-    step_name = 'blue'
+        return output_df
 
-class BrownVawInterpreter(AttrVawInterpreter):
-    step_name = 'brown'
+class PersonCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'person'
 
-class GrayVawInterpreter(AttrVawInterpreter):
-    step_name = 'gray'
+class BagCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'bag'
 
-class SmallVawInterpreter(AttrVawInterpreter):
-    step_name = 'small'
+class BedCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'bed'
 
-class MetalVawInterpreter(AttrVawInterpreter):
-    step_name = 'metal'
+class BlanketCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'blanket'
 
-class LongVawInterpreter(AttrVawInterpreter):
-    step_name = 'long'
+class BookCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'book'
 
-class DarkVawInterpreter(AttrVawInterpreter):
-    step_name = 'dark'
+class BoxCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'box'
 
-class RoundedVawInterpreter(AttrVawInterpreter):
-    step_name = 'rounded'
+class BroomCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'broom'
 
-class OrangeVawInterpreter(AttrVawInterpreter):
-    step_name = 'orange'
+class ChairCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'chair'
 
-class WhiteVawInterpreter(AttrVawInterpreter):
-    step_name = 'white'
+class ClosetCabinetCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'closet/cabinet'
 
-class GreenVawInterpreter(AttrVawInterpreter):
-    step_name = 'green'
+class ClothesCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'clothes'
 
-class LargeVawInterpreter(AttrVawInterpreter):
-    step_name = 'large'
+class CupGlassBottleCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'cup/glass/bottle'
 
-class RedVawInterpreter(AttrVawInterpreter):
-    step_name = 'red'
+class DishCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'dish'
 
-class WoodenVawInterpreter(AttrVawInterpreter):
-    step_name = 'wooden'
+class DoorCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'door'
 
-class YellowVawInterpreter(AttrVawInterpreter):
-    step_name = 'yellow'
+class DoorknobCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'doorknob'
 
-class TallVawInterpreter(AttrVawInterpreter):
-    step_name = 'tall'
+class DoorwayCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'doorway'
 
-class SilverVawInterpreter(AttrVawInterpreter):
-    step_name = 'silver'
+class FloorCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'floor'
 
-class StandingVawInterpreter(AttrVawInterpreter):
-    step_name = 'standing'
+class FoodCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'food'
 
-class RoundVawInterpreter(AttrVawInterpreter):
-    step_name = 'round'
+class GroceriesCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'groceries'
 
-class RelVawInterpreter():
+class LaptopCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'laptop'
+
+class LightCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'light'
+
+class MedicineCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'medicine'
+
+class MirrorCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'mirror'
+
+class PaperNotebookCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'paper/notebook'
+
+class PhoneCameraCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'phone/camera'
+
+class PictureCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'picture'
+
+class PillowCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'pillow'
+
+class RefrigeratorCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'refrigerator'
+
+class SandwichCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'sandwich'
+
+class ShelfCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'shelf'
+
+class ShoeCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'shoe'
+
+class SofaCouchCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'sofa/couch'
+
+class TableCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'table'
+
+class TelevisionCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'television'
+
+class TowelCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'towel'
+
+class VacuumCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'vacuum'
+
+class WindowCharadesInterpreter(ObjDuckdbInterpreter):
+    step_name = 'window'
+
+class RelDuckdbInterpreter():
     def __init__(self):
         print(f'Registering {self.step_name} step')
 
@@ -2693,7 +2743,7 @@ class RelVawInterpreter():
             WHERE o1.vid = o2.vid AND o1.fid = o2.fid AND o1.o1_oid <> o2.o1_oid
                 AND o1.vid = rel.vid AND o1.fid = rel.fid
                 AND rel.o1_oid = o1.o1_oid AND rel.o2_oid = o2.o1_oid
-                AND '{self.step_name.lower()}' = ANY(rel.o1_o2_gt_rnames)
+                AND '{self.step_name.lower()}' = ANY(rel.o1_o2_rnames)
         """).df()
         prog_step.state[output_var] = output_df
         if inspect:
@@ -2701,69 +2751,118 @@ class RelVawInterpreter():
         # print(f"{self.step_name} dataframe ", output_df.to_string())
         return output_df
 
-# "above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"
-class AboveVawInterpreter(RelVawInterpreter):
+class AboveCharadesInterpreter(RelDuckdbInterpreter):
     step_name = 'above'
 
-class BeneathVawInterpreter(RelVawInterpreter):
-    step_name = 'beneath'
-
-class ToTheLeftOfVawInterpreter(RelVawInterpreter):
-    step_name = 'to_the_left_of'
-
-class ToTheRightOfVawInterpreter(RelVawInterpreter):
-    step_name = 'to_the_right_of'
-
-class InFrontOfVawInterpreter(RelVawInterpreter):
+class InFrontOfCharadesInterpreter(RelDuckdbInterpreter):
     step_name = 'in_front_of'
 
-class BehindVawInterpreter(RelVawInterpreter):
+class CarryingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'carrying'
+
+class DrinkingFromCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'drinking_from'
+
+class HaveItOnTheBackCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'have_it_on_the_back'
+
+class LeaningOnCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'leaning_on'
+
+class StandingOnCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'standing_on'
+
+class TwistingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'twisting'
+
+class WipingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'wiping'
+
+class BeneathCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'beneath'
+
+class BehindCharadesInterpreter(RelDuckdbInterpreter):
     step_name = 'behind'
 
-class EventVawInterpreter():
-    step_name = 'EVENT'
+class InCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'in'
 
-    def __init__(self):
-        print(f'Registering {self.step_name} step')
+class CoveredByCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'covered_by'
 
-    def parse(self,prog_step):
-        parse_result = parse_step(prog_step.prog_str)
-        step_name = parse_result['step_name']
-        predicates_vars = parse_result['args']['predicates'][1:-1].split(',')
-        output_var = parse_result['output_var']
-        assert(step_name==self.step_name)
-        return predicates_vars, output_var
+class EatingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'eating'
 
-    def execute(self,prog_step,inspect=False):
-        predicates_vars, output_var = self.parse(prog_step)
-        variable_names = set()
-        # List of dataframes for each predicate
-        predicate_dfs = [prog_step.state[predicates_var] for predicates_var in predicates_vars]
-        # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
-        predicate_df_names = [f"pred{i}_df" for i in range(len(predicate_dfs))]
-        for predicate_df, predicate_df_name in zip(predicate_dfs, predicate_df_names):
-            # print(f"{predicate_df_name} dataframe ", predicate_df.to_string())
-            exec(f"{predicate_df_name} = predicate_df")
-            for col in predicate_df.columns:
-                if col.endswith('_oid'):
-                    variable_names.add(col)
-        # Compute natural join of dataframes. It's guaranteed that there are common columns for each pair of dataframes, as each dataframe has fid column.
-        from_join_clause = " natural join ".join(predicate_df_names)
-        where_clauses = []
-        for var_pair in itertools.combinations(variable_names, 2):
-                where_clauses.append(f"{var_pair[0]} <> {var_pair[1]}")
-        where_clauses = " and ".join(where_clauses)
-        if where_clauses:
-            output_df = duckdb.execute(f"SELECT * FROM {from_join_clause} WHERE {where_clauses}").df()
-        else:
-            output_df = duckdb.execute(f"SELECT * FROM {from_join_clause}").df()
-        # print("from_join_clause", from_join_clause)
+class HoldingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'holding'
 
-        prog_step.state[output_var] = output_df
-        if inspect:
-            raise NotImplementedError("inspect not supported for clevrer")
-        # print(f"{self.step_name} dataframe ", output_df)
-        return output_df
+class LyingOnCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'lying_on'
+
+class SittingOnCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'sitting_on'
+
+class TouchingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'touching'
+
+class WearingCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'wearing'
+
+class WritingOnCharadesInterpreter(RelDuckdbInterpreter):
+    step_name = 'writing_on'
+
+
+#### CityFlow modules ####
+class LocCityFlowInterpreter(LocDuckdbInterpreter):
+    def __init__(self, use_precomputed):
+        super().__init__(use_precomputed, "cityflow")
+
+# "suv", "white", "grey", "van", "sedan",  "black",  "red",  "blue", "pickup_truck"
+class SuvCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'suv'
+
+class WhiteCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'white'
+
+class GreyCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'grey'
+
+class VanCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'van'
+
+class SedanCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'sedan'
+
+class BlackCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'black'
+
+class RedCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'red'
+
+class BlueCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'blue'
+
+class PickupTruckCityFlowInterpreter(AttrDuckdbInterpreter):
+    step_name = 'pickup_truck'
+
+# "above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"
+class AboveCityFlowInterpreter(RelDuckdbInterpreter):
+    step_name = 'above'
+
+class InFrontOfCityFlowInterpreter(RelDuckdbInterpreter):
+    step_name = 'in_front_of'
+
+class BeneathCityFlowInterpreter(RelDuckdbInterpreter):
+    step_name = 'beneath'
+
+class BehindCityFlowInterpreter(RelDuckdbInterpreter):
+    step_name = 'behind'
+
+class ToTheLeftOfCityFlowInterpreter(RelDuckdbInterpreter):
+    step_name = 'to_the_left_of'
+
+class ToTheRightOfCityFlowInterpreter(RelDuckdbInterpreter):
+    step_name = 'to_the_right_of'
 
 #### Video counterparts ####
 class LocVideoInterpreter(LocInterpreter):
@@ -3357,44 +3456,6 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
         else:
             registered_modules = {key: all_modules[key] for key in module_list}
             return registered_modules
-    elif dataset=='vaw':
-        all_modules = dict(
-            LOC=LocVawInterpreter(use_precomputed),
-            BLACK=BlackVawInterpreter(),
-            BLUE=BlueVawInterpreter(),
-            BROWN=BrownVawInterpreter(),
-            GRAY=GrayVawInterpreter(),
-            SMALL=SmallVawInterpreter(),
-            METAL=MetalVawInterpreter(),
-            LONG=LongVawInterpreter(),
-            DARK=DarkVawInterpreter(),
-            ROUNDED=RoundedVawInterpreter(),
-            ORANGE=OrangeVawInterpreter(),
-            WHITE=WhiteVawInterpreter(),
-            GREEN=GreenVawInterpreter(),
-            LARGE=LargeVawInterpreter(),
-            RED=RedVawInterpreter(),
-            WOODEN=WoodenVawInterpreter(),
-            YELLOW=YellowVawInterpreter(),
-            TALL=TallVawInterpreter(),
-            SILVER=SilverVawInterpreter(),
-            STANDING=StandingVawInterpreter(),
-            ROUND=RoundVawInterpreter(),
-            ABOVE=AboveVawInterpreter(),
-            BENEATH=BeneathVawInterpreter(),
-            TOTHELEFTOF=ToTheLeftOfVawInterpreter(),
-            TOTHERIGHTOF=ToTheRightOfVawInterpreter(),
-            INFRONTOF=InFrontOfVawInterpreter(),
-            BEHIND=BehindVawInterpreter(),
-            EVENT=EventClevrInterpreter(),
-            EVAL=EvalInterpreter(),
-            RESULT=ResultInterpreter()
-        )
-        if module_list is None:
-            return all_modules
-        else:
-            registered_modules = {key: all_modules[key] for key in module_list}
-            return registered_modules
     elif dataset=='clevrer':
         all_modules = dict(
             LOC=LocClevrerInterpreter(use_precomputed),
@@ -3437,6 +3498,108 @@ def register_step_interpreters(dataset='nlvr', use_precomputed=False, module_lis
         duckdb.create_function("Behind", behind)
         duckdb.create_function("Far", far)
         duckdb.create_function("Near", near)
+        if module_list is None:
+            return all_modules
+        else:
+            registered_modules = {key: all_modules[key] for key in module_list}
+            return registered_modules
+    elif dataset=='charades':
+        all_modules = dict(
+            LOC=LocCharadesInterpreter(use_precomputed),
+            TRACK=TrackClevrerInterpreter(use_precomputed),
+            # "person", "bag", "bed", "blanket", "book", "box", "broom", "chair", "closet/cabinet", "clothes", "cup/glass/bottle", "dish", "door", "doorknob", "doorway", "floor", "food", "groceries", "laptop", "light", "medicine", "mirror", "paper/notebook", "phone/camera", "picture", "pillow", "refrigerator", "sandwich", "shelf", "shoe", "sofa/couch", "table", "television", "towel", "vacuum", "window"
+            PERSON=PersonCharadesInterpreter(),
+            BAG=BagCharadesInterpreter(),
+            BED=BedCharadesInterpreter(),
+            BLANKET=BlanketCharadesInterpreter(),
+            BOOK=BookCharadesInterpreter(),
+            BOX=BoxCharadesInterpreter(),
+            BROOM=BroomCharadesInterpreter(),
+            CHAIR=ChairCharadesInterpreter(),
+            CLOSETCABINET=ClosetCabinetCharadesInterpreter(),
+            CLOTHES=ClothesCharadesInterpreter(),
+            CUPGLASSBOTTLE=CupGlassBottleCharadesInterpreter(),
+            DISH=DishCharadesInterpreter(),
+            DOOR=DoorCharadesInterpreter(),
+            DOORKNOB=DoorknobCharadesInterpreter(),
+            DOORWAY=DoorwayCharadesInterpreter(),
+            FLOOR=FloorCharadesInterpreter(),
+            FOOD=FoodCharadesInterpreter(),
+            GROCERIES=GroceriesCharadesInterpreter(),
+            LAPTOP=LaptopCharadesInterpreter(),
+            LIGHT=LightCharadesInterpreter(),
+            MEDICINE=MedicineCharadesInterpreter(),
+            MIRROR=MirrorCharadesInterpreter(),
+            PAPERNOTEBOOK=PaperNotebookCharadesInterpreter(),
+            PHONECAMERA=PhoneCameraCharadesInterpreter(),
+            PICTURE=PictureCharadesInterpreter(),
+            PILLOW=PillowCharadesInterpreter(),
+            REFRIGERATOR=RefrigeratorCharadesInterpreter(),
+            SANDWICH=SandwichCharadesInterpreter(),
+            SHELF=ShelfCharadesInterpreter(),
+            SHOE=ShoeCharadesInterpreter(),
+            SOFACOUCH=SofaCouchCharadesInterpreter(),
+            TABLE=TableCharadesInterpreter(),
+            TELEVISION=TelevisionCharadesInterpreter(),
+            TOWEL=TowelCharadesInterpreter(),
+            VACUUM=VacuumCharadesInterpreter(),
+            WINDOW=WindowCharadesInterpreter(),
+            # "above", "in_front_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "standing_on", "twisting", "wiping", "beneath", "behind", "in", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"
+            ABOVE=AboveCharadesInterpreter(),
+            INFRONTOF=InFrontOfCharadesInterpreter(),
+            CARRYING=CarryingCharadesInterpreter(),
+            DRINKINGFROM=DrinkingFromCharadesInterpreter(),
+            HAVEITONTHEBACK=HaveItOnTheBackCharadesInterpreter(),
+            LEANINGON=LeaningOnCharadesInterpreter(),
+            STANDINGON=StandingOnCharadesInterpreter(),
+            TWISTING=TwistingCharadesInterpreter(),
+            WIPING=WipingCharadesInterpreter(),
+            BENEATH=BeneathCharadesInterpreter(),
+            BEHIND=BehindCharadesInterpreter(),
+            IN=InCharadesInterpreter(),
+            COVEREDBY=CoveredByCharadesInterpreter(),
+            EATING=EatingCharadesInterpreter(),
+            HOLDING=HoldingCharadesInterpreter(),
+            LYINGON=LyingOnCharadesInterpreter(),
+            SITTINGON=SittingOnCharadesInterpreter(),
+            TOUCHING=TouchingCharadesInterpreter(),
+            WEARING=WearingCharadesInterpreter(),
+            WRITINGON=WritingOnCharadesInterpreter(),
+            EVENT=EventClevrerInterpreter(),
+            BEFORE=BeforeClevrerInterpreter(),
+            EVAL=EvalInterpreter(),
+            RESULT=ResultInterpreter()
+        )
+        if module_list is None:
+            return all_modules
+        else:
+            registered_modules = {key: all_modules[key] for key in module_list}
+            return registered_modules
+    elif dataset=='cityflow':
+        all_modules = dict(
+            LOC=LocCityFlowInterpreter(use_precomputed),
+            TRACK=TrackClevrerInterpreter(use_precomputed),
+            # "suv", "white", "grey", "van", "sedan",  "black",  "red",  "blue", "pickup_truck", "above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"
+            SUV=SuvCityFlowInterpreter(),
+            WHITE=WhiteCityFlowInterpreter(),
+            GREY=GreyCityFlowInterpreter(),
+            VAN=VanCityFlowInterpreter(),
+            SEDAN=SedanCityFlowInterpreter(),
+            BLACK=BlackCityFlowInterpreter(),
+            RED=RedCityFlowInterpreter(),
+            BLUE=BlueCityFlowInterpreter(),
+            PICKUPTRUCK=PickupTruckCityFlowInterpreter(),
+            ABOVE=AboveCityFlowInterpreter(),
+            BENEATH=BeneathCityFlowInterpreter(),
+            TOTHELEFTOF=ToTheLeftOfCityFlowInterpreter(),
+            TOTHERIGHTOF=ToTheRightOfCityFlowInterpreter(),
+            INFRONTOF=InFrontOfCityFlowInterpreter(),
+            BEHIND=BehindCityFlowInterpreter(),
+            EVENT=EventClevrerInterpreter(),
+            BEFORE=BeforeClevrerInterpreter(),
+            EVAL=EvalInterpreter(),
+            RESULT=ResultInterpreter()
+        )
         if module_list is None:
             return all_modules
         else:
