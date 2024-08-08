@@ -9,7 +9,7 @@ The project uses `conda` to manage dependencies. To install conda, follow the in
 ```sh
 # Clone the repository
 git clone https://github.com/uwdb/VOCAL-UDF.git
-cd EQUI-VOCAL
+cd VOCAL-UDF
 
 # Create a conda environment (called vocal-udf) and install dependencies
 conda env create -f environment.yml --name vocal-udf
