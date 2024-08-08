@@ -1,8 +1,7 @@
-from src.utils import program_to_dsl, dsl_to_program, postgres_execute, postgres_execute_cache_sequence, print_scene_graph_helper
 import duckdb
 import itertools
 import copy
-from vocaludf.parser import parse, parse_udf
+from vocaludf.parser import parse_udf
 import json
 import logging
 import os
@@ -82,6 +81,78 @@ class PredImageDataset(IterableDataset):
             for (_, row), feature in zip(metadata.iterrows(), feature_col):
                 yield np.array(row.to_numpy(dtype=int)), torch.tensor(feature, dtype=torch.float32)
 
+def print_scene_graph(predicate_list):
+    if len(predicate_list) == 1:
+        return print_scene_graph_helper(predicate_list)
+    else:
+        return "({})".format(print_scene_graph_helper(predicate_list))
+
+def print_scene_graph_helper(predicate_list):
+    predicate = predicate_list[-1]
+    predicate_name = predicate['predicate']
+    # f"{predicate['predicate']}_{predicate.get('parameter')}" if predicate.get('parameter') else predicate['predicate']
+    predicate_variables = ", ".join(predicate["variables"])
+    if predicate.get("parameter"):
+        if isinstance(predicate["parameter"], str):
+            predicate_variables = "{}, '{}'".format(predicate_variables, predicate["parameter"])
+        else:
+            predicate_variables = "{}, {}".format(predicate_variables, predicate["parameter"])
+    if len(predicate_list) == 1:
+        return "{}({})".format(predicate_name, predicate_variables)
+    else:
+        return "{}, {}({})".format(print_scene_graph_helper(predicate_list[:-1]), predicate_name, predicate_variables)
+
+def program_to_dsl(orig_program, rewrite_variables=True, sort_variables=True):
+    """
+    Input:
+    program: query in the dictionary format
+    Output: query in dsl string format, which is ordered properly (uniquely).
+    NOTE: For trajectories, we don't rewrite the variables, since we expect the query to indicate which objects the predicate is referring to, as assumed in the Quivr paper.
+    """
+    def print_query(scene_graphs):
+        if len(scene_graphs) == 1:
+            return scene_graphs[0]
+        else:
+            return "{}; {}".format(print_query(scene_graphs[:-1]), scene_graphs[-1])
+
+    program = copy.deepcopy(orig_program)
+    # Rewrite the program
+    encountered_variables = []
+    for dict in program:
+        scene_graph = dict["scene_graph"]
+        scene_graph = sorted(scene_graph, key=lambda x: x["predicate"] + " ".join(x["variables"]))
+        if rewrite_variables:
+            # Rewrite variables
+            for i, p in enumerate(scene_graph):
+                rewritten_variables = []
+                for v in p["variables"]:
+                    if v not in encountered_variables:
+                        encountered_variables.append(v)
+                        rewritten_variables.append("o" + str(len(encountered_variables) - 1))
+                    else:
+                        rewritten_variables.append("o" + str(encountered_variables.index(v)))
+                # Sort rewritten variables
+                # NOTE: Why do we want to sort?
+                # We assume that the order of variables in a predicate does not matter:
+                # 1) Near(o1, o2) == Near(o2, o1)
+                # 2) Although LeftOf(o1, o2) != LeftOf(o2, o1), we have LeftOf(o1, o2) == RightOf(o2, o1)
+                # However, this is not true in general.
+                if sort_variables:
+                    rewritten_variables = sorted(rewritten_variables)
+                scene_graph[i]["variables"] = rewritten_variables
+        dict["scene_graph"] = scene_graph
+
+    scene_graphs = []
+    for dict in program:
+        scene_graph = dict["scene_graph"]
+        duration_constraint = int(dict["duration_constraint"])
+        scene_graph_str = print_scene_graph(scene_graph)
+        if duration_constraint > 1:
+            scene_graph_str = "Duration({}, {})".format(scene_graph_str, duration_constraint)
+        scene_graphs.append(scene_graph_str)
+
+    query = print_query(scene_graphs)
+    return query
 
 def parse_signature(signature):
     """

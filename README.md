@@ -2,17 +2,29 @@
 
 A prototype implementation of VOCAL-UDF, which is a self-enhancing video data management system that empowers users to flexibly issue and answer compositional queries, even when the modules necessary to answer those queries are unavailable. See the [technical report](https://arxiv.org/abs/2408.02243) for more details.
 
-## Virtual environment
+## Setup Instructions
 
-```bash
-conda activate equi-vocal
-cd EQUI-VOCAL/
+The project uses `conda` to manage dependencies. To install conda, follow the instructions [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/).
+
+```sh
+# Clone the repository
+git clone https://github.com/uwdb/VOCAL-UDF.git
+cd EQUI-VOCAL
+
+# Create a conda environment (called vocal-udf) and install dependencies
+conda env create -f environment.yml --name vocal-udf
+conda activate vocal-udf
 python -m pip install -e .
 ```
 
-## Run experiment
+## Prepare Data
 
-# VOCAL-UDF
+TODO
+
+## Run experiment
+```bash
+cd scripts
+```
 1. Generate UDFs
 ```bash
 ./exp-vocal_udf_main_{dataset}.sh
@@ -21,14 +33,4 @@ python -m pip install -e .
 2. Execute query with new UDFs
 ```bash
 ./exp-vocal_udf_query_execution_{dataset}.sh
-```
-
-# EQUI-VOCAL
-```bash
-./exp-evaluate_equivocal.sh
-```
-
-# VisProg
-```bash
-./exp-visprog.sh
 ```
