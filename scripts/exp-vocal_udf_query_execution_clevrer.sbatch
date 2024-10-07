@@ -4,7 +4,7 @@
 #SBATCH --account=cse
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a40:1
 #SBATCH --mem=200G
 #SBATCH --time=4:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"
@@ -44,7 +44,7 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --allow_kwargs_in_udf \
         --program_with_pixels \
         --num_parameter_search 5 \
-        --cpus 4 \
+        --cpus 8 \
         --n_train_distill 100 \
         --selection_strategy "both" \
         --selection_labels "user" \
@@ -52,4 +52,4 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --dali_batch_size 1 \
         --llm_method "gpt4v"
 
-# python run_query_executor.py --num_missing_udfs 3 --query_id 3 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --cpus 4 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
+# python run_query_executor.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --cpus 8 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"

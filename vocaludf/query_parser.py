@@ -1,7 +1,8 @@
 from typing_extensions import Annotated
 import autogen
+from autogen import gather_usage_summary
 from vocaludf.parser import parse
-from vocaludf.utils import replace_slot
+from vocaludf.utils import replace_slot, MODEL_COST, RESOLVE_MODEL_NAME
 import pyparsing as pp
 import logging
 import os
@@ -29,10 +30,12 @@ class QueryParser:
         registered_functions,
         object_domain,
         run_id,
+        openai_model_name,
         allow_new_udfs=True,
     ):
         self.config = config
         self.run_id = run_id
+        self.openai_model_name = RESOLVE_MODEL_NAME[openai_model_name]
         self.allow_new_udfs = allow_new_udfs
         self.registered_function_names = []
         for registered_function in registered_functions:
@@ -40,6 +43,7 @@ class QueryParser:
                 registered_function["signature"].split("(")[0].lower()
             )
         self.object_domain = object_domain
+        self.cost_estimation = 0
         if dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
             dsl_definition_prompt = prompt_config["dsl_definition"]
         elif dataset in ["clevr", "gqa", "vaw"]:  # image dataset
@@ -140,7 +144,7 @@ class QueryParser:
                 system_message=self.system_message,
                 llm_config={
                     "config_list": [{
-                        'model': 'gpt-4-turbo-2024-04-09',
+                        'model': self.openai_model_name,
                         'api_key': os.getenv("OPENAI_API_KEY"),
                     }],
                     "timeout": 120,
@@ -172,8 +176,12 @@ class QueryParser:
                 flag = chat_messages[-1]["content"].strip().lower()
                 logger.debug("flag {}".format(flag))
                 if self.allow_new_udfs and ("parse_yes" in flag or "parse_no" in flag):
+                    usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
+                    self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
                     return flag
                 elif not self.allow_new_udfs and "terminate" in flag:
+                    usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
+                    self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
                     return flag
         # The conversation didn't end with the user's message (YES/NO)
         # Assume NO
@@ -183,6 +191,8 @@ class QueryParser:
                 flag
             )
         )
+        usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
+        self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
         return flag
 
     def get_parsed_program(self):
@@ -190,3 +200,6 @@ class QueryParser:
 
     def get_parsed_query(self):
         return self.parsed_query
+
+    def get_cost_estimation(self):
+        return self.cost_estimation

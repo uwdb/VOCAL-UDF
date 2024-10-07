@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --mem=100G
+#SBATCH --mem=150G
 #SBATCH --time=4:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"
 
@@ -32,7 +32,7 @@ echo "num_missing_udfs: $num_missing_udfs"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/main.py \
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/async_main.py \
         --num_missing_udfs $num_missing_udfs \
         --run_id $run \
         --query_id $query_id \
@@ -50,6 +50,8 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --n_train_distill 100 \
         --selection_strategy "both" \
         --selection_labels "user" \
-        --llm_method "gpt4v"
+        --llm_method "gpt4v" \
+        --is_async \
+        --openai_model_name "gpt-4o"
 
 # python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"

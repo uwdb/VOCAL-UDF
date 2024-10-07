@@ -1,3 +1,4 @@
+from collections import defaultdict
 import yaml
 import random
 import json
@@ -13,6 +14,7 @@ from vocaludf.query_executor import QueryExecutor
 import duckdb
 import sys
 import resource
+import asyncio
 
 # logging.basicConfig()
 logger = logging.getLogger("vocaludf")
@@ -22,8 +24,8 @@ def using(point=""):
     usage=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
-if __name__ == "__main__":
-    # clevrer: python main.py --num_missing_udfs 3 --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
+async def main():
+    # clevrer: python main.py --num_missing_udfs 1 --query_id 2 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
     # cityflow: python main.py --num_missing_udfs 1 --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     # charades: python main.py --num_missing_udfs 1 --query_id 3 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     # gqa: python main.py --num_missing_udfs 1 --query_id 0 --run_id 0 --dataset "gqa" --query_class_name "unavailable=2-npred=1-nattr_pred=1-nobj_pred=0-nvars=2-min_npos=100-max_npos=5000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
@@ -54,6 +56,8 @@ if __name__ == "__main__":
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
     parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
     parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
+    parser.add_argument("--openai_model_name", type=str, default="gpt-4-turbo-2024-04-09", help="OpenAI model name")
 
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
@@ -79,6 +83,8 @@ if __name__ == "__main__":
     selection_strategy = args.selection_strategy
     selection_labels = args.selection_labels
     llm_method = args.llm_method
+    is_async = args.is_async
+    openai_model_name = args.openai_model_name
     # if selection_strategy != "program":
     #     assert program_with_pixels, "selection_strategy != 'program' requires program_with_pixels"
 
@@ -183,12 +189,17 @@ if __name__ == "__main__":
     materialized_df_names = []
     on_the_fly_udf_names = []
 
+    cost_estimation = defaultdict(int)
     # Parse query
+    logger.info("Query parsing started")
     qp = QueryParser(
-        config, prompt_config, dataset, registered_functions, object_domain, run_id
+        config, prompt_config, dataset, registered_functions, object_domain, run_id, openai_model_name
     )
     flag = qp.parse(user_query)
+    cost_estimation['query_parser'] += qp.get_cost_estimation()
+    logger.info("Query parsing finished")
     if 'parse_no' in flag:
+        logger.info("UDF proposal started")
         # Step 1: propose new UDFs
         up = UDFProposer(
             config,
@@ -204,6 +215,7 @@ if __name__ == "__main__":
             num_parameter_search,
             program_with_pixels,
             program_with_pretrained_models,
+            query_class_name,
             query_id,
             run_id,
             num_workers,
@@ -214,9 +226,13 @@ if __name__ == "__main__":
             selection_labels,
             allow_kwargs_in_udf,
             llm_method,
+            is_async,
+            openai_model_name
         )
         proposed_functions = up.propose(user_query)
+        logger.info("UDF proposal finished")
         for udf_signature, udf_description in proposed_functions.items():
+            logger.info("UDF generation started")
             # First, retrieve the ground truth UDF
             if ask_for_gt_udf:
                 # Ask the user for gt_udf name
@@ -281,12 +297,13 @@ if __name__ == "__main__":
             # Step 2.a: generate semantic interpretations and implementations. Save the generated UDFs to disk
             # Step 2.b: Distilled-model UDFs
             # udf_candidate_list = up.implement(udf_signature, udf_description)
-            udf_candidate_list = up.implement(udf_signature, udf_description, gt_udf_name)
-
+            udf_candidate_list = await up.implement(udf_signature, udf_description, gt_udf_name)
+            logger.info("UDF generation finished")
             # # Step 3: Select the best UDF (determine the best UDF between model-based and program-based)
             # NOTE: If we use GPT-4 to provide feedback with zero user effort, how to incorporate the feedback into the UDF selection process?
 
             # TODO: since we already precomputed the UDF results, we can directly retrieve them from the database
+            logger.info("UDF selection started")
             selected_udf_candidate = up.select(gt_udf_name, udf_candidate_list)
             if selected_udf_candidate is None:
                 logger.warning("No UDF candidate is selected. Skipping...")
@@ -312,8 +329,11 @@ if __name__ == "__main__":
                 materialized_df_names.append(parse_signature(udf_signature)[0])
             else:
                 on_the_fly_udf_names.append(parse_signature(udf_signature)[0])
+            logger.info("UDF selection finished")
+        cost_estimation.update(up.get_cost_estimation())
         # Step 6: Re-parse the query
         # NOTE: Set allow_new_udfs=False. If the parser still wants to propose new UDFs, we will force it to generate a query that is the best approximation.
+        logger.info("Query parsing started")
         qp = QueryParser(
             config,
             prompt_config,
@@ -321,9 +341,12 @@ if __name__ == "__main__":
             registered_functions,
             object_domain,
             run_id,
+            openai_model_name,
             allow_new_udfs=False,
         )
         qp.parse(user_query)
+        cost_estimation['query_parser'] += qp.get_cost_estimation()
+        logger.info("Query parsing finished")
     if generate:
         output_dir = os.path.join(
             config["output_dir"],
@@ -358,4 +381,8 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception("QueryExecutor Error: {}".format(e))
             logger.info("F1 score: 0")
+    logger.info("Cost estimation: {}".format(cost_estimation))
     logger.info("Peak memory usuage (in GB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024.0/1024.0))
+
+if __name__ == "__main__":
+    asyncio.run(main())

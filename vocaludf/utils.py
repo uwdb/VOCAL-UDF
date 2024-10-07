@@ -16,6 +16,18 @@ logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+MODEL_COST = {
+    "gpt-4o": [2.5 / 1e6, 10 / 1e6], # input cost per token, output cost per token
+    "gpt-4o-2024-08-06": [2.5 / 1e6, 10 / 1e6],
+    "gpt-4-turbo-2024-04-09": [10 / 1e6, 30 / 1e6],
+}
+
+RESOLVE_MODEL_NAME = {
+    "gpt-4o": "gpt-4o-2024-08-06",
+    "gpt-4o-2024-08-06": "gpt-4o-2024-08-06",
+    "gpt-4-turbo-2024-04-09": "gpt-4-turbo-2024-04-09",
+}
+
 class StreamToLogger(object):
     """
     Fake file-like stream object that redirects writes to a logger instance.
@@ -80,6 +92,20 @@ class PredImageDataset(IterableDataset):
 
             for (_, row), feature in zip(metadata.iterrows(), feature_col):
                 yield np.array(row.to_numpy(dtype=int)), torch.tensor(feature, dtype=torch.float32)
+
+
+def expand_box(x1,y1,x2,y2,img_size,factor=1.5):
+        H, W = img_size
+        dw = int(factor*(x2-x1)/2)
+        dh = int(factor*(y2-y1)/2)
+        cx = int((x1 + x2) / 2)
+        cy = int((y1 + y2) / 2)
+        x1 = max(0,cx - dw)
+        x2 = min(cx + dw,W)
+        y1 = max(0,cy - dh)
+        y2 = min(cy + dh,H)
+        return [x1,y1,x2,y2]
+
 
 def print_scene_graph(predicate_list):
     if len(predicate_list) == 1:

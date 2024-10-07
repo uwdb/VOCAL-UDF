@@ -1,5 +1,6 @@
 from typing_extensions import Annotated
 import autogen
+from autogen import gather_usage_summary
 import json
 from typing import Tuple, List
 import os
@@ -9,7 +10,9 @@ from vocaludf.utils import (
     replace_slot,
     parse_signature,
     transform_function,
-    PredImageDataset
+    PredImageDataset,
+    MODEL_COST,
+    RESOLVE_MODEL_NAME,
 )
 from vocaludf.pretrained_model_api import image_captioning, visual_question_answering, depth_estimation
 import multiprocessing
@@ -21,7 +24,7 @@ import signal
 import resource
 import duckdb
 import logging
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 import re
 from collections import defaultdict
 import importlib
@@ -40,15 +43,18 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_random_exponential,
+    after_log,
 )  # for exponential backoff
 import string
 import lightning.pytorch as pl
 from vocaludf import mlp
 import torchvision.ops as ops
 import torchvision.transforms as T
+import asyncio
 
 tqdm.pandas()
-client = OpenAI()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+async_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -56,7 +62,11 @@ logger.setLevel(logging.DEBUG)
 
 SamplingStrategy = Enum('SamplingStrategy', ['positive', 'negative', 'uncertainty'])
 
-@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
+@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6), after=after_log(logger, logging.DEBUG))
+async def async_completion_with_backoff(**kwargs):
+    return await async_client.chat.completions.create(**kwargs)
+
+@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6), after=after_log(logger, logging.DEBUG))
 def completion_with_backoff(**kwargs):
     return client.chat.completions.create(**kwargs)
 
@@ -113,6 +123,7 @@ class UDFProposer:
         num_parameter_search,
         program_with_pixels,
         program_with_pretrained_models,
+        query_class_name,
         query_id,
         run_id,
         num_workers,
@@ -122,7 +133,9 @@ class UDFProposer:
         selection_strategy,
         selection_labels,
         allow_kwargs_in_udf,
-        llm_method
+        llm_method,
+        is_async,
+        openai_model_name
     ):
         self.config = config
         self.prompt_config = prompt_config
@@ -137,6 +150,7 @@ class UDFProposer:
         self.num_parameter_search = num_parameter_search
         self.program_with_pixels = program_with_pixels
         self.program_with_pretrained_models = program_with_pretrained_models
+        self.query_class_name = query_class_name
         self.query_id = query_id
         self.run_id = run_id
         self.num_workers = num_workers
@@ -144,8 +158,11 @@ class UDFProposer:
         self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
         self.llm_method = llm_method
+        self.is_async = is_async
+        self.openai_model_name = RESOLVE_MODEL_NAME[openai_model_name]
 
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.cost_estimation = defaultdict(int)
 
         self.conn = duckdb.connect(
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
@@ -153,7 +170,9 @@ class UDFProposer:
         )
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
 
+        logger.info("Table initialization started")
         self.init_table()
+        logger.info("Table initialization finished")
 
         # Create a train and test split
         # NOTE: probably put these values in the config file
@@ -215,6 +234,9 @@ class UDFProposer:
             """).df()
             self.vid_to_vname = {(vid, fid): vname for vid, fid, vname in zip(df_metadata['vid'], df_metadata['fid'], df_metadata['vname'])}
 
+    def get_cost_estimation(self):
+        return self.cost_estimation
+
     def init_table(self):
         metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
         height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
@@ -248,8 +270,8 @@ class UDFProposer:
             {metadata_join_clause}
             {where_clause}
             GROUP BY {group_by_clause}
-            ORDER BY o1.vid, o1.fid, o1.oid, o1.x1, o1.y1, o1.x2, o1.y2
         """
+        # ORDER BY o1.vid, o1.fid, o1.oid, o1.x1, o1.y1, o1.x2, o1.y2
         logger.debug(f"Create one_object table:\n{sql}")
         self.one_object_df = self.conn.execute(sql, self.attribute_domain if self.dataset == 'vaw' else self.attribute_domain + self.object_domain).df()
 
@@ -303,8 +325,8 @@ class UDFProposer:
             {metadata_join_clause}
             WHERE o1.oid <> o2.oid
             {filter_train_vid_clause}
-            ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         """
+        # ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         logger.debug(f"Create two_objects table:\n{sql}")
         self.two_objects_df = self.conn.execute(sql, self.attribute_domain + self.relationship_domain if self.dataset == 'vaw' else self.attribute_domain + self.object_domain + self.relationship_domain).df()
 
@@ -314,7 +336,9 @@ class UDFProposer:
     ############# Proposing UDFs #############
     ############                 #############
     ##########################################
+    # TODO: Add cost estimation
     def propose(self, user_query):
+        self.proposed_functions = {}
         # Step 1: propose new UDFs
         logger.info("Proposing new UDFs")
         if self.dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
@@ -346,7 +370,7 @@ class UDFProposer:
             system_message=system_message,
             llm_config={
                 "config_list": [{
-                    'model': 'gpt-4-turbo-2024-04-09',
+                    'model': self.openai_model_name,
                     'api_key': os.getenv("OPENAI_API_KEY"),
                 }],
                 "timeout": 120,
@@ -388,9 +412,8 @@ class UDFProposer:
                 if len(invalid_funcs) > 0:
                     return f"Invalid number of arguments for proposed functions: {invalid_funcs}."
                 else:
-                    self.proposed_functions = {
-                        func[0]: func[1] for func in proposed_functions
-                    }
+                    for func in proposed_functions:
+                        self.proposed_functions[func[0]] = func[1]
                     return "Success"
             except Exception as e:
                 return "Error: " + str(e)
@@ -401,6 +424,8 @@ class UDFProposer:
             udf_proposer,
             message=f"User query: {user_query}",
         )
+        usage_summary = gather_usage_summary([udf_proposer, user_proxy])["usage_including_cached_inference"][self.openai_model_name]
+        self.cost_estimation["propose_udfs"] += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
 
         try:
             logger.info(
@@ -424,8 +449,7 @@ class UDFProposer:
             f"Error: {e}"
             return {}
 
-
-    def implement(self, udf_signature, udf_description, gt_udf_name):
+    async def implement(self, udf_signature, udf_description, gt_udf_name):
         # TODO: incorporate labels (maybe in the selection stage)
         if self.selection_strategy == "program":
             if self.selection_labels == "none" and self.allow_kwargs_in_udf:
@@ -433,7 +457,7 @@ class UDFProposer:
                 logger.info("Turning off allow_kwargs_in_udf since no labels are provided")
             return self._generate_program(udf_signature, udf_description)
         elif self.selection_strategy == "model":
-            return self._distill_model(udf_signature, udf_description, gt_udf_name)
+            return await self._distill_model(udf_signature, udf_description, gt_udf_name)
         elif self.selection_strategy == "llm":
             if self.selection_labels == "none" and self.allow_kwargs_in_udf:
                 self.allow_kwargs_in_udf = False
@@ -442,12 +466,12 @@ class UDFProposer:
             if llm_decision == "programUDF":
                 return self._generate_program(udf_signature, udf_description)
             elif llm_decision == "modelUDF":
-                return self._distill_model(udf_signature, udf_description, gt_udf_name)
+                return await self._distill_model(udf_signature, udf_description, gt_udf_name)
             else:
                 raise NotImplementedError(f"llm_decision: {llm_decision} is not supported yet.")
         elif self.selection_strategy == "both":
             program_udf_candidates = self._generate_program(udf_signature, udf_description)
-            model_udf_candidates = self._distill_model(udf_signature, udf_description, gt_udf_name)
+            model_udf_candidates = await self._distill_model(udf_signature, udf_description, gt_udf_name)
             return program_udf_candidates + model_udf_candidates
 
 
@@ -474,7 +498,7 @@ class UDFProposer:
             try:
                 logger.debug(f"trial: {trial}")
                 response = self.client.chat.completions.create(
-                    model="gpt-4-turbo-2024-04-09",
+                    model=self.openai_model_name,
                     messages=[
                         {
                             "role": "system",
@@ -487,6 +511,7 @@ class UDFProposer:
                     seed=self.run_id * 42 + trial,
                 )
                 llm_decision = response.choices[0].message.content
+                self.cost_estimation["decide_udf_type"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
                 logger.debug(f"llm_decision: {llm_decision}")
                 if "programUDF" in llm_decision:
                     return "programUDF"
@@ -570,7 +595,7 @@ class UDFProposer:
             try:
                 logger.debug(f"trial: {trial}")
                 response = self.client.chat.completions.create(
-                    model="gpt-4-turbo-2024-04-09",
+                    model=self.openai_model_name,
                     messages=[
                         {
                             "role": "system",
@@ -582,6 +607,7 @@ class UDFProposer:
                     top_p=self.config["udf_generator"]["top_p"],
                     seed=self.run_id * 42 + trial,
                 )
+                self.cost_estimation["generate_program"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
                 # NOTE: Sometimes GPT generates more UDFs than requested, so we remove the extra ones
                 verifed_implemented_udfs = []
                 implemented_udfs = eval(
@@ -666,12 +692,13 @@ class UDFProposer:
             try:
                 if retry != 0:
                     response = self.client.chat.completions.create(
-                        model="gpt-4-turbo-2024-04-09",
+                        model=self.openai_model_name,
                         messages=messages,
                         temperature=self.config["udf_generator"]["temperature"],
                         top_p=self.config["udf_generator"]["top_p"],
                         seed=self.run_id * 42,
                     )
+                    self.cost_estimation["verify_syntax_correctness"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
                     messages.append({"role": "assistant", "content": response.choices[0].message.content})
                     implemented_udf = eval(
                         "\n\n".join(
@@ -771,10 +798,13 @@ class UDFProposer:
     ############# UDF Distillation (distilled-model) #############
     #############                                    #############
     ##############################################################
-    def _distill_model(self, udf_signature, udf_description, gt_udf_name=None):
+    async def _distill_model(self, udf_signature, udf_description, gt_udf_name=None):
         """
         gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
         """
+        logger.info("Model distillation started")
+
+        logger.info("Model distillation (initialization) started")
         attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
         relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
 
@@ -804,25 +834,35 @@ class UDFProposer:
             else: # n_obj == 2
                 filtered_subjects, filtered_targets = self.llm_filter_relevant_subjects_targets(udf_signature, udf_description)
         logger.debug(f"filtered_objects: {filtered_objects}, filtered_subjects: {filtered_subjects}, filtered_targets: {filtered_targets}")
+        logger.info("Model distillation (initialization) finished")
 
         num_active_learning_rounds = (self.n_train_distill - 1) // 100
         labeled_indices = set()
         for active_learning_round in range(num_active_learning_rounds + 1):
             logger.info(f"Active learning round: {active_learning_round}")
-            if active_learning_round == 0:
-                # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 2) to ensure we have enough training samples
-                if gt_udf_name:
-                    self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, self.n_test_distill, df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
-                else:
-                    self.df_train = self.construct_train_and_test_data(self.n_obj, self.n_train_distill * 2, df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
 
-            self.llm_annotate_data(active_learning_round=active_learning_round)
+            if active_learning_round == 0:
+                logger.info("Model distillation (data loading) started")
+                # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 1.2) to ensure we have enough training samples
+                if gt_udf_name:
+                    self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, int(self.n_train_distill * 1.2), self.n_test_distill, df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
+                else:
+                    self.df_train = self.construct_train_and_test_data(self.n_obj, int(self.n_train_distill * 1.2), df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
+                logger.info("Model distillation (data loading) finished")
+
+            logger.info("Model distillation (data labeling) started")
+            await self.llm_annotate_data(active_learning_round=active_learning_round)
+            logger.info("Model distillation (data labeling) finished")
+
+            logger.info("Model distillation (model training) started")
             self.mlp_prepare_data()
             best_ckpt = self.train(active_learning_round)
             if gt_udf_name and hasattr(self, 'df_test'):
                 self.test()
+            logger.info("Model distillation (model training) finished")
 
             if active_learning_round < num_active_learning_rounds:
+                logger.info("Model distillation (active learning) started")
                 checkpoint = torch.load(best_ckpt)
                 hyper_parameters = checkpoint["hyper_parameters"]
                 best_mlp_model = mlp.MLPProd(**hyper_parameters)
@@ -904,6 +944,7 @@ class UDFProposer:
                 self.df_train = df_source.merge(selected_rows, on=columns, how='inner').reset_index(drop=True)
                 self.df_train = self.df_train.drop_duplicates(subset=columns)
                 self.df_train["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, self.df_train["vid"], self.df_train["fid"]), total=len(self.df_train), file=sys.stdout, desc="Processing frames"))
+                logger.info("Model distillation (active learning) finished")
 
         udf_dict = {}
         udf_dict["udf_name"] = udf_name
@@ -912,6 +953,7 @@ class UDFProposer:
         udf_dict["semantic_interpretation"] = 'model'
         udf_dict["function_implementation"] = best_ckpt
         new_udf_candidate = UDFCandidate(id='model', payload=udf_dict)
+        logger.info("Model distillation completed")
         return [new_udf_candidate]
 
     def llm_filter_relevant_subjects_targets(self, udf_signature, udf_description):
@@ -937,7 +979,7 @@ class UDFProposer:
             try:
                 logger.debug(f"trial: {trial}")
                 response = self.client.chat.completions.create(
-                    model="gpt-4-turbo-2024-04-09",
+                    model=self.openai_model_name,
                     messages=[
                         {"role": "user", "content": filter_objects_prompt},
                     ],
@@ -945,6 +987,7 @@ class UDFProposer:
                     top_p=self.config["udf_generator"]["top_p"],
                     seed=self.run_id * 42 + trial,
                 )
+                self.cost_estimation["filter_relevant_objects"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
                 res = eval(
                     "\n\n".join(
                         re.findall(
@@ -959,12 +1002,12 @@ class UDFProposer:
                 logger.exception("ERROR: failed to filter relevant objects: {}".format(e))
                 logger.debug(response)
 
-    def llm_annotate_data(self, batch_size=8, active_learning_round=0):
+    async def llm_annotate_data(self, batch_size=8, active_learning_round=0):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
         llm_positive_df = []
         llm_negative_df = []
-        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method)
-        labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_class, self.run_id, self.n_train_distill))
+        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method, self.query_class_name)
+        labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_query-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_class, self.query_id, self.run_id, self.n_train_distill))
         os.makedirs(labeled_data_dir, exist_ok=True)
         if self.load_labeled_data and os.path.exists(labeled_data_path):
             logger.info("Loading labeled data from {}".format(labeled_data_path))
@@ -985,26 +1028,37 @@ class UDFProposer:
             # Training and validation data
             self.label_count = 0
             if self.llm_method == "gpt4v":
-                for _, row in self.df_train.iterrows():
-                    logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
+                if self.is_async:
+                    tasks = [asyncio.create_task(self.label_one(row, labeled_data, llm_positive_df, llm_negative_df, active_learning_round)) for _, row in self.df_train.iterrows()]
                     try:
-                        gt_label = self._get_gt_label(row)
-                        # Read and crop frame
-                        logger.debug("row: {}".format(row.drop('img').to_dict()))
-                        frame, image_size = self.frame_processing_for_model(row)
-                        if frame is None:
+                        await asyncio.gather(*tasks)
+                    except asyncio.CancelledError:
+                        # Raised when we collected enough valid results
+                        # Cancel all other tasks
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                else:
+                    for _, row in self.df_train.iterrows():
+                        logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
+                        try:
+                            gt_label = self._get_gt_label(row)
+                            # Read and crop frame
+                            logger.debug("row: {}".format(row.drop('img').to_dict()))
+                            frame, image_size = self.frame_processing_for_model(row)
+                            if frame is None:
+                                continue
+                            llm_label, base64_image, image_prompt = self._llm_annotate_frame(frame, image_size, row, gt_label)
+                            labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
+                            if llm_label == 1:
+                                llm_positive_df.append(row)
+                            else:
+                                llm_negative_df.append(row)
+                            if self.label_count >= min(100, self.n_train_distill - 100 * active_learning_round):
+                                break
+                        except Exception as e:
+                            logger.exception("Error: {}".format(e))
                             continue
-                        llm_label, base64_image, image_prompt = self._llm_annotate_frame(frame, image_size, row, gt_label)
-                        labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
-                        if llm_label == 1:
-                            llm_positive_df.append(row)
-                        else:
-                            llm_negative_df.append(row)
-                        if self.label_count >= min(100, self.n_train_distill - 100 * active_learning_round):
-                            break
-                    except Exception as e:
-                        logger.exception("Error: {}".format(e))
-                        continue
             elif self.llm_method == "llava":
                 batched_rows = []
                 batched_frames = []
@@ -1127,7 +1181,7 @@ class UDFProposer:
                 try:
                     data = self.labeled_data[split][i]
                     row = data['row']
-                    logger.debug("row: {}".format(row.drop('img').to_dict()))
+                    # logger.debug("row: {}".format(row.drop('img').to_dict()))
                     frame, image_size = self.frame_processing_for_model(row)
                     if frame is None: # failed to read the frame
                         idx_to_remove.append(i)
@@ -1280,7 +1334,38 @@ class UDFProposer:
         y2 = min(cy + dh,H)
         return [x1,y1,x2,y2]
 
-    def _llm_annotate_frame(self, frame, image_size, row, gt_label):
+    async def label_one(self, row, labeled_data, llm_positive_df, llm_negative_df, active_learning_round):
+        log_msgs = []
+        log_msgs.append("+++++++++++++++++++++++++++++++++++++++++++++++")
+        # logger.debug("+++++++++++++++++++++++++++++++++++++++++++++++")
+
+        try:
+            gt_label = self._get_gt_label(row)
+            # Read and crop frame
+            log_msgs.append("row: {}".format(row.drop('img').to_dict()))
+            # logger.debug("row: {}".format(row.drop('img').to_dict()))
+            frame, image_size = self.frame_processing_for_model(row)
+            if frame is None:
+                logger.debug("\n".join(log_msgs))
+                return
+            llm_label, base64_image, image_prompt = await self._async_llm_annotate_frame(frame, image_size, row, gt_label, log_msgs)
+        except Exception as e:
+            logger.debug("\n".join(log_msgs))
+            logger.exception("Error: {}".format(e))
+            return
+
+        if len(labeled_data['train']) >= min(100, self.n_train_distill - 100 * active_learning_round):
+            raise asyncio.CancelledError
+
+        logger.debug("\n".join(log_msgs))
+        labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
+        if llm_label == 1:
+            llm_positive_df.append(row)
+        else:
+            llm_negative_df.append(row)
+
+
+    async def _async_llm_annotate_frame(self, frame, image_size, row, gt_label, log_msgs):
         # TODO: don't resize the frame here, resize it in the model
         # Convert the frame to a base 64 encoded image
         # TODO: Try different llm annotation prompt: draw bounding boxes on subject and object.
@@ -1290,11 +1375,13 @@ class UDFProposer:
             cv2.rectangle(frame, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
         _, buffer = cv2.imencode('.jpg', frame)
         base64_image = base64.b64encode(buffer).decode('utf-8')
-        logger.debug("base64_image: {}".format(base64_image))
+        log_msgs.append("base64_image: {}".format(base64_image))
+        # logger.debug("base64_image: {}".format(base64_image))
         image_prompt = self._create_image_prompt(row, image_size)
-        logger.debug("Image prompt: {}".format(image_prompt))
-        response = completion_with_backoff(
-            model="gpt-4-turbo-2024-04-09",
+        log_msgs.append("Image prompt: {}".format(image_prompt))
+        # logger.debug("Image prompt: {}".format(image_prompt))
+        response = await async_completion_with_backoff(
+            model=self.openai_model_name,
             messages=[
                 {
                     "role": "user",
@@ -1315,6 +1402,66 @@ class UDFProposer:
             seed=self.run_id
         )
         result = response.choices[0].message.content
+        self.cost_estimation["model_udf_data_labeling"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
+        log_msgs.append("Result: {}".format(result))
+        # logger.debug("Result: {}".format(result))
+        log_msgs.append("gt_label: {}".format(gt_label))
+        # logger.debug("gt_label: {}".format(gt_label))
+        if "yes" in result.lower():
+            llm_label = 1
+            if self.gt_udf_name is not None:
+                if gt_label == 1:
+                    self.llm_TP += 1
+                else:
+                    self.llm_FP += 1
+        elif "no" in result.lower():
+            llm_label = 0
+            if self.gt_udf_name is not None:
+                if gt_label == 0:
+                    self.llm_TN += 1
+                else:
+                    self.llm_FN += 1
+        else:
+            raise ValueError("Invalid response", result)
+        self.label_count += 1
+        return llm_label, base64_image, image_prompt
+
+    def _llm_annotate_frame(self, frame, image_size, row, gt_label):
+        # TODO: don't resize the frame here, resize it in the model
+        # Convert the frame to a base 64 encoded image
+        # TODO: Try different llm annotation prompt: draw bounding boxes on subject and object.
+        if self.n_obj == 2:
+            o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
+            cv2.rectangle(frame, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
+            cv2.rectangle(frame, (int(o2x1), int(o2y1)), (int(o2x2), int(o2y2)), color=(255, 0, 0), thickness=1)
+        _, buffer = cv2.imencode('.jpg', frame)
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        logger.debug("base64_image: {}".format(base64_image))
+        image_prompt = self._create_image_prompt(row, image_size)
+        logger.debug("Image prompt: {}".format(image_prompt))
+        response = completion_with_backoff(
+            model=self.openai_model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": image_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_tokens=10,
+            temperature=0.2,
+            top_p=0.5,
+            seed=self.run_id
+        )
+        result = response.choices[0].message.content
+        self.cost_estimation["model_udf_data_labeling"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
         logger.debug("Result: {}".format(result))
         logger.debug("gt_label: {}".format(gt_label))
         if "yes" in result.lower():
@@ -2081,7 +2228,7 @@ class UDFProposer:
             y_pred.append(True)
         score = f1_score(y_true, y_pred, zero_division=0.0)
         logger.info("udf_candidate: {}, score: {}".format(udf_candidate.id, score))
-        logger.info("y_true: {}, y_pred: {}".format(y_true, y_pred))
+        # logger.info("y_true: {}, y_pred: {}".format(y_true, y_pred))
         logger.info("predicted positive: {}, predicted negative: {}".format(sum(y_pred), len(y_pred) - sum(y_pred)))
         logger.info("positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true)))
 
