@@ -1,7 +1,7 @@
 #!/bin/bash -l
-#SBATCH --job-name=query_exec
-#SBATCH --partition=ckpt-all
-#SBATCH --account=cse
+#SBATCH --job-name=charades_query_exec
+#SBATCH --partition=gpu-a40
+#SBATCH --account=balazinska
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1

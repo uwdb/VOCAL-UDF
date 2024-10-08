@@ -1,4 +1,5 @@
 from collections import defaultdict
+import time
 import yaml
 import random
 import json
@@ -31,7 +32,7 @@ async def process_udf(udf_signature, udf_description, shared_resources, gt_udf_n
     logger.info(f"UDF generation for {udf_signature} finished")
 
     cost_estimation = ug.get_cost_estimation()
-
+    execution_time = ug.get_execution_time()
     return (
         udf_signature,
         udf_description,
@@ -40,6 +41,7 @@ async def process_udf(udf_signature, udf_description, shared_resources, gt_udf_n
         llm_positive_df,
         llm_negative_df,
         cost_estimation,
+        execution_time,
     )
 
 
@@ -208,18 +210,24 @@ async def main():
     materialized_df_names = []
     on_the_fly_udf_names = []
 
-    cost_estimation = defaultdict(int)
+    cost_estimation = defaultdict(float)
+    total_execution_time = defaultdict(float)
+    udf_generation_execution_time = defaultdict(float)
+
     # Parse query
     logger.info("Query parsing started")
+    _start = time.time()
     qp = QueryParser(
         config, prompt_config, dataset, registered_functions, object_domain, run_id, openai_model_name
     )
     flag = qp.parse(user_query)
     cost_estimation['query_parser'] += qp.get_cost_estimation()
     logger.info("Query parsing finished")
+    total_execution_time['query_parsing'] += time.time() - _start
     if 'parse_no' in flag:
         # Step 0: Initialize shared resources
         logger.info("Shared resources initialization started")
+        _start = time.time()
         shared_resources = SharedResources(
             config,
             prompt_config,
@@ -249,21 +257,24 @@ async def main():
             openai_model_name
         )
         logger.info("Shared resources initialization finished")
+        total_execution_time['resource_init'] += time.time() - _start
 
         # Step 1: propose new UDFs
         logger.info("UDF proposal started")
+        _start = time.time()
         up = UDFProposer(shared_resources)
         proposed_functions = up.propose(user_query)
         up_cost_estimation = up.get_cost_estimation()
         for key, value in up_cost_estimation.items():
             cost_estimation[key] += value
         logger.info("UDF proposal finished")
+        total_execution_time['udf_proposal'] += time.time() - _start
 
         # Step 2: generate UDFs, concurrently
         logger.info("UDF generation started")
+        _start = time.time()
         task_inputs = []
         for udf_signature, udf_description in proposed_functions.items():
-            logger.info("UDF generation started")
             # First, retrieve the ground truth UDF
             if ask_for_gt_udf:
                 # Ask the user for gt_udf name
@@ -336,10 +347,12 @@ async def main():
         # Run tasks concurrently
         results = await asyncio.gather(*tasks)
         logger.info("UDF generation finished")
+        total_execution_time['udf_generation'] += time.time() - _start
 
         # Step 3: UDF selection
         # Process results
         logger.info("UDF selection started")
+        _start = time.time()
         for result in results:
             (
                 udf_signature,
@@ -349,11 +362,16 @@ async def main():
                 llm_positive_df,
                 llm_negative_df,
                 cost_estimation_per_udf,
+                execution_time_per_udf,
             ) = result
 
             # Update cost estimation from UDF generation
             for key, value in cost_estimation_per_udf.items():
                 cost_estimation[key] += value
+
+            # Update execution time from UDF generation
+            for key, value in execution_time_per_udf.items():
+                udf_generation_execution_time[key] += value
 
             logger.info(f"UDF selection for {udf_signature} started")
             us = UDFSelector(shared_resources, llm_positive_df, llm_negative_df)
@@ -387,10 +405,12 @@ async def main():
             else:
                 on_the_fly_udf_names.append(udf_name)
         logger.info("UDF selection finished")
+        total_execution_time['udf_selection'] += time.time() - _start
 
         # Step 6: Re-parse the query
         # NOTE: Set allow_new_udfs=False. If the parser still wants to propose new UDFs, we will force it to generate a query that is the best approximation.
         logger.info("Query parsing started")
+        _start = time.time()
         qp = QueryParser(
             config,
             prompt_config,
@@ -404,6 +424,7 @@ async def main():
         qp.parse(user_query)
         cost_estimation['query_parser'] += qp.get_cost_estimation()
         logger.info("Query parsing finished")
+        total_execution_time['query_parsing'] += time.time() - _start
     if generate:
         output_dir = os.path.join(
             config["output_dir"],
@@ -438,6 +459,8 @@ async def main():
         except Exception as e:
             logger.exception("QueryExecutor Error: {}".format(e))
             logger.info("F1 score: 0")
+    logger.info("Total execution time: {}".format(total_execution_time))
+    logger.info("UDF generation execution time: {}".format(udf_generation_execution_time))
     logger.info("Cost estimation: {}".format(cost_estimation))
     logger.info("Peak memory usuage (in GB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024.0/1024.0))
 

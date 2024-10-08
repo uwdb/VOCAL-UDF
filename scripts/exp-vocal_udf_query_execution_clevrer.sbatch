@@ -1,11 +1,11 @@
 #!/bin/bash -l
 #SBATCH --job-name=query_exec
-#SBATCH --partition=ckpt-all
-#SBATCH --account=cse
+#SBATCH --partition=gpu-a40
+#SBATCH --account=krishna
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:a40:1
-#SBATCH --mem=200G
+#SBATCH --mem=100G
 #SBATCH --time=4:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"
 

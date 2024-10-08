@@ -1,10 +1,10 @@
 #!/bin/bash -l
 #SBATCH --job-name=clevrer
 #SBATCH --partition=gpu-a40
-#SBATCH --account=krishna
+#SBATCH --account=balazinska
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a40:1
 #SBATCH --mem=150G
 #SBATCH --time=4:00:00
 #SBATCH --output="/gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/outputs/slurm-%j-%x.out"

@@ -450,9 +450,6 @@ class QueryExecutor:
                 logger.exception(f"exec_udf_with_data Error: {e}")
                 return False  # Default value in case of error
 
-        def py_func(*args):
-            return True
-
         logger.info("Start materializing on-the-fly UDFs")
 
         # Filter on-the-fly UDFs
@@ -583,9 +580,6 @@ class QueryExecutor:
 
                     # Execute UDF and append results
                     # NOTE: Due to data noise, multiple objects can have the same oid
-                    _start = time.time()
-                    frames_broadcast = np.broadcast_to(frames[i], (len(arr), *frames[i].shape))
-                    frames_broadcast_time += time.time() - _start
 
                     _start = time.time()
                     func = partial(safe_udf, udf_obj)

@@ -566,7 +566,7 @@ class UDFProposer:
         self.openai_model_name = shared_resources.openai_model_name
         self.run_id = shared_resources.run_id
 
-        self.cost_estimation = defaultdict(int)
+        self.cost_estimation = defaultdict(float)
 
     def get_cost_estimation(self):
         return self.cost_estimation
@@ -742,7 +742,8 @@ class UDFGenerator(UtilsMixin):
         self.n_obj = len(self.udf_vars)
         self.llm_positive_df = None
         self.llm_negative_df = None
-        self.cost_estimation = defaultdict(int)
+        self.cost_estimation = defaultdict(float)
+        self.execution_time = defaultdict(float)
         self.conn = duckdb.connect(
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
             read_only=True,
@@ -752,6 +753,8 @@ class UDFGenerator(UtilsMixin):
     def get_cost_estimation(self):
         return self.cost_estimation
 
+    def get_execution_time(self):
+        return self.execution_time
 
     @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6), after=after_log(logger, logging.DEBUG))
     async def completion_with_backoff(self, **kwargs):
@@ -852,6 +855,8 @@ class UDFGenerator(UtilsMixin):
         Returns:
             list: A list of UDFCandidate objects representing the implemented UDFs.
         """
+        _start = time.time()
+        logger.info(f"[{self.udf_signature}] Program generation started")
         # Step 3: generate semantic interpretations and implement the UDF. Results are saved to disk
         generate_udfs_dict = self.prompt_config["generate_udfs"]
         attr_or_rel = "attribute" if self.n_obj == 1 else "relationship"
@@ -907,6 +912,7 @@ class UDFGenerator(UtilsMixin):
             response = None
             try:
                 logger.debug(f"[{self.udf_signature}] trial: {trial}")
+                self.execution_time["program_generation"] += time.time() - _start
                 response = await self.completion_with_backoff(
                     model=self.openai_model_name,
                     messages=[
@@ -920,6 +926,7 @@ class UDFGenerator(UtilsMixin):
                     top_p=self.config["udf_generator"]["top_p"],
                     seed=self.run_id * 42 + trial,
                 )
+                _start = time.time()
                 self.cost_estimation["generate_program"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
                 # NOTE: Sometimes GPT generates more UDFs than requested, so we remove the extra ones
                 verifed_implemented_udfs = []
@@ -935,7 +942,9 @@ class UDFGenerator(UtilsMixin):
                 logger.debug(f"[{self.udf_signature}] implemented_udfs: {implemented_udfs}")
                 for idx in range(len(implemented_udfs)):
                     implemented_udf = implemented_udfs[idx]
+                    self.execution_time["program_generation"] += time.time() - _start
                     implemented_udf, success = await self.verify_syntax_correctness(implemented_udf, self.udf_vars, self.udf_name, py_func_signature, py_func_args, self.udf_description, self.n_obj, verify_syntax_correctness_base_prompt)
+                    _start = time.time()
                     if success:
                         implemented_udf["udf_name"] = self.udf_name
                         implemented_udf["udf_signature"] = self.udf_signature
@@ -978,10 +987,12 @@ class UDFGenerator(UtilsMixin):
                     udf_candidate_list.append(new_udf_candidate)
             except Exception as e:
                 logger.exception(f"[{self.udf_signature}] Failed to read UDF candidate: {e}")
-
+        logger.info(f"[{self.udf_signature}] Program generation finished")
+        self.execution_time["program_generation"] += time.time() - _start
         return udf_candidate_list
 
     async def verify_syntax_correctness(self, implemented_udf, udf_vars, udf_name, py_func_signature, py_func_args, udf_description, n_obj, verify_syntax_correctness_base_prompt, n_verify_samples=10):
+        _start = time.time()
         df_samples = self.construct_train_and_test_data(n_obj, n_verify_samples, df_with_img_column=self.program_with_pixels)
         verify_syntax_correctness_prompt = replace_slot(
             verify_syntax_correctness_base_prompt,
@@ -1004,6 +1015,7 @@ class UDFGenerator(UtilsMixin):
         for retry in range(5):
             try:
                 if retry != 0:
+                    self.execution_time["program_generation"] += time.time() - _start
                     response = await self.completion_with_backoff(
                         model=self.openai_model_name,
                         messages=messages,
@@ -1011,6 +1023,7 @@ class UDFGenerator(UtilsMixin):
                         top_p=self.config["udf_generator"]["top_p"],
                         seed=self.run_id * 42,
                     )
+                    _start = time.time()
                     self.cost_estimation["verify_syntax_correctness"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
                     messages.append({"role": "assistant", "content": response.choices[0].message.content})
                     implemented_udf = eval(
@@ -1076,6 +1089,7 @@ class UDFGenerator(UtilsMixin):
                 messages.append({"role": "user", "content": f"Failed to execute the function due to the error: {type(e).__name__}: {e}. Please fix it and regenerate 'function_implementation' using the same 'semantic_interpretation'."})
         if retry != 0:
             logger.debug(f"[{self.udf_signature}] verify_syntax_correctness:\n" + "\n".join([f"{message['role']}: {message['content']}" for message in messages]))
+        self.execution_time["program_generation"] += time.time() - _start
         return implemented_udf, success
 
 
@@ -1091,11 +1105,13 @@ class UDFGenerator(UtilsMixin):
         logger.info(f"[{self.udf_signature}] Model distillation started")
 
         logger.info(f"[{self.udf_signature}] Model distillation (initialization) started")
+        _start = time.time()
         attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
         relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
 
         # ask LLM about relevant object classes to the target relationships, and filter data
         filtered_objects, filtered_subjects, filtered_targets = None, None, None
+        self.execution_time["model_distillation_init"] += time.time() - _start
         if self.dataset in ["charades"]:
             filtered_objects = list(set(await self.llm_filter_relevant_objects(self.udf_signature, self.udf_description) + ['person']))
         elif self.dataset in ["gqa", "vaw"]:
@@ -1113,26 +1129,31 @@ class UDFGenerator(UtilsMixin):
 
             if active_learning_round == 0:
                 logger.info(f"[{self.udf_signature}] Model distillation (data loading) started")
+                _start = time.time()
                 # NOTE: LLM doesn't generate labels in some cases, so we need to double the number of samples (i.e., self.n_train * 1.2) to ensure we have enough training samples
                 if self.gt_udf_name:
                     self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, int(self.n_train_distill * 1.2), self.n_test_distill, df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
                 else:
                     self.df_train = self.construct_train_and_test_data(self.n_obj, int(self.n_train_distill * 1.2), df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
                 logger.info(f"[{self.udf_signature}] Model distillation (data loading) finished")
+                self.execution_time["model_distillation_data_loading"] += time.time() - _start
 
             logger.info(f"[{self.udf_signature}] Model distillation (data labeling) started")
             await self.llm_annotate_data(active_learning_round=active_learning_round)
             logger.info(f"[{self.udf_signature}] Model distillation (data labeling) finished")
 
             logger.info(f"[{self.udf_signature}] Model distillation (model training) started")
+            _start = time.time()
             self.mlp_prepare_data()
             best_ckpt = self.train(active_learning_round)
             if self.gt_udf_name and hasattr(self, 'df_test'):
                 self.test()
             logger.info(f"[{self.udf_signature}] Model distillation (model training) finished")
+            self.execution_time["model_distillation_model_training"] += time.time() - _start
 
             if active_learning_round < num_active_learning_rounds:
                 logger.info(f"[{self.udf_signature}] Model distillation (active learning) started")
+                _start = time.time()
                 checkpoint = torch.load(best_ckpt)
                 hyper_parameters = checkpoint["hyper_parameters"]
                 best_mlp_model = mlp.MLPProd(**hyper_parameters)
@@ -1220,6 +1241,7 @@ class UDFGenerator(UtilsMixin):
                 self.df_train = self.df_train.drop_duplicates(subset=columns)
                 self.df_train["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, self.df_train["vid"], self.df_train["fid"]), total=len(self.df_train), file=sys.stdout, desc="Processing frames"))
                 logger.info(f"[{self.udf_signature}] Model distillation (active learning) finished")
+                self.execution_time["model_distillation_active_learning"] += time.time() - _start
 
         udf_dict = {}
         udf_dict["udf_name"] = self.udf_name
@@ -1278,6 +1300,7 @@ class UDFGenerator(UtilsMixin):
                 logger.debug(f"[{self.udf_signature}] {response}")
 
     async def llm_annotate_data(self, batch_size=8, active_learning_round=0):
+        _start = time.time()
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
         llm_positive_df = []
         llm_negative_df = []
@@ -1304,6 +1327,7 @@ class UDFGenerator(UtilsMixin):
             self.label_count = 0
             if self.llm_method == "gpt4v":
                 if self.is_async:
+                    self.execution_time["model_distillation_data_labeling"] += time.time() - _start
                     tasks = [asyncio.create_task(self.label_one(row, labeled_data, llm_positive_df, llm_negative_df, active_learning_round)) for _, row in self.df_train.iterrows()]
                     try:
                         await asyncio.gather(*tasks)
@@ -1312,6 +1336,7 @@ class UDFGenerator(UtilsMixin):
                         for t in tasks:
                             if not t.done():
                                 t.cancel()
+                    _start = time.time()
                 else:
                     for _, row in self.df_train.iterrows():
                         logger.debug(f"[{self.udf_signature}] +++++++++++++++++++++++++++++++++++++++++++++++")
@@ -1322,7 +1347,9 @@ class UDFGenerator(UtilsMixin):
                             frame, image_size = self.frame_processing_for_model(row)
                             if frame is None:
                                 continue
+                            self.execution_time["model_distillation_data_labeling"] += time.time() - _start
                             llm_label, base64_image, image_prompt = await self._llm_annotate_frame(frame, image_size, row, gt_label)
+                            _start = time.time()
                             labeled_data['train'].append({"label": gt_label, "llm_label": llm_label, "base64_image": base64_image, "image_prompt": image_prompt, "row": row})
                             if llm_label == 1:
                                 llm_positive_df.append(row)
@@ -1439,7 +1466,7 @@ class UDFGenerator(UtilsMixin):
             self.labeled_data = labeled_data
         else:
             self.labeled_data['train'].extend(labeled_data['train'])
-
+        self.execution_time["model_distillation_data_labeling"] += time.time() - _start
         # if self.llm_method == "llava":
         #     del llava_model
         #     torch.cuda.empty_cache()
@@ -1692,6 +1719,7 @@ class UDFGenerator(UtilsMixin):
         # TODO: don't resize the frame here, resize it in the model
         # Convert the frame to a base 64 encoded image
         # TODO: Try different llm annotation prompt: draw bounding boxes on subject and object.
+        _start = time.time()
         if self.n_obj == 2:
             o1x1, o1y1, o1x2, o1y2, o2x1, o2y1, o2x2, o2y2 = self._compute_new_box_after_crop(row, image_size)
             cv2.rectangle(frame, (int(o1x1), int(o1y1)), (int(o1x2), int(o1y2)), color=(0, 0, 255), thickness=1)
@@ -1701,6 +1729,7 @@ class UDFGenerator(UtilsMixin):
         logger.debug(f"[{self.udf_signature}] base64_image: {base64_image}")
         image_prompt = self._create_image_prompt(row, image_size)
         logger.debug(f"[{self.udf_signature}] Image prompt: {image_prompt}")
+        self.execution_time["model_distillation_data_labeling"] += time.time() - _start
         response = await self.completion_with_backoff(
             model=self.openai_model_name,
             messages=[
@@ -1722,6 +1751,7 @@ class UDFGenerator(UtilsMixin):
             top_p=0.5,
             seed=self.run_id
         )
+        _start = time.time()
         result = response.choices[0].message.content
         self.cost_estimation["model_udf_data_labeling"] += response.usage.prompt_tokens * MODEL_COST[self.openai_model_name][0] + response.usage.completion_tokens * MODEL_COST[self.openai_model_name][1]
         logger.debug(f"[{self.udf_signature}] Result: {result}")
@@ -1741,8 +1771,10 @@ class UDFGenerator(UtilsMixin):
                 else:
                     self.llm_FN += 1
         else:
+            self.execution_time["model_distillation_data_labeling"] += time.time() - _start
             raise ValueError("Invalid response", result)
         self.label_count += 1
+        self.execution_time["model_distillation_data_labeling"] += time.time() - _start
         return llm_label, base64_image, image_prompt
 
     def _create_image_prompt(self, row, image_size):
@@ -1923,7 +1955,7 @@ class UDFSelector(UtilsMixin):
         # Per-UDF state variables
         self.llm_positive_df = llm_positive_df
         self.llm_negative_df = llm_negative_df
-        self.cost_estimation = defaultdict(int)
+        self.cost_estimation = defaultdict(float)
         self.conn = duckdb.connect(
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
             read_only=True,
@@ -2090,6 +2122,7 @@ class UDFSelector(UtilsMixin):
                 udf_candidate_list[i].test_score = -1
                 continue
 
+        logger.info("compute train F1 score")
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
         if sum(y_true) == 0:
             logger.info("No positive samples are labeled. Returning the dummy UDF.")
@@ -2410,7 +2443,7 @@ class UDFSelector(UtilsMixin):
             # torch.tensor(image_patches).to(device)
             batch_boxes = torch.tensor(batch_boxes).to(self.device)
             N, C, H, W = batch_frames.shape
-            logger.debug(f"batch_frames.shape: {batch_frames.shape}, batch_boxes.shape: {batch_boxes.shape}")
+            # logger.debug(f"batch_frames.shape: {batch_frames.shape}, batch_boxes.shape: {batch_boxes.shape}")
             X = torch.arange(W, device=self.device).view(1, 1, W).expand(N, H, W)
             Y = torch.arange(H, device=self.device).view(1, H, 1).expand(N, H, W)
             subject_masks = (X >= batch_boxes[:, 0].view(N, 1, 1).expand(N, H, W)) & (X < batch_boxes[:, 2].view(N, 1, 1).expand(N, H, W)) & (Y >= batch_boxes[:, 1].view(N, 1, 1).expand(N, H, W)) & (Y < batch_boxes[:, 3].view(N, 1, 1).expand(N, H, W))
