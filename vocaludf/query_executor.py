@@ -23,14 +23,15 @@ from tqdm import tqdm
 import sys
 import numpy as np
 from PIL import Image
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import partial
-from itertools import repeat
+from itertools import repeat, chain
 from nvidia.dali import pipeline_def
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 from torchvision.io import read_image, ImageReadMode
+import cv2
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -193,6 +194,7 @@ class QueryExecutor:
         self.dali_batch_size = dali_batch_size
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
+        # self.executor = ProcessPoolExecutor(max_workers=self.num_workers)
         self.init_table()
         self.materialized_udfs = {}
         for func in self.registered_functions:
@@ -448,6 +450,9 @@ class QueryExecutor:
                 logger.exception(f"exec_udf_with_data Error: {e}")
                 return False  # Default value in case of error
 
+        def py_func(*args):
+            return True
+
         logger.info("Start materializing on-the-fly UDFs")
 
         # Filter on-the-fly UDFs
@@ -456,12 +461,35 @@ class QueryExecutor:
         logger.info("filtering tables by matching vids")
         # Group one_object and two_objects tables by vid and fid
         parameters = ','.join('?' for _ in vids)
-        df_one_object = self.conn.execute(f"SELECT * FROM one_object WHERE vid = ANY([{parameters}])", vids).df()
-        df_one_object_grouped = df_one_object.groupby(['vid', 'fid'], as_index=False, sort=False)
-        df_two_objects = self.conn.execute(f"SELECT * FROM two_objects WHERE vid = ANY([{parameters}])", vids).df()
-        df_two_objects_grouped = df_two_objects.groupby(['vid', 'fid'], as_index=False, sort=False)
+        df_one_object = self.conn.execute(f"""
+            SELECT vid, fid, o1_oid, o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, height, width
+            FROM one_object
+            WHERE vid = ANY([{parameters}])
+        """, vids).df()
+
+        df_two_objects = self.conn.execute(f"""
+            SELECT vid, fid, o1_oid, o2_oid, o1_oname, o1_x1, o1_y1, o1_x2, o1_y2, o1_anames, o2_oname, o2_x1, o2_y1, o2_x2, o2_y2, o2_anames, o1_o2_rnames, o2_o1_rnames, height, width
+            FROM two_objects
+            WHERE vid = ANY([{parameters}])
+        """, vids).df()
+
+        df_one_object_grouped = df_one_object.groupby(['vid', 'fid'], as_index=True, sort=False)
+        df_two_objects_grouped = df_two_objects.groupby(['vid', 'fid'], as_index=True, sort=False)
+
+        np_one_object = df_one_object.values
+        np_two_objects = df_two_objects.values
+
+        # Construct numpy arrays for each group
+        grouped_np_one_object = np.array([np_one_object[i.values, :] for _, i in df_one_object_grouped.groups.items()], dtype=object)
+        grouped_np_two_objects = np.array([np_two_objects[i.values, :] for _, i in df_two_objects_grouped.groups.items()], dtype=object)
+
+        # Lookup dictionary, where key is (vid, fid) and value is the index in the grouped_np_one_object/grouped_np_two_objects
+        group_keys_one_object = dict(zip(df_one_object_grouped.groups.keys(), range(len(df_one_object_grouped.groups))))
+        group_keys_two_objects = dict(zip(df_two_objects_grouped.groups.keys(), range(len(df_two_objects_grouped.groups))))
+
         logger.info(f"df_one_object shape: {df_one_object.shape}")
         logger.info(f"df_two_objects shape: {df_two_objects.shape}")
+
         udf_map = {}
         for func in on_the_fly_udfs:
             udf_name, udf_vars = parse_signature(func["signature"])
@@ -507,11 +535,19 @@ class QueryExecutor:
         udf_to_df_map = defaultdict(list)
         udf_to_pred_map = defaultdict(list)
 
+        udf_to_args_map = defaultdict(list)
+        current_chunk_size = 0
+
         logger.info("executing on-the-fly UDFs")
         loading_time = 0
         transform_time = 0
         udf_execution_time = 0
-        execution_time = 0
+        group_by_time = 0
+        frames_broadcast_time = 0
+        partial_udf_time = 0
+        prepare_args_time = 0
+        udf_map_time = 0
+
         _start = time.time()
         for batch in tqdm(video_iterator, file=sys.stdout, desc="load frames and materialize UDFs"):
             loading_time += time.time() - _start
@@ -533,38 +569,70 @@ class QueryExecutor:
                 # logger.debug(f"frames.shape: {frames.shape}, len(vids): {len(vids)}, len(fids): {len(fids)}")
                 frames = frames.cpu().numpy()
             transform_time += time.time() - _start
-            _start = time.time()
+
             for udf_name, (udf_obj, n_obj) in udf_map.items():
                 for i in range(len(vids)):
-                    df_grouped = df_one_object_grouped if n_obj == 1 else df_two_objects_grouped
-                    if (vids[i], fids[i]) not in df_grouped.groups:
+                    _start = time.time()
+                    grouped_idx = group_keys_one_object.get((vids[i], fids[i]), -1) if n_obj == 1 else group_keys_two_objects.get((vids[i], fids[i]), -1)
+                    if grouped_idx == -1:
+                        group_by_time += time.time() - _start
                         continue
-                    df = df_grouped.get_group((vids[i], fids[i]))
+                    arr = grouped_np_one_object[grouped_idx] if n_obj == 1 else grouped_np_two_objects[grouped_idx]
+
+                    group_by_time += time.time() - _start
+
                     # Execute UDF and append results
                     # NOTE: Due to data noise, multiple objects can have the same oid
-                    frames_broadcast = np.broadcast_to(frames[i], (len(df), *frames[i].shape))
-                    # logger.debug(f"frames[i].shape: {frames[i].shape}, frames_broadcast.shape: {frames_broadcast.shape}, df.shape: {df.shape}")
-                    _udf_exec_start = time.time()
+                    _start = time.time()
+                    frames_broadcast = np.broadcast_to(frames[i], (len(arr), *frames[i].shape))
+                    frames_broadcast_time += time.time() - _start
+
+                    _start = time.time()
                     func = partial(safe_udf, udf_obj)
+                    # func = py_func
+                    partial_udf_time += time.time() - _start
+
                     if n_obj == 1:
-                        udf_to_pred_map[udf_name].extend(list(self.executor.map(func, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["height"], df["width"])))
-                        # df = df[["vid", "fid", "o1_oid", "pred"]]
+                        _start = time.time()
+                        # args = [arr[:, i] for i in range(3, 11)]
+                        prepare_args_time += time.time() - _start
+                        _start = time.time()
+                        res = []
+                        for j in range(len(arr)):
+                            res.append(func(frames[i], *arr[j, 3:11]))
+                        # res = self.executor.map(func, frames_broadcast, *args)
+                        udf_execution_time += time.time() - _start
                     elif n_obj == 2:
-                        udf_to_pred_map[udf_name].extend(list(self.executor.map(func, frames_broadcast, df["o1_oname"], df["o1_x1"], df["o1_y1"], df["o1_x2"], df["o1_y2"], df["o1_anames"], df["o2_oname"], df["o2_x1"], df["o2_y1"], df["o2_x2"], df["o2_y2"], df["o2_anames"], df["o1_o2_rnames"], df["o2_o1_rnames"], df["height"], df["width"])))
-                        # df = df[["vid", "fid", "o1_oid", "o2_oid", "pred"]]
-                    udf_execution_time += time.time() - _udf_exec_start
-                    udf_to_df_map[udf_name].append(df)
-            execution_time += time.time() - _start
+                        _start = time.time()
+                        # args = [arr[0, i] for i in range(4, 20)]
+                        prepare_args_time += time.time() - _start
+                        _start = time.time()
+                        res = []
+                        for j in range(len(arr)):
+                            res.append(func(frames[i], *arr[j, 4:20]))
+                        # res = self.executor.map(func, frames_broadcast, *args)
+                        udf_execution_time += time.time() - _start
+
+                    _start = time.time()
+                    udf_to_pred_map[udf_name].append(res)
+                    udf_to_df_map[udf_name].append(arr)
+                    udf_map_time += time.time() - _start
+
             _start = time.time()
         logger.info(f"loading_time: {loading_time}")
         logger.info(f"transform_time: {transform_time}")
+        logger.info(f"group_by_time: {group_by_time}")
+        logger.info(f"frames_broadcast_time: {frames_broadcast_time}")
+        logger.info(f"partial_udf_time: {partial_udf_time}")
+        logger.info(f"prepare_args_time: {prepare_args_time}")
         logger.info(f"udf_execution_time: {udf_execution_time}")
-        logger.info(f"execution_time: {execution_time}")
+        logger.info(f"udf_map_time: {udf_map_time}")
         # Concatenate and store materialized UDFs
         for udf_name, dfs in udf_to_df_map.items():
             n_obj = udf_map[udf_name][1]
-            df = pd.concat(dfs, ignore_index=True)
-            df["pred"] = udf_to_pred_map[udf_name]
+            arr = np.concatenate(dfs, axis=0)
+            df = pd.DataFrame(arr, columns=["vid", "fid", "o1_oid", "o1_oname", "o1_x1", "o1_y1", "o1_x2", "o1_y2", "o1_anames", "height", "width"] if n_obj == 1 else ["vid", "fid", "o1_oid", "o2_oid", "o1_oname", "o1_x1", "o1_y1", "o1_x2", "o1_y2", "o1_anames", "o2_oname", "o2_x1", "o2_y1", "o2_x2", "o2_y2", "o2_anames", "o1_o2_rnames", "o2_o1_rnames", "height", "width"])
+            df["pred"] = list(chain(*udf_to_pred_map[udf_name]))
             if n_obj == 1:
                 df = df[["vid", "fid", "o1_oid", "pred"]]
             elif n_obj == 2:
