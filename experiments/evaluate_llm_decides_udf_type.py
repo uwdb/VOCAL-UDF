@@ -7,16 +7,18 @@ import numpy as np
 import argparse
 import os
 import sys
-from vocaludf.udf_proposer import UDFProposer
+from vocaludf.async_udf_proposer import UDFGenerator, SharedResources
 import ast
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
+from collections import defaultdict
+import asyncio
 
 client = OpenAI()
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
-class LlmDecidesUdfType(UDFProposer):
+class LlmDecidesUdfType(UDFGenerator):
     def __init__(
         self,
         config,
@@ -41,7 +43,11 @@ class LlmDecidesUdfType(UDFProposer):
         selection_strategy,
         selection_labels,
         allow_kwargs_in_udf,
-        llm_method
+        llm_method,
+        is_async,
+        openai_model_name,
+        udf_signature,
+        udf_description
     ):
         self.config = config
         self.prompt_config = prompt_config
@@ -63,13 +69,19 @@ class LlmDecidesUdfType(UDFProposer):
         self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
         self.llm_method = llm_method
+        self.is_async = is_async
+        self.openai_model_name = openai_model_name
 
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-if __name__ == '__main__':
-    # clevrer: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
-    # charades: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
-    # cityflow: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
+        self.udf_signature = udf_signature
+        self.udf_description = udf_description
+        self.cost_estimation = defaultdict(float)
+
+async def main():
+    # clevrer: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
+    # charades: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
+    # cityflow: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -90,6 +102,8 @@ if __name__ == '__main__':
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
     parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
     parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
+    parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
 
     args = parser.parse_args()
     query_id = args.query_id
@@ -109,6 +123,8 @@ if __name__ == '__main__':
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
     selection_labels = args.selection_labels
+    is_async = args.is_async
+    openai_model_name = args.openai_model_name
 
     if selection_strategy == "both":
         assert selection_labels != "none"
@@ -142,6 +158,7 @@ if __name__ == '__main__':
         dataset,
         query_class_name,
         config_name,
+        openai_model_name,
     )
     os.makedirs(log_dir, exist_ok=True)
 
@@ -194,8 +211,8 @@ if __name__ == '__main__':
     proposed_functions = {}
     for line in lines:
         # Proposed functions: {'far_from(o0, o1)': 'Whether o0 is far from o1', 'behind(o0, o1)': 'Whether o0 is behind o1', 'material_metal(o0)': 'Whether the material of o0 is metal'}
-        if "vocaludf.udf_proposer - INFO - Proposed functions: " in line:
-            proposed_functions = line.split("vocaludf.udf_proposer - INFO - Proposed functions: ")[1].strip()
+        if "INFO - Proposed functions: " in line:
+            proposed_functions = line.split("INFO - Proposed functions: ")[1].strip()
             proposed_functions = ast.literal_eval(proposed_functions)
             break
 
@@ -214,34 +231,38 @@ if __name__ == '__main__':
     num_workers = 1
     save_labeled_data = False
     load_labeled_data = False
-    up = LlmDecidesUdfType(
-        config,
-        prompt_config,
-        registered_functions,
-        object_domain,
-        relationship_domain,
-        attribute_domain,
-        dataset,
-        labeling_budget,
-        n_selection_samples,
-        num_interpretations,
-        num_parameter_search,
-        program_with_pixels,
-        program_with_pretrained_models,
-        query_id,
-        run_id,
-        num_workers,
-        save_labeled_data,
-        load_labeled_data,
-        n_train_distill,
-        selection_strategy,
-        selection_labels,
-        allow_kwargs_in_udf,
-        llm_method,
-    )
     output_dict = {}
     for udf_signature, udf_description in proposed_functions.items():
-        llm_decision = up._llm_decides_udf_type(udf_signature, udf_description)
+        up = LlmDecidesUdfType(
+            config,
+            prompt_config,
+            registered_functions,
+            object_domain,
+            relationship_domain,
+            attribute_domain,
+            dataset,
+            labeling_budget,
+            n_selection_samples,
+            num_interpretations,
+            num_parameter_search,
+            program_with_pixels,
+            program_with_pretrained_models,
+            query_id,
+            run_id,
+            num_workers,
+            save_labeled_data,
+            load_labeled_data,
+            n_train_distill,
+            selection_strategy,
+            selection_labels,
+            allow_kwargs_in_udf,
+            llm_method,
+            is_async,
+            openai_model_name,
+            udf_signature,
+            udf_description
+        )
+        llm_decision = await up._llm_decides_udf_type()
         udf_type = ""
         if llm_decision == "programUDF":
             udf_type = "program"
@@ -259,8 +280,12 @@ if __name__ == '__main__':
         dataset,
         query_class_name,
         config_name,
+        openai_model_name,
     )
     os.makedirs(output_dir, exist_ok=True)
 
     with open(os.path.join(output_dir, "qid={}-run={}.json".format(query_id, run_id)), "w") as f:
             json.dump(output_dict, f)
+
+if __name__ == '__main__':
+    asyncio.run(main())

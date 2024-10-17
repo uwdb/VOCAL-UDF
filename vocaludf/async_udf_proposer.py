@@ -265,15 +265,17 @@ class SharedResources:
         one_object_df = self.conn.execute(sql, self.attribute_domain if self.dataset == 'vaw' else self.attribute_domain + self.object_domain).df()
 
         rel_parameters = ','.join('?' for _ in self.relationship_domain)
-        where_clause = "" if self.dataset == 'vaw' else f"WHERE o.oname = ANY([{obj_parameters}])"
         if self.dataset == 'clevrer':
-            filter_train_vid_clause = "AND o1.vid < 5000"
+            obj_attr_where_clause = f"WHERE o.oname = ANY([{obj_parameters}]) AND o.vid < 5000"
+            rel_where_clause = "WHERE vid < 5000"
         elif self.dataset == 'charades':
-            filter_train_vid_clause = "AND o1.vid < 4800"
+            obj_attr_where_clause = f"WHERE o.oname = ANY([{obj_parameters}]) AND o.vid < 4800"
+            rel_where_clause = "WHERE vid < 4800"
         elif self.dataset == 'cityflow':
-            filter_train_vid_clause = "AND o1.vid < 824"
+            obj_attr_where_clause = f"WHERE o.oname = ANY([{obj_parameters}]) AND o.vid < 824"
+            rel_where_clause = "WHERE vid < 824"
         else:
-            filter_train_vid_clause = ""
+            obj_attr_where_clause = f"WHERE o1.oname = ANY([{obj_parameters}])"
         sql = f"""
             WITH obj_with_attrs AS (
                 SELECT
@@ -281,7 +283,7 @@ class SharedResources:
                     COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
                 FROM {self.dataset}_objects o
                 LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
-                {where_clause}
+                {obj_attr_where_clause}
                 GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
             )
             , relationships_expanded AS (
@@ -289,6 +291,7 @@ class SharedResources:
                     vid, fid, oid1, oid2,
                     ARRAY_AGG(DISTINCT rname) AS gt_rnames
                 FROM {self.dataset}_relationships
+                {rel_where_clause}
                 GROUP BY vid, fid, oid1, oid2
             )
             , relationship_predictions_expanded AS (
@@ -296,6 +299,7 @@ class SharedResources:
                     vid, fid, oid1, oid2,
                     COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
                 FROM {self.dataset}_relationship_predictions
+                {rel_where_clause}
                 GROUP BY vid, fid, oid1, oid2
             )
             SELECT
@@ -313,7 +317,6 @@ class SharedResources:
             LEFT OUTER JOIN relationships_expanded r3 ON o1.vid = r3.vid AND o1.fid = r3.fid AND o1.oid = r3.oid1 AND o2.oid = r3.oid2
             {metadata_join_clause}
             WHERE o1.oid <> o2.oid
-            {filter_train_vid_clause}
         """
         # ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         logger.debug(f"Create two_objects table:\n{sql}")
@@ -792,7 +795,7 @@ class UDFGenerator(UtilsMixin):
             return program_udf_candidates + model_udf_candidates
 
 
-    async def _llm_decides_udf_type(self, udf_signature, udf_description):
+    async def _llm_decides_udf_type(self):
         decide_udf_type_dict = self.prompt_config["decide_udf_type"]
 
         if self.program_with_pretrained_models:
@@ -805,7 +808,7 @@ class UDFGenerator(UtilsMixin):
         decide_udf_type_prompt = replace_slot(
             decide_udf_type_base_prompt,
             {
-                "udf_description": udf_description,
+                "udf_description": self.udf_description,
                 "available_concepts": self.object_domain + self.relationship_domain + self.attribute_domain,
             },
         )

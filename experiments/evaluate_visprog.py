@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--query_class_name", type=str, help="query class name")
     parser.add_argument('--run_id', type=int, help='run id')
     parser.add_argument('--query_id', type=int, help='query id')
-    parser.add_argument('--llm_model', type=str, default="gpt-4-turbo-2024-04-09", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-turbo-2024-04-09'])
+    parser.add_argument('--llm_model', type=str, default="gpt-4-turbo-2024-04-09", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-turbo-2024-04-09', "gpt-4o"])
     args = parser.parse_args()
     use_precomputed = args.use_precomputed
     assert use_precomputed, "use_precomputed must be True"

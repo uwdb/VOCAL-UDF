@@ -44,6 +44,8 @@ class QueryParser:
             )
         self.object_domain = object_domain
         self.cost_estimation = 0
+        self.parsed_program = None
+        self.parsed_query = None
         if dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
             dsl_definition_prompt = prompt_config["dsl_definition"]
         elif dataset in ["clevr", "gqa", "vaw"]:  # image dataset
@@ -137,7 +139,7 @@ class QueryParser:
                     error_message = query + " failed:\n" + str(e)
                     return error_message
 
-        for trial in range(3): # retry 3 times
+        for trial in range(5): # retry 5 times
             logger.info("Trial {}".format(trial))
             self.parser = autogen.AssistantAgent(
                 name="parser",
@@ -176,13 +178,22 @@ class QueryParser:
                 flag = chat_messages[-1]["content"].strip().lower()
                 logger.debug("flag {}".format(flag))
                 if self.allow_new_udfs and ("parse_yes" in flag or "parse_no" in flag):
-                    usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
-                    self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
-                    return flag
+                    if "parse_yes" in flag and self.parsed_program is None:
+                        logger.debug("The parser didn't generate a DSL. Retry...")
+                        continue
+                    else:
+                        usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
+                        self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
+                        return flag
                 elif not self.allow_new_udfs and "terminate" in flag:
-                    usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
-                    self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
-                    return flag
+                    if self.parsed_program is None:
+                        logger.debug("The parser didn't generate a DSL. Retry...")
+                        continue
+                    else:
+                        usage_summary = gather_usage_summary([self.parser, self.user_proxy])["usage_including_cached_inference"][self.openai_model_name]
+                        self.cost_estimation += usage_summary["prompt_tokens"] * MODEL_COST[self.openai_model_name][0] + usage_summary["completion_tokens"] * MODEL_COST[self.openai_model_name][1]
+                        return flag
+            logger.debug("The conversation didn't end with the proper flag. Retry...")
         # The conversation didn't end with the user's message (YES/NO)
         # Assume NO
         flag = "parse_no"

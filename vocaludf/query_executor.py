@@ -37,6 +37,20 @@ logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+def remove_duplicates(query):
+    for item in query:
+        scene_graph = item['scene_graph']
+        seen = set()
+        unique_scene_graph = []
+        for element in scene_graph:
+            # Create a tuple that uniquely identifies each element
+            identifier = (element['predicate'], tuple(element['variables']))
+            if identifier not in seen:
+                seen.add(identifier)
+                unique_scene_graph.append(element)
+        item['scene_graph'] = unique_scene_graph
+    return query
+
 class GQAImageDataset(Dataset):
     def __init__(self, vids, img_dir):
         self.vids = vids
@@ -170,6 +184,9 @@ def CharadesDaliDataloader(
 
 class QueryExecutor:
     def __init__(self, config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_udf_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size):
+        self.test_data_init_time = 0
+        self.query_execution_time = 0
+        _start = time.time()
         self.config = config
         self.dataset = dataset
         self.object_domain = object_domain
@@ -196,6 +213,8 @@ class QueryExecutor:
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
         # self.executor = ProcessPoolExecutor(max_workers=self.num_workers)
         self.init_table()
+        self.test_data_init_time += time.time() - _start
+        _start = time.time()
         self.materialized_udfs = {}
         for func in self.registered_functions:
             signature = func["signature"]
@@ -248,7 +267,7 @@ class QueryExecutor:
                     f"self.conn.create_function('{udf_name}', {python_func_name}_{suffix})"
                 )
             logger.debug(f"Registered function: {signature}")
-
+        self.query_execution_time += time.time() - _start
 
     def init_table(self):
         metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
@@ -256,6 +275,14 @@ class QueryExecutor:
         group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
 
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
+        if self.dataset == 'clevrer':
+            where_clause = f"WHERE o1.vid >= 5000 AND o1.vid < 10000"
+        elif self.dataset == 'charades':
+            where_clause = f"WHERE o1.vid >= 4800 AND o1.vid < 9601"
+        elif self.dataset == 'cityflow':
+            where_clause = f"WHERE o1.vid >= 824 AND o1.vid < 1648"
+        else:
+            where_clause = ""
         sql = f"""
             CREATE TEMPORARY TABLE one_object AS
             SELECT
@@ -266,29 +293,58 @@ class QueryExecutor:
             FROM {self.dataset}_objects o1
             LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
             {metadata_join_clause}
+            {where_clause}
             GROUP BY {group_by_clause}
         """
         logger.debug(f"Create one_object table:\n{sql}")
-        self.conn.execute(sql, self.attribute_domain).df()
+        self.conn.execute(sql, self.attribute_domain)
 
         rel_parameters = ','.join('?' for _ in self.relationship_domain)
+        if self.dataset == 'clevrer':
+            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 5000 AND vid < 10000"
+            obj_where_clause = "WHERE vid >= 5000 AND vid < 10000"
+            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 5000 AND vid < 10000"
+        elif self.dataset == 'charades':
+            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 4800 AND vid < 9601"
+            obj_where_clause = "WHERE vid >= 4800 AND vid < 9601"
+            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 4800 AND vid < 9601"
+        elif self.dataset == 'cityflow':
+            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 824 AND vid < 1648"
+            obj_where_clause = "WHERE vid >= 824 AND vid < 1648"
+            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 824 AND vid < 1648"
+        else:
+            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}])"
+            obj_where_clause = ""
+            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}])"
         sql = f"""
             CREATE TEMPORARY TABLE two_objects AS
-            WITH obj_with_attrs AS (
-                SELECT
-                    o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
-                    COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
-                FROM {self.dataset}_objects o
-                LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
-                GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
-            )
-            , relationships_expanded AS (
-                SELECT
-                    vid, fid, oid1, oid2,
-                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
-                FROM {self.dataset}_relationship_predictions
-                GROUP BY vid, fid, oid1, oid2
-            )
+            WITH
+                filtered_objects AS (
+                    SELECT vid, fid, oid, oname, x1, y1, x2, y2
+                    FROM {self.dataset}_objects
+                    {obj_where_clause}
+                ),
+                filtered_attributes AS (
+                    SELECT vid, fid, oid, aname
+                    FROM {self.dataset}_attribute_predictions
+                    {attr_where_clause}
+                ),
+                obj_with_attrs AS (
+                    SELECT
+                        o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
+                        COALESCE(ARRAY_AGG(DISTINCT a.aname), ARRAY[]::varchar[]) AS attributes
+                    FROM filtered_objects o
+                    LEFT OUTER JOIN filtered_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid
+                    GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
+                ),
+                relationships_expanded AS (
+                    SELECT
+                        vid, fid, oid1, oid2,
+                        COALESCE(ARRAY_AGG(DISTINCT rname), ARRAY[]::varchar[]) AS rnames
+                    FROM {self.dataset}_relationship_predictions
+                    {rel_where_clause}
+                    GROUP BY vid, fid, oid1, oid2
+                )
             SELECT
                 o1.vid AS vid, o1.fid AS fid,
                 o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2, o1.attributes AS o1_anames,
@@ -297,14 +353,13 @@ class QueryExecutor:
                 COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
                 {height_width_clause}
             FROM obj_with_attrs o1
-            JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
+            JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid <> o2.oid
             LEFT OUTER JOIN relationships_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
             LEFT OUTER JOIN relationships_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
             {metadata_join_clause}
-            WHERE o1.oid <> o2.oid
         """
         logger.debug(f"Create two_objects table:\n{sql}")
-        self.conn.execute(sql, self.attribute_domain + self.relationship_domain).df()
+        self.conn.execute(sql, self.attribute_domain + self.relationship_domain)
 
     def get_materialized_df(self, func):
         best_ckpt = func["function_implementation"]
@@ -339,6 +394,7 @@ class QueryExecutor:
         return df_with_pred
 
     def run(self, program, y_true, debug=False):
+        _start_run = time.time()
         # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
         for udf_name, df in self.materialized_udfs.items():
             exec(f"{udf_name} = df")
@@ -377,6 +433,7 @@ class QueryExecutor:
             raise ValueError(
                 "Unknown dataset: {}".format(self.dataset)
             )
+        program["query"] = remove_duplicates(program["query"])
         logger.info("Running query: {}".format(program["query"]))
 
         if self.program_with_pixels:
@@ -428,6 +485,9 @@ class QueryExecutor:
         y_pred = [1 if vid in result else 0 for vid in input_vids]
 
         f1 = f1_score(y_true[:len(y_pred)], y_pred)
+        self.query_execution_time += time.time() - _start_run
+        logger.info("Test data initialization time: {}".format(self.test_data_init_time))
+        logger.info("Query execution time: {}".format(self.query_execution_time))
         logger.info("F1 score: {}".format(f1))
         return y_pred
 
@@ -470,16 +530,20 @@ class QueryExecutor:
             WHERE vid = ANY([{parameters}])
         """, vids).df()
 
+        logger.info("grouping tables by vid and fid")
         df_one_object_grouped = df_one_object.groupby(['vid', 'fid'], as_index=True, sort=False)
         df_two_objects_grouped = df_two_objects.groupby(['vid', 'fid'], as_index=True, sort=False)
 
+        logger.info("converting dataframes to numpy arrays")
         np_one_object = df_one_object.values
         np_two_objects = df_two_objects.values
 
+        logger.info("grouping numpy arrays by vid and fid")
         # Construct numpy arrays for each group
         grouped_np_one_object = np.array([np_one_object[i.values, :] for _, i in df_one_object_grouped.groups.items()], dtype=object)
         grouped_np_two_objects = np.array([np_two_objects[i.values, :] for _, i in df_two_objects_grouped.groups.items()], dtype=object)
 
+        logger.info("building lookup dictionaries")
         # Lookup dictionary, where key is (vid, fid) and value is the index in the grouped_np_one_object/grouped_np_two_objects
         group_keys_one_object = dict(zip(df_one_object_grouped.groups.keys(), range(len(df_one_object_grouped.groups))))
         group_keys_two_objects = dict(zip(df_two_objects_grouped.groups.keys(), range(len(df_two_objects_grouped.groups))))

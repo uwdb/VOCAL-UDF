@@ -78,7 +78,7 @@ async def main():
     parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
     parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
     parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
-    parser.add_argument("--openai_model_name", type=str, default="gpt-4-turbo-2024-04-09", help="OpenAI model name")
+    parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
 
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs

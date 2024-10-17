@@ -26,6 +26,7 @@ if __name__ == '__main__':
     parser.add_argument("--query_class_name", type=str, help="query class name")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
+    parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
     query_id = args.query_id
@@ -34,6 +35,7 @@ if __name__ == '__main__':
     query_class_name = args.query_class_name
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
+    openai_model_name = args.openai_model_name
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -127,12 +129,13 @@ if __name__ == '__main__':
         registered_functions,
         object_domain,
         run_id,
+        openai_model_name,
         allow_new_udfs=False,
     )
     qp.parse(user_query)
     parsed_program = qp.get_parsed_program()
-    logger.info(f"parsed_program: {parsed_program}")
     parsed_dsl = qp.get_parsed_query()
+    logger.info(f"parsed_program: {parsed_program}")
     logger.info(f"parsed_dsl: {parsed_dsl}")
 
     qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size)

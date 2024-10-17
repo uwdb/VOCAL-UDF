@@ -15,6 +15,7 @@ logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
 if __name__ == '__main__':
+    # python run_query_executor.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --cpus 8 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -39,6 +40,7 @@ if __name__ == '__main__':
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
     parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--udf_selection_mode", type=str, choices=["random", "active", "no_dummy"], default="active", help="UDF selection mode")
 
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
@@ -69,6 +71,7 @@ if __name__ == '__main__':
         assert selection_labels == "none"
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
+    udf_selection_mode = args.udf_selection_mode
 
     config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-labels={}-budget={}-llm_method={}".format(
         num_interpretations,
@@ -83,6 +86,8 @@ if __name__ == '__main__':
         labeling_budget,
         llm_method,
     )
+    if udf_selection_mode != "active":
+        config_name = f"{udf_selection_mode}_{config_name}"
 
     random.seed(run_id)
     np.random.seed(run_id)
