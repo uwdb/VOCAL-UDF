@@ -1,26 +1,16 @@
 from typing_extensions import Annotated
 import autogen
 from autogen import gather_usage_summary
-from vocaludf.parser import parse
-from vocaludf.utils import replace_slot, MODEL_COST, RESOLVE_MODEL_NAME
 import pyparsing as pp
 import logging
 import os
-
-def behind(o1_y1, o1_y2, o2_y1, o2_y2):
-    o1_center_y = (o1_y1 + o1_y2) / 2
-    o2_center_y = (o2_y1 + o2_y2) / 2
-    return o1_center_y < o2_center_y
-
-def behind(o1_y1, o1_y2, o2_y1, o2_y2, **kwargs):
-    threshold = kwargs.get('threshold', 50)
-    o1_cy = (o1_y1 + o1_y2) / 2
-    o2_cy = (o2_y1 + o2_y2) / 2
-    return o2_cy - o1_cy > threshold
+from vocaludf.parser import parse
+from vocaludf.utils import replace_slot, MODEL_COST, RESOLVE_MODEL_NAME
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
 class QueryParser:
     def __init__(
         self,
@@ -46,10 +36,8 @@ class QueryParser:
         self.cost_estimation = 0
         self.parsed_program = None
         self.parsed_query = None
-        if dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
+        if dataset in ["clevrer", "charades", "cityflow"]:
             dsl_definition_prompt = prompt_config["dsl_definition"]
-        elif dataset in ["clevr", "gqa", "vaw"]:  # image dataset
-            dsl_definition_prompt = prompt_config["dsl_definition_image"]
         else:
             raise ValueError(f"Dataset {dataset} not supported")
         if allow_new_udfs:
@@ -57,7 +45,7 @@ class QueryParser:
                 " ".join(
                     [
                         dsl_definition_prompt,
-                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer", "vaw", "cityflow"] else prompt_config["udf_definition"]["with_object"],
+                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevrer", "cityflow"] else prompt_config["udf_definition"]["with_object"],
                         prompt_config["registered_udfs"],
                         prompt_config["parse_query"],
                     ]
@@ -80,7 +68,7 @@ class QueryParser:
                 " ".join(
                     [
                         dsl_definition_prompt,
-                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevr", "clevrer", "vaw", "cityflow"] else prompt_config["udf_definition"]["with_object"],
+                        prompt_config["udf_definition"]["without_object"] if dataset in ["clevrer", "cityflow"] else prompt_config["udf_definition"]["with_object"],
                         prompt_config["registered_udfs"],
                         prompt_config["force_parse_query"],
                     ]

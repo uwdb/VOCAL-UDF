@@ -478,11 +478,6 @@ class UDFGenerator(UtilsMixin):
         self.execution_time["model_distillation_init"] += time.time() - _start
         if self.dataset in ["charades"]:
             filtered_objects = list(set(await self.llm_filter_relevant_objects(self.udf_signature, self.udf_description) + ['person']))
-        elif self.dataset in ["gqa", "vaw"]:
-            if self.n_obj == 1:
-                filtered_objects = await self.llm_filter_relevant_objects(self.udf_signature, self.udf_description)
-            else: # n_obj == 2
-                filtered_subjects, filtered_targets = await self.llm_filter_relevant_subjects_targets(self.udf_signature, self.udf_description)
         logger.debug(f"[{self.udf_signature}] filtered_objects: {filtered_objects}, filtered_subjects: {filtered_subjects}, filtered_targets: {filtered_targets}")
         logger.info(f"[{self.udf_signature}] Model distillation (initialization) finished")
 

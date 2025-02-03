@@ -37,17 +37,15 @@ class UDFProposer:
         self.proposed_functions = {}
         # Step 1: propose new UDFs
         logger.info("Proposing new UDFs")
-        if self.dataset in ["clevrer", "charades", "cityflow"]:  # video dataset
+        if self.dataset in ["clevrer", "charades", "cityflow"]:
             dsl_definition_prompt = self.prompt_config["dsl_definition"]
-        elif self.dataset in ["clevr", "gqa", "vaw"]:  # image dataset
-            dsl_definition_prompt = self.prompt_config["dsl_definition_image"]
         else:
             raise ValueError(f"Dataset {self.dataset} not supported")
         system_message = replace_slot(
             " ".join(
                 [
                     dsl_definition_prompt,
-                    self.prompt_config["udf_definition"]["without_object"] if self.dataset in ["clevr", "clevrer", "vaw", "cityflow"] else self.prompt_config["udf_definition"]["with_object"],
+                    self.prompt_config["udf_definition"]["without_object"] if self.dataset in ["clevrer", "cityflow"] else self.prompt_config["udf_definition"]["with_object"],
                     self.prompt_config["registered_udfs"],
                     self.prompt_config["propose_udfs"],
                 ]

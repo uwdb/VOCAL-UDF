@@ -4,159 +4,43 @@ output_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/outputs
 prompt_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/prompts
 log_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/logs
 model_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models
-llava_path: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models/llava-1.5-7b-hf
+llava_path: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models/llava-1.5-7b-hf # Not used
 query_parser:
   temperature: 0.2
   top_p: 0.5
 udf_proposer:
   temperature: 0.2
   top_p: 0.5
-interpretation_generator:
-  temperature: 0.7
-  top_p: 1
-  max_tokens: 4095
 udf_generator:
   temperature: 0.2
   top_p: 0.5
-  n_train: 10000
-  n_test: 10000
 clevrer:
   height: 320
   width: 480
   dataset_size: 10000
+  n_train_selection: 10000
+  n_test_selection: 10000
+  n_test_distill: 1000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/clevrer_three_clips
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/video_frames
-  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/3_new_udfs_labels.json
   onames:
     - object
-clevr:
-  height: 320
-  width: 480
-  dataset_size: 15000
-  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevr/3_new_udfs_labels.json
-  onames:
-    - object
-gqa:
-  features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/gqa_three_clips
-  video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/gqa/images
-  onames:
-    - window
-    - man
-    - shirt
-    - tree
-    - wall
-    - person
-    - building
-    - ground
-    - sky
-    - sign
-    - head
-    - pole
-    - hand
-    - grass
-    - hair
-    - leg
-    - car
-    - woman
-    - leaves
-    - trees
-    - table
-    - ear
-    - pants
-    - people
-    - eye
-    - water
-    - door
-    - fence
-    - nose
-    - wheel
-    - chair
-    - floor
-    - arm
-    - jacket
-    - hat
-    - shoe
-    - tail
-    - clouds
-    - leaf
-    - face
-    - letter
-    - plate
-    - number
-    - windows
-    - shorts
-    - road
-    - flower
-    - sidewalk
-    - bag
-    - helmet
-vaw:
-  features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/vaw_three_clips
-  video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/gqa/images
-  onames:
-    - man
-    - shirt
-    - sky
-    - wall
-    - tree
-    - grass
-    - building
-    - woman
-    - sign
-    - person
-    - trees
-    - pants
-    - hair
-    - pole
-    - car
-    - table
-    - window
-    - chair
-    - fence
-    - clouds
-    - water
-    - plate
-    - jacket
-    - floor
-    - line
-    - leaves
-    - door
-    - people
-    - ground
-    - shorts
-    - umbrella
-    - girl
-    - boy
-    - train
-    - bus
-    - cloud
-    - dog
-    - horse
-    - lines
-    - jeans
-    - bag
-    - cat
-    - road
-    - bench
-    - roof
-    - boat
-    - light
-    - snow
-    - sidewalk
-    - cow
 cityflow:
   dataset_size: 1648
+  n_train_selection: 5000
+  n_test_selection: 5000
+  n_test_distill: 1000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/cityflow_three_clips
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/cityflow/data
   onames:
     - car
 charades:
   dataset_size: 9601
+  n_train_selection: 10000
+  n_test_selection: 10000
+  n_test_distill: 1000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/charades_five_clips
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/frames
-  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/3_new_udfs_labels-npred=5-nobj_pred=1.json
-  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/single_semantic-unavailable=1-npred=3-nobj_pred=2-nvars=2-depth=1.json
-  # input_query_file: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2.json
   onames:
     - person
     - bag

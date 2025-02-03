@@ -2,36 +2,30 @@ import random
 import string
 import os
 from vocaludf.utils import (
-    duckdb_execute_cache_sequence,
     duckdb_execute_video_materialize,
     parse_signature,
     PredImageDataset,
 )
-from vocaludf.pretrained_model_api import image_captioning, visual_question_answering, depth_estimation
 import time
 import duckdb
 import logging
-from sklearn.metrics import f1_score
-from typing import List
+from sklearn.metrics import f1_score, precision_score, recall_score
 import torch
 from vocaludf import mlp
-from torch.utils.data import IterableDataset, Dataset, DataLoader
-import math
+from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 from collections import defaultdict
 from tqdm import tqdm
 import sys
 import numpy as np
-from PIL import Image
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from itertools import repeat, chain
+from itertools import chain
 from nvidia.dali import pipeline_def
 import nvidia.dali.fn as fn
 import nvidia.dali.types as types
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 from torchvision.io import read_image, ImageReadMode
-import cv2
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -50,23 +44,6 @@ def remove_duplicates(query):
                 unique_scene_graph.append(element)
         item['scene_graph'] = unique_scene_graph
     return query
-
-class GQAImageDataset(Dataset):
-    def __init__(self, vids, img_dir):
-        self.vids = vids
-        self.img_dir = img_dir
-
-    def __len__(self):
-        return len(self.vids)
-
-    def __getitem__(self, idx):
-        frame = read_image(os.path.join(
-            self.img_dir,
-            f"{self.vids[idx] % 10}",
-            f"{self.vids[idx]}.jpg"
-        ), mode=ImageReadMode.RGB) # Tensor[image_channels, image_height, image_width]
-
-        return frame, self.vids[idx], 1
 
 class CityFlowImageDataset(Dataset):
     def __init__(self, vids, img_dir, df_metadata):
@@ -154,7 +131,6 @@ def CharadesDaliDataloader(
         for fname in video_filenames
     ]
 
-
     @pipeline_def
     def video_pipe(filenames, vids):
         videos, labels, start_frame_num = fn.readers.video(
@@ -211,7 +187,6 @@ class QueryExecutor:
         self.dali_batch_size = dali_batch_size
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
-        # self.executor = ProcessPoolExecutor(max_workers=self.num_workers)
         self.init_table()
         self.test_data_init_time += time.time() - _start
         _start = time.time()
@@ -257,7 +232,6 @@ class QueryExecutor:
                             raise ValueError("Unknown number of arguments in the function header: {}".format(len(python_func_args)))
                         python_arg_str = ", ".join([f"{arg}: {type}" for arg, type in zip(python_func_args, types)])
                         python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
-                        # python_header_type_annotated = f"def {python_func_name}_{suffix}({python_arg_str}) -> bool:"
                         lines[i] = python_header_type_annotated
                         break
                 # Rejoin the modified lines into a single string
@@ -270,19 +244,14 @@ class QueryExecutor:
         self.query_execution_time += time.time() - _start
 
     def init_table(self):
-        metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
-        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
-        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
+        metadata_join_clause = '' if self.dataset in ['clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
+        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevrer'] else 'm.height AS height, m.width AS width'
+        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
 
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
-        if self.dataset == 'clevrer':
-            where_clause = f"WHERE o1.vid >= 5000 AND o1.vid < 10000"
-        elif self.dataset == 'charades':
-            where_clause = f"WHERE o1.vid >= 4800 AND o1.vid < 9601"
-        elif self.dataset == 'cityflow':
-            where_clause = f"WHERE o1.vid >= 824 AND o1.vid < 1648"
-        else:
-            where_clause = ""
+        dataset_size = self.config[self.dataset]["dataset_size"]
+        # Use the second half of the dataset for testing
+        where_clause = "WHERE o1.vid >= {} AND o1.vid < {}".format(dataset_size // 2, dataset_size)
         sql = f"""
             CREATE TEMPORARY TABLE one_object AS
             SELECT
@@ -300,22 +269,10 @@ class QueryExecutor:
         self.conn.execute(sql, self.attribute_domain)
 
         rel_parameters = ','.join('?' for _ in self.relationship_domain)
-        if self.dataset == 'clevrer':
-            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 5000 AND vid < 10000"
-            obj_where_clause = "WHERE vid >= 5000 AND vid < 10000"
-            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 5000 AND vid < 10000"
-        elif self.dataset == 'charades':
-            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 4800 AND vid < 9601"
-            obj_where_clause = "WHERE vid >= 4800 AND vid < 9601"
-            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 4800 AND vid < 9601"
-        elif self.dataset == 'cityflow':
-            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 824 AND vid < 1648"
-            obj_where_clause = "WHERE vid >= 824 AND vid < 1648"
-            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 824 AND vid < 1648"
-        else:
-            attr_where_clause = f"WHERE aname = ANY([{attr_parameters}])"
-            obj_where_clause = ""
-            rel_where_clause = f"WHERE rname = ANY([{rel_parameters}])"
+        # Use the second half of the dataset for testing
+        attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= {dataset_size // 2} AND vid < {dataset_size}"
+        obj_where_clause = f"WHERE vid >= {dataset_size // 2} AND vid < {dataset_size}"
+        rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= {dataset_size // 2} AND vid < {dataset_size}"
         sql = f"""
             CREATE TEMPORARY TABLE two_objects AS
             WITH
@@ -389,8 +346,6 @@ class QueryExecutor:
         columns = ['vid', 'fid', 'o1_oid'] if n_obj == 1 else ['vid', 'fid', 'o1_oid', 'o2_oid']
         df_with_pred = pd.DataFrame(rows, columns=columns)
         df_with_pred['pred'] = predictions
-        # logger.info(f"df_with_pred: {df_with_pred.to_string()}")
-        # logger.info(f"# positive predictions: {df_with_pred['pred'].sum()}, # negative predictions: {len(df_with_pred) - df_with_pred['pred'].sum()}")
         return df_with_pred
 
     def run(self, program, y_true, debug=False):
@@ -398,41 +353,11 @@ class QueryExecutor:
         # Bind each dataframe to a variable name, so that we can refer to them in the SQL query
         for udf_name, df in self.materialized_udfs.items():
             exec(f"{udf_name} = df")
-        if self.dataset == "clevrer":
-            exec_func = duckdb_execute_video_materialize
-            if debug:
-                input_vids = list(range(5000, 6000))
-            else:
-                input_vids = list(range(5000, 10000))
-        elif self.dataset == "clevr": # Deprecated
-            exec_func = duckdb_execute_cache_sequence
-            if debug:
-                input_vids = 1500
-            else:
-                input_vids = 15000
-        elif self.dataset == "charades":
-            exec_func = duckdb_execute_video_materialize
-            if debug:
-                input_vids = list(range(4800, 6000))
-            else:
-                input_vids = list(range(4800, 9601))
-        elif self.dataset == "cityflow":
-            exec_func = duckdb_execute_video_materialize
-            if debug:
-                input_vids = list(range(824, 1648))
-            else:
-                input_vids = list(range(824, 1648))
-        elif self.dataset in ["gqa", "vaw"]: # Deprecated
-            exec_func = duckdb_execute_video_materialize
-            input_vids = self.conn.execute(f"SELECT DISTINCT vid FROM {self.dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
-            if debug:
-                input_vids = input_vids[:1000]
-            else:
-                input_vids = input_vids
+        dataset_size = self.config[self.dataset]["dataset_size"]
+        if debug:
+            input_vids = list(range(dataset_size // 2, min(dataset_size // 2 + 1000, dataset_size)))
         else:
-            raise ValueError(
-                "Unknown dataset: {}".format(self.dataset)
-            )
+            input_vids = list(range(dataset_size // 2, dataset_size))
         program["query"] = remove_duplicates(program["query"])
         logger.info("Running query: {}".format(program["query"]))
 
@@ -440,7 +365,7 @@ class QueryExecutor:
             _start = time.time()
             # First, execute the query with all on-the-fly UDFs removed
             query_program = self.remove_on_the_fly_udfs(program["query"])
-            result = exec_func(
+            result = duckdb_execute_video_materialize(
                 self.conn,
                 query_program,
                 input_vids,
@@ -457,7 +382,7 @@ class QueryExecutor:
                     exec(f"{udf_name} = df")
                 _start = time.time()
                 # Then, execute the query with all on-the-fly UDFs over the result of the previous query
-                result = exec_func(
+                result = duckdb_execute_video_materialize(
                     self.conn,
                     program["query"],
                     result, # matching vids from the previous query
@@ -470,7 +395,7 @@ class QueryExecutor:
                 logger.info("output vids: {}".format(result))
         else:
             _start = time.time()
-            result = exec_func(
+            result = duckdb_execute_video_materialize(
                 self.conn,
                 program["query"],
                 input_vids,
@@ -481,14 +406,17 @@ class QueryExecutor:
             logger.info("Time to execute query: {}".format(time.time() - _start))
             result = sorted(result)
             logger.info("output vids: {}".format(result))
-        # logger.info("output vids: {}".format(result))
         y_pred = [1 if vid in result else 0 for vid in input_vids]
 
         f1 = f1_score(y_true[:len(y_pred)], y_pred)
+        precision = precision_score(y_true[:len(y_pred)], y_pred)
+        recall = recall_score(y_true[:len(y_pred)], y_pred)
         self.query_execution_time += time.time() - _start_run
         logger.info("Test data initialization time: {}".format(self.test_data_init_time))
         logger.info("Query execution time: {}".format(self.query_execution_time))
         logger.info("F1 score: {}".format(f1))
+        logger.info("Precision: {}".format(precision))
+        logger.info("Recall: {}".format(recall))
         return y_pred
 
     def remove_on_the_fly_udfs(self, query):
@@ -590,14 +518,8 @@ class QueryExecutor:
             """, vids).df()
             data = CityFlowImageDataset(vids, self.config[self.dataset]["video_frames_dir"], df_metadata)
             video_iterator = DataLoader(data, batch_size=1, shuffle=False) # batch_size must be 1 because of variable image sizes
-        elif self.dataset in ["gqa", "vaw"]:
-            data = GQAImageDataset(vids, self.config[self.dataset]["video_frames_dir"])
-            video_iterator = DataLoader(data, batch_size=1, shuffle=False) # batch_size must be 1 because of variable image sizes
         udf_to_df_map = defaultdict(list)
         udf_to_pred_map = defaultdict(list)
-
-        udf_to_args_map = defaultdict(list)
-        current_chunk_size = 0
 
         logger.info("executing on-the-fly UDFs")
         loading_time = 0
@@ -613,7 +535,7 @@ class QueryExecutor:
         for batch in tqdm(video_iterator, file=sys.stdout, desc="load frames and materialize UDFs"):
             loading_time += time.time() - _start
             _start = time.time()
-            if self.dataset in ["gqa", "clevr", "vaw", "cityflow"]:
+            if self.dataset in ["cityflow"]:
                 frames, vids, fids = batch
                 frames = frames.permute(0, 2, 3, 1).cpu().numpy() # Shape: (B, C, H, W) --> (B, H, W, C)
                 vids = vids.tolist()

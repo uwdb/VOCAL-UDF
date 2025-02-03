@@ -4,26 +4,21 @@ import yaml
 import random
 import json
 import os
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
 import logging
 import argparse
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
-from vocaludf.query_parser import QueryParser
-from vocaludf.async_udf_proposer import SharedResources, UDFProposer, UDFGenerator, UDFSelector
-from vocaludf.query_executor import QueryExecutor
-import duckdb
-import sys
 import resource
 import asyncio
+from vocaludf.query_parser import QueryParser
+from vocaludf.udf_proposer import UDFProposer
+from vocaludf.async_udf_generator import UDFGenerator
+from vocaludf.udf_selector import UDFSelector
+from vocaludf.query_executor import QueryExecutor
+from vocaludf.utils import parse_signature, get_active_domain, setup_logging, SharedResources
 
-# logging.basicConfig()
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
-
-def using(point=""):
-    usage=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
 async def process_udf(udf_signature, udf_description, shared_resources, gt_udf_name):
     logger.info(f"UDF generation for {udf_signature} started")
@@ -46,13 +41,15 @@ async def process_udf(udf_signature, udf_description, shared_resources, gt_udf_n
 
 
 async def main():
-    # clevrer: python async_main.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
+    # clevrer: python async_main.py --num_missing_udfs 3 --query_id 2 --run_id 3 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
     # cityflow: python async_main.py --num_missing_udfs 2 --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
     # charades: python async_main.py --num_missing_udfs 2 --query_id 3 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
-    # gqa: python main.py --num_missing_udfs 1 --query_id 0 --run_id 0 --dataset "gqa" --query_class_name "unavailable=2-npred=1-nattr_pred=1-nobj_pred=0-nvars=2-min_npos=100-max_npos=5000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
-    # vaw: python main.py --num_missing_udfs 1 --query_id 6 --run_id 0 --dataset "vaw" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5 --program_with_pixels --generate --cpus 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+    )
+    prompt_config = yaml.load(
+        open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
+        Loader=yaml.FullLoader,
     )
 
     parser = argparse.ArgumentParser()
@@ -133,22 +130,11 @@ async def main():
 
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
-    gt_dsl = input_query["dsl"]
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
-    if dataset in ["gqa", "vaw"]:
-        conn = duckdb.connect(
-            database=os.path.join(config["db_dir"], "annotations.duckdb"),
-            read_only=True,
-        )
-        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
-        y_true = [1 if vid in positive_videos else 0 for vid in vids]
-    else:
-        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
 
-    """
-    Set up logging
-    """
+    # Set up logging
     base_dir = os.path.join(
         "udf_generation",
         dataset,
@@ -156,53 +142,16 @@ async def main():
         "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
     )
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
-        base_dir
-    )
-    os.makedirs(log_dir, exist_ok=True)
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
-
-    prompt_config = yaml.load(
-        open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
-        Loader=yaml.FullLoader,
-    )
+    # Load registered UDFs
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
-    if "single_semantic" in query_class_name:
-        registered_functions = [{
-            "signature": "object(o0, name)",
-            "description": "Whether o0 is an object with the given name.",
-            "function_implementation": ""
-        }]
-    else:
-        registered_functions = registered_udfs_json[f"{dataset}_base"]
-        new_modules = input_query["new_modules"]
-        assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"
-        for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
-            registered_functions.append(registered_udfs_json[dataset][new_module])
+    registered_functions = registered_udfs_json[f"{dataset}_base"]
+    new_modules = input_query["new_modules"]
+    assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"
+    for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
+        registered_functions.append(registered_udfs_json[dataset][new_module])
     logger.info("Registered functions: {}".format(registered_functions))
     object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
     logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
@@ -306,16 +255,6 @@ async def main():
                         gt_udf_candidates = ["above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"]
                 elif dataset == "charades":
                     gt_udf_candidates = ["looking_at", "above", "in_front_of", "on_the_side_of", "carrying", "drinking_from", "have_it_on_the_back", "leaning_on", "not_contacting", "standing_on", "twisting", "wiping", "not_looking_at", "beneath", "behind", "in", "inside", "inside_of", "covered_by", "eating", "holding", "lying_on", "sitting_on", "touching", "wearing", "writing_on"]
-                elif dataset == "gqa":
-                    if len(udf_vars) == 2:
-                        gt_udf_candidates = ["on", "near", "in_front_of", "next_to", "above", "below", "on_top_of", "sitting_on", "carrying", "to_the_left_of", "to_the_right_of", "wearing", "of", "behind", "in", "inside", "inside_of", "by", "on_the_side_of", "holding", "walking_on", "beside"]
-                    else:
-                        gt_udf_candidates = ["black", "blue", "red", "large", "wood", "tall", "orange", "dark", "pink", "clear", "white", "green", "brown", "gray", "small", "yellow", "metal", "long", "silver", "standing"]
-                elif dataset == "vaw":
-                    if len(udf_vars) == 2:
-                        gt_udf_candidates = ["above", "beneath", "to_the_left_of", "to_the_right_of", "in_front_of", "behind"]
-                    else:
-                        gt_udf_candidates = ["black", "blue", "brown", "gray", "small", "metal", "long", "dark", "rounded", "orange", "white", "green", "large", "red", "wooden", "yellow", "tall", "silver", "standing", "round"]
                 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
                 gt_udf_embeddings = model.encode(gt_udf_candidates)
                 implemented_udf_embedding = model.encode([udf_name])

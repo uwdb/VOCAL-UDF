@@ -1,21 +1,19 @@
 import yaml
 import random
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
 import logging
 import numpy as np
-from vocaludf.query_executor import QueryExecutor
 import argparse
 import os
-import sys
 import resource
-import duckdb
+from vocaludf.query_executor import QueryExecutor
+from vocaludf.utils import setup_logging
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
 if __name__ == '__main__':
-    # python run_query_executor.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --cpus 8 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
+    # python run_query_executor.py --num_missing_udfs 3 --query_id 2 --run_id 3 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --cpus 8 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -95,53 +93,18 @@ if __name__ == '__main__':
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     positive_videos = input_query["positive_videos"]
-    if dataset in ["gqa", "vaw"]: # Deprecated
-        conn = duckdb.connect(
-            database=os.path.join(config["db_dir"], "annotations.duckdb"),
-            read_only=True,
-        )
-        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
-        y_true = [1 if vid in positive_videos else 0 for vid in vids]
-    else:
-        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
 
-
-    """
-    Set up logging
-    """
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
+    # Set up logging
+    base_dir = os.path.join(
         "query_execution",
         dataset,
         query_class_name,
         "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
     )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     with open(
         os.path.join(
