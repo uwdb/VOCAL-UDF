@@ -31,7 +31,7 @@ echo "num_missing_udfs: $num_missing_udfs"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/async_main.py \
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/async_main.py \
         --num_missing_udfs $num_missing_udfs \
         --run_id $run \
         --query_id $query_id \
