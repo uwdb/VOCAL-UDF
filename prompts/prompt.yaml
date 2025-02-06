@@ -1,7 +1,7 @@
 dsl_definition: |
   Each video segment is a sequence of N frames. The visual content of each frame is represented by a region graph: A region graph contains a set of objects in a frame, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. All predicates of a region graph are connected by commas. Then, region graphs are connected in temporal sequence with semicolons. Region graphs that appear earlier in the sequence represent temporally earlier frames in the video. We further use the notation Duration(g, d) to require that the region graph g exist in at least d consecutive frames. Negation operation is not supported in our DSL. Remember to always add parentheses around comma-connected predicates.
-dsl_definition_image: |
-  The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. Negation operation is not supported in our DSL. All predicates of a region graph are connected by commas.
+# dsl_definition_image: |
+#   The visual content of the image is represented by a region graph: A region graph contains a set of objects in an image, along with a set of relationships between those objects. Objects can optionally have attributes. In our DSL, we use a variable o to represent an object in a query. Different variables represent different objects. Negation operation is not supported in our DSL. All predicates of a region graph are connected by commas.
 udf_definition:
   with_object: |
     A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
@@ -22,14 +22,14 @@ force_parse_query: |
 propose_udfs: |
   For function proposal tasks, only use the functions you have been provided with. Reply TERMINATE when the task is done. Please propose the new functions that are necessary to parse the user query, and also include a brief description for each proposed function that explains its purpose as described in the query. The function description should always start with the word ``Whether'' and not contain other comments, explanations, or reasoning.
   Let's think step by step. Based on the existing functions, determine what new functions are needed. The proposed function must follow the format. Don't propose functions that contain changes in states. If you have those, propose a separate function for each state instead. For example, do not propose a function merge_from_A_into_B(o0) that checks whether an object o0 merges from lane A to lane B because it contains two states: o0 is in lane A and o0 is in lane B. Instead, replace it with two separate functions: in_lane_A(o0) and in_lane_B(o0). Propose as few functions as possible while ensuring that the user's intent can be precisely captured.
-verify_udfs: |
-  You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
-  Here are the existing functions:
-  {{functions}}
-  For each proposed function, determine if it is already covered or can be constructed out of existing functions. If so, remove it from the list. Do not use any assumptions that are not explicitly stated. Output the remaining functions in a strict JSON format (if there is nothing left, please reply empty JSON):
-  ```json
-  {"function(args)": "description"}
-  ```
+# verify_udfs: |
+#   You are a helpful AI assistant that determines whether a function can be constructed out of existing ones.
+#   Here are the existing functions:
+#   {{functions}}
+#   For each proposed function, determine if it is already covered or can be constructed out of existing functions. If so, remove it from the list. Do not use any assumptions that are not explicitly stated. Output the remaining functions in a strict JSON format (if there is nothing left, please reply empty JSON):
+#   ```json
+#   {"function(args)": "description"}
+#   ```
 decide_udf_type:
   overall: |
     You are tasked with creating a solution to determine ``{{udf_description}}''. You can choose to use either a python function or a computer vision model.
@@ -61,10 +61,8 @@ generate_udfs:
   details: |
     - Each interpretation should offer a different but reasonable understanding of the task, not just superficial differences like variable names. Seek interpretations that vary in logic and conceptual understanding of the task. Consider geometric, visual, and spatial perspectives. Include assumptions or constraints where relevant.
     - Prioritize generating functions that are likely to see frequent use, starting with the most common.
-  semantic_interpretation: | # Unused
+  semantic_interpretation: |
     - Semantic interpretation: {{semantic_interpretation}}
-  schema: | # Unused
-    - {{schema_info}}
   inputs:
     attribute: |
       - The input to the function contains the following parameters:

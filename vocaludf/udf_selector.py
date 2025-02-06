@@ -31,46 +31,21 @@ class UDFSelector(UtilsMixin):
         # Shared resources
         self.shared_resources = shared_resources
         self.config = shared_resources.config
-        self.prompt_config = shared_resources.prompt_config
-        self.registered_functions = shared_resources.registered_functions
-        self.object_domain = shared_resources.object_domain
-        self.relationship_domain = shared_resources.relationship_domain
-        self.attribute_domain = shared_resources.attribute_domain
         self.dataset = shared_resources.dataset
         self.labeling_budget = shared_resources.labeling_budget
         self.n_selection_samples = shared_resources.n_selection_samples
-        self.num_interpretations = shared_resources.num_interpretations
-        self.num_parameter_search = shared_resources.num_parameter_search
         self.program_with_pixels = shared_resources.program_with_pixels
-        self.program_with_pretrained_models = shared_resources.program_with_pretrained_models
-        self.query_class_name = shared_resources.query_class_name
-        self.query_id = shared_resources.query_id
         self.run_id = shared_resources.run_id
-        self.num_workers = shared_resources.num_workers
-        self.selection_strategy = shared_resources.selection_strategy
-        self.selection_labels = shared_resources.selection_labels
-        self.allow_kwargs_in_udf = shared_resources.allow_kwargs_in_udf
-        self.llm_method = shared_resources.llm_method
-        self.is_async = shared_resources.is_async
-        self.openai_model_name = shared_resources.openai_model_name
         self.executor = shared_resources.executor
         self.n_train_selection = shared_resources.n_train_selection
         self.n_test_selection = shared_resources.n_test_selection
-        self.n_train_distill = shared_resources.n_train_distill
-        self.n_test_distill = shared_resources.n_test_distill
-        self.save_labeled_data = shared_resources.save_labeled_data
-        self.load_labeled_data = shared_resources.load_labeled_data
         self.attribute_features_dir = shared_resources.attribute_features_dir
         self.relationship_features_dir = shared_resources.relationship_features_dir
         self.one_object_df = shared_resources.one_object_df
         self.two_objects_df = shared_resources.two_objects_df
         self.device = shared_resources.device
         self.clip_model = shared_resources.clip_model
-        self.clip_processor = shared_resources.clip_processor
         self.tokenizer = shared_resources.tokenizer
-        self.dim_in = shared_resources.dim_in
-        self.llava_model = shared_resources.llava_model
-        self.llava_processor = shared_resources.llava_processor
         self.vid_to_vname = shared_resources.vid_to_vname
 
         # Per-UDF state variables
@@ -81,7 +56,6 @@ class UDFSelector(UtilsMixin):
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
             read_only=True,
         )
-
 
     def get_cost_estimation(self):
         return self.cost_estimation

@@ -9,17 +9,13 @@ import argparse
 import os
 import sys
 
-def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_parameter_search, labeling_budget, n_selection_samples, llm_method, num_interpretations, program_with_pixels, program_with_pretrained_models, n_train_distill, selection_strategy, selection_labels):
+def main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf, num_parameter_search, labeling_budget, n_selection_samples, llm_method, num_interpretations, program_with_pixels, program_with_pretrained_models, n_train_distill, selection_strategy):
     try:
         config = yaml.safe_load(
             open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
         )
-        if selection_strategy == "both":
-            assert selection_labels != "none"
-        elif selection_strategy == "model":
-            assert selection_labels == "none"
 
-        config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-labels={}-budget={}-llm_method={}".format(
+        config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-budget={}-llm_method={}".format(
             num_interpretations,
             num_parameter_search,
             allow_kwargs_in_udf,
@@ -28,7 +24,6 @@ def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_p
             n_train_distill,
             n_selection_samples,
             selection_strategy,
-            selection_labels,
             labeling_budget,
             llm_method,
         )
@@ -41,7 +36,7 @@ def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_p
             config["log_dir"],
             "best_udf_type",
             dataset,
-            query_class_name,
+            query_filename,
             config_name,
         )
         os.makedirs(log_dir, exist_ok=True)
@@ -62,7 +57,7 @@ def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_p
         # console_handler.setFormatter(formatter)
 
         # Add the handlers to the logger
-        logger = logging.getLogger(f"vocaludf_{query_class_name}_{query_id}_{run_id}")
+        logger = logging.getLogger(f"vocaludf_{query_filename}_{query_id}_{run_id}")
         logger.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
 
@@ -81,7 +76,7 @@ def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_p
                 config["log_dir"],
                 "udf_generation",
                 dataset,
-                query_class_name,
+                query_filename,
                 f"num_missing_udfs={num_missing_udfs}",
                 config_name,
                 "qid={}-run={}.log".format(query_id, run_id),
@@ -190,7 +185,7 @@ def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_p
             config["output_dir"],
             "best_udf_type",
             dataset,
-            query_class_name,
+            query_filename,
             config_name,
         )
         os.makedirs(output_dir, exist_ok=True)
@@ -202,35 +197,35 @@ def main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf, num_p
 
 
 if __name__ == '__main__':
-    # clevrer: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
-    # charades: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
-    # cityflow: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v"
+    # clevrer: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --llm_method "gpt4v"
+    # charades: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_filename "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v"
+    # cityflow: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v"
     # CLEVRER
     dataset = "clevrer"
-    query_class_name = "3_new_udfs_labels"
+    query_filename = "3_new_udfs_labels"
     for query_id in range(30):
         for run_id in range(3):
-            main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=20, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=True, program_with_pretrained_models=False, n_train_distill=100, selection_strategy="both", selection_labels="user")
+            main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=20, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=True, program_with_pretrained_models=False, n_train_distill=100, selection_strategy="both")
 
     # Charades
     dataset = "charades"
-    query_class_names = [
+    query_filenames = [
         "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2",
         "unavailable=2-npred=4-nobj_pred=1-nvars=2-depth=2",
         "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2"
     ]
-    for query_class_name in query_class_names:
+    for query_filename in query_filenames:
         for query_id in range(10):
             for run_id in range(3):
-                main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both", selection_labels="user")
+                main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both")
 
     # CityFlow
     dataset = "cityflow"
-    query_class_names = [
+    query_filenames = [
         "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737",
         "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737"
     ]
-    for query_class_name in query_class_names:
+    for query_filename in query_filenames:
         for query_id in range(15):
             for run_id in range(3):
-                main(query_id, run_id, dataset, query_class_name, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both", selection_labels="user")
+                main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both")

@@ -66,7 +66,7 @@ def process_video(vid, prompt, pred_positive_videos, run_id, video_frames_dir, o
     }
     return request_line
 
-def submit_batch(input_vids, run_id, query_id, query_class_name, openai_model_name):
+def submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name):
     config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
     """
@@ -74,7 +74,7 @@ def submit_batch(input_vids, run_id, query_id, query_class_name, openai_model_na
     """
     base_dir = os.path.join(
         "gpt4v_clevrer_simplified",
-        query_class_name,
+        query_filename,
     )
     # Create a directory if it doesn't already exist
     log_dir = os.path.join(
@@ -106,7 +106,7 @@ def submit_batch(input_vids, run_id, query_id, query_class_name, openai_model_na
     sys.stderr = StreamToLogger(logger, logging.ERROR)
     sys.excepthook = exception_hook
 
-    with open(os.path.join(config['data_dir'], "clevrer", f"{query_class_name}.json"), "r") as f:
+    with open(os.path.join(config['data_dir'], "clevrer", f"{query_filename}.json"), "r") as f:
         input_query = json.load(f)['questions'][query_id]
     user_query = input_query["question"]
 
@@ -154,7 +154,7 @@ def submit_batch(input_vids, run_id, query_id, query_class_name, openai_model_na
         logger.info(f"batch_job.id: {batch_job.id}")
 
 
-def retrieve_batch(input_vids, run_id, query_id, query_class_name, openai_model_name):
+def retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_name):
     config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
 
     """
@@ -162,7 +162,7 @@ def retrieve_batch(input_vids, run_id, query_id, query_class_name, openai_model_
     """
     base_dir = os.path.join(
         "gpt4v_clevrer_simplified",
-        query_class_name,
+        query_filename,
     )
     # Create a directory if it doesn't already exist
     log_dir = os.path.join(
@@ -253,7 +253,7 @@ def retrieve_batch(input_vids, run_id, query_id, query_class_name, openai_model_
 
     logger.info(f"pred_positive_videos: {pred_positive_videos}")
 
-    with open(os.path.join(config['data_dir'], "clevrer", f"{query_class_name}.json"), "r") as f:
+    with open(os.path.join(config['data_dir'], "clevrer", f"{query_filename}.json"), "r") as f:
         input_query = json.load(f)['questions'][query_id]
     positive_videos = input_query["positive_videos"]
 
@@ -268,25 +268,25 @@ def retrieve_batch(input_vids, run_id, query_id, query_class_name, openai_model_
     logger.info(f"estimated_cost: {estimated_cost}")
 
 if __name__ == "__main__":
-    # python gpt4v_clevrer_simplified.py --query_id 0 --run_id 0 --query_class_name "simplified_3_new_udfs_labels" --openai_model_name "gpt-4o" --stage "submit"
+    # python gpt4v_clevrer_simplified.py --query_id 0 --run_id 0 --query_filename "simplified_3_new_udfs_labels" --openai_model_name "gpt-4o" --stage "submit"
     parser = argparse.ArgumentParser()
     parser.add_argument('--query_id', type=int, help='query id')
     parser.add_argument('--run_id', type=int, help='run id')
-    parser.add_argument('--query_class_name', type=str, help='query class name')
+    parser.add_argument('--query_filename', type=str, help='query filename')
     parser.add_argument("--openai_model_name", type=str, default="gpt-4-turbo-2024-04-09", help="OpenAI model name")
     parser.add_argument("--stage", type=str, help="Stage: submit or retrieve")
     args = parser.parse_args()
     query_id = args.query_id
     run_id = args.run_id
-    query_class_name = args.query_class_name
+    query_filename = args.query_filename
     openai_model_name = RESOLVE_MODEL_NAME[args.openai_model_name]
     stage = args.stage
 
     input_vids = [i for i in range(9500, 10000)]
 
     if stage == "submit":
-        submit_batch(input_vids, run_id, query_id, query_class_name, openai_model_name)
+        submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name)
     elif stage == "retrieve":
-        retrieve_batch(input_vids, run_id, query_id, query_class_name, openai_model_name)
+        retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_name)
     else:
         raise ValueError(f"Invalid stage: {stage}")

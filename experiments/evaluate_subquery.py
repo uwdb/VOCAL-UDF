@@ -19,16 +19,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
     parser.add_argument('--query_id', type=int, help='question id')
-    parser.add_argument("--cpus", type=int, default=4, help="Maximum number of tasks to execute at once")
+    parser.add_argument("--num_workers", type=int, default=4, help="Maximum number of tasks to execute at once")
     parser.add_argument("--dataset", type=str, help="dataset name")
-    parser.add_argument("--query_class_name", type=str, help="query class name")
+    parser.add_argument("--query_filename", type=str, help="query filename")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
     args = parser.parse_args()
     num_missing_udfs = args.num_missing_udfs
     query_id = args.query_id
     dataset = args.dataset
-    query_class_name = args.query_class_name
+    query_filename = args.query_filename
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
 
@@ -36,9 +36,9 @@ if __name__ == '__main__':
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
     program_with_pixels = False
-    num_workers = args.cpus
+    num_workers = args.num_workers
 
-    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     gt_dsl = input_query['dsl']
     positive_videos = input_query["positive_videos"]
@@ -60,7 +60,7 @@ if __name__ == '__main__':
         config["log_dir"],
         "query_execution",
         dataset,
-        query_class_name,
+        query_filename,
         "num_missing_udfs={}".format(num_missing_udfs),
         "queries_unavailable_udfs_removed",
     )
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     sys.excepthook = exception_hook
 
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
-    if "single_semantic" in query_class_name:
+    if "single_semantic" in query_filename:
         registered_functions = [{
             "signature": "object(o0, name)",
             "description": "Whether o0 is an object with the given name.",

@@ -5,7 +5,7 @@ from vocaludf.utils import (
     parse_signature,
     PredImageDataset,
 )
-from vocaludf.async_udf_proposer import UDFGenerator, SharedResources
+from vocaludf.async_udf_generator import UDFGenerator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from PIL import Image
@@ -39,7 +39,7 @@ from vocaludf import mlp
 import torchvision.ops as ops
 import torchvision.transforms as T
 import yaml
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
+from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain, SharedResources
 import shutil
 import asyncio
 

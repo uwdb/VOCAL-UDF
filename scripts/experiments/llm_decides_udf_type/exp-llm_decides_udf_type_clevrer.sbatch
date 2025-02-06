@@ -17,14 +17,14 @@ echo "--------------------"
 query_id=$1
 run=$2
 dataset=$3
-query_class_name=$4
+query_filename=$4
 budget=$5
 num_interpretations=$6
 
 echo "query_id: $query_id"
 echo "run: $run"
 echo "dataset: $dataset"
-echo "query_class_name: $query_class_name"
+echo "query_filename: $query_filename"
 echo "budget: $budget"
 echo "num_interpretations: $num_interpretations"
 
@@ -34,7 +34,7 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --run_id $run \
         --query_id $query_id \
         --dataset "$dataset" \
-        --query_class_name "$query_class_name" \
+        --query_filename "$query_filename" \
         --budget $budget \
         --num_interpretations $num_interpretations \
         --allow_kwargs_in_udf \
@@ -42,7 +42,6 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --num_parameter_search 5 \
         --n_train_distill 100 \
         --selection_strategy "both" \
-        --selection_labels "user" \
-        --llm_method "gpt4v" \
+        --llm_method "gpt" \
         --is_async \
         --openai_model_name "gpt-4-turbo-2024-04-09"

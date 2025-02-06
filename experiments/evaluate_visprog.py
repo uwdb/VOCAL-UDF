@@ -21,15 +21,15 @@ logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
-    # VAW: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "vaw" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
-    # CLEVRER: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
-    # Charades: python evaluate_visprog.py --use_precomputed --num_missing_udfs 0 --dataset "charades" --query_class_name "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
-    # CityFlow: python evaluate_visprog.py --use_precomputed --num_missing_udfs 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
+    # VAW: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "vaw" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
+    # CLEVRER: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "clevrer" --query_filename "3_new_udfs_labels" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
+    # Charades: python evaluate_visprog.py --use_precomputed --num_missing_udfs 0 --dataset "charades" --query_filename "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
+    # CityFlow: python evaluate_visprog.py --use_precomputed --num_missing_udfs 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
     parser = argparse.ArgumentParser()
     parser.add_argument('--use_precomputed', action='store_true', help='use precomputed object detection results')
     parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
     parser.add_argument('--dataset', type=str, help='dataset name')
-    parser.add_argument("--query_class_name", type=str, help="query class name")
+    parser.add_argument("--query_filename", type=str, help="query filename")
     parser.add_argument('--run_id', type=int, help='run id')
     parser.add_argument('--query_id', type=int, help='query id')
     parser.add_argument('--llm_model', type=str, default="gpt-4-turbo-2024-04-09", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-turbo-2024-04-09', "gpt-4o"])
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     assert use_precomputed, "use_precomputed must be True"
     num_missing_udfs = args.num_missing_udfs
     dataset = args.dataset
-    query_class_name = args.query_class_name
+    query_filename = args.query_filename
     run_id = args.run_id
     query_id = args.query_id
     llm_model = args.llm_model
@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
     # read json file
     # Fix the test queries, only vary the number of available UDFs
-    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     gt_dsl = input_query["dsl"]
     user_query = input_query["question"]
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     base_dir = os.path.join(
         "query_execution",
         dataset,
-        query_class_name,
+        query_filename,
         "num_missing_udfs={}".format(num_missing_udfs),
         f"visprog-llm={llm_model}",
     )

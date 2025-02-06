@@ -120,7 +120,7 @@ class SharedResources:
         num_parameter_search,
         program_with_pixels,
         program_with_pretrained_models,
-        query_class_name,
+        query_filename,
         query_id,
         run_id,
         num_workers,
@@ -128,7 +128,6 @@ class SharedResources:
         load_labeled_data,
         n_train_distill,
         selection_strategy,
-        selection_labels,
         allow_kwargs_in_udf,
         llm_method,
         is_async,
@@ -147,12 +146,11 @@ class SharedResources:
         self.num_parameter_search = num_parameter_search
         self.program_with_pixels = program_with_pixels
         self.program_with_pretrained_models = program_with_pretrained_models
-        self.query_class_name = query_class_name
+        self.query_filename = query_filename
         self.query_id = query_id
         self.run_id = run_id
         self.num_workers = num_workers
         self.selection_strategy = selection_strategy
-        self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
         self.llm_method = llm_method
         self.is_async = is_async

@@ -72,7 +72,7 @@ class QueryExecutorWithGroundTruth(QueryExecutor):
         self.conn.execute(sql, self.attribute_domain + self.relationship_domain).df()
 
 if __name__ == '__main__':
-    # python evaluate_nl_to_dsl.py --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --cpus 4 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
+    # python evaluate_nl_to_dsl.py --query_id 0 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --num_workers 4 --n_train_distill 100 --selection_strategy "both" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
@@ -81,7 +81,7 @@ if __name__ == '__main__':
     parser.add_argument("--query_id", type=int, help="query id")
     parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
-    parser.add_argument("--query_class_name", type=str, help="query class name")
+    parser.add_argument("--query_filename", type=str, help="query filename")
     parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     parser.add_argument("--budget", type=int, help="labeling budget")
@@ -89,10 +89,9 @@ if __name__ == '__main__':
     parser.add_argument("--num_interpretations", type=int, help="number of semantic interpretations to generate for the UDF class")
     parser.add_argument("--program_with_pixels", action="store_true", help="program with pixels")
     parser.add_argument("--program_with_pretrained_models", action="store_true", help="program with pretrained models")
-    parser.add_argument("--cpus", type=int, default=8, help="Maximum number of tasks to execute at once")
+    parser.add_argument("--num_workers", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
-    parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
     parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
@@ -101,7 +100,7 @@ if __name__ == '__main__':
     query_id = args.query_id
     run_id = args.run_id
     dataset = args.dataset
-    query_class_name = args.query_class_name
+    query_filename = args.query_filename
     allow_kwargs_in_udf = args.allow_kwargs_in_udf
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
@@ -112,19 +111,13 @@ if __name__ == '__main__':
     program_with_pretrained_models = args.program_with_pretrained_models
     if program_with_pretrained_models:
         assert program_with_pixels, "program_with_pretrained_models requires program_with_pixels"
-    num_workers = args.cpus
+    num_workers = args.num_workers
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
-    selection_labels = args.selection_labels
-
-    if selection_strategy == "both":
-        assert selection_labels != "none"
-    elif selection_strategy == "model":
-        assert selection_labels == "none"
     pred_batch_size = args.pred_batch_size
     dali_batch_size = args.dali_batch_size
 
-    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-labels={}-budget={}-llm_method={}".format(
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-budget={}-llm_method={}".format(
         num_interpretations,
         num_parameter_search,
         allow_kwargs_in_udf,
@@ -133,7 +126,6 @@ if __name__ == '__main__':
         n_train_distill,
         n_selection_samples,
         selection_strategy,
-        selection_labels,
         labeling_budget,
         llm_method,
     )
@@ -141,7 +133,7 @@ if __name__ == '__main__':
     random.seed(run_id)
     np.random.seed(run_id)
 
-    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
     positive_videos = input_query["positive_videos"]
 
@@ -156,7 +148,7 @@ if __name__ == '__main__':
         config["log_dir"],
         "nl_to_dsl",
         dataset,
-        query_class_name,
+        query_filename,
         config_name,
     )
     os.makedirs(log_dir, exist_ok=True)
@@ -189,7 +181,7 @@ if __name__ == '__main__':
             config["output_dir"],
             "udf_generation",
             dataset,
-            query_class_name,
+            query_filename,
             "num_missing_udfs=0",
             config_name,
             "qid={}-run={}.json".format(query_id, run_id),

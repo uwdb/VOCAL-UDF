@@ -48,7 +48,7 @@ if __name__ == "__main__":
     group.add_argument("--code_based", action="store_true", help="code-based UDF")
     group.add_argument("--model_based", action="store_true", help="model-based UDF")
     parser.add_argument("--n_train", type=int, help="number of training samples")
-    parser.add_argument("--cpus", type=int, default=8, help="Maximum number of tasks to execute at once")
+    parser.add_argument("--num_workers", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--save_labeled_data", action="store_true", help="save labeled data")
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
     # parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     dataset = args.dataset
     udf_class = args.udf_class
     n_train = args.n_train
-    num_workers = args.cpus
+    num_workers = args.num_workers
     save_labeled_data = args.save_labeled_data
     load_labeled_data = args.load_labeled_data
     code_based = args.code_based

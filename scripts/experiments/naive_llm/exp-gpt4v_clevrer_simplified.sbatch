@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=gpt4v_clevrer
+#SBATCH --job-name=gpt_clevrer
 #SBATCH --partition=gpu-l40s
 #SBATCH --account=balazinska
 #SBATCH --nodes=1
@@ -12,20 +12,20 @@ cat $0
 echo "Date" $(date)
 echo "--------------------"
 
-query_class_name=$1
+query_filename=$1
 run=$2
 query_id=$3
 
-echo "query_class_name: $query_class_name"
+echo "query_filename: $query_filename"
 echo "run: $run"
 echo "query_id: $query_id"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
-        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/gpt4v_clevrer_simplified.py \
+        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/gpt_clevrer_simplified.py \
         --run_id $run \
         --query_id $query_id \
-        --query_class_name "$query_class_name" \
+        --query_filename "$query_filename" \
         --openai_model_name "gpt-4o" \
         --stage "retrieve"
 

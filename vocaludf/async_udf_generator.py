@@ -62,31 +62,25 @@ class UDFGenerator(UtilsMixin):
         self.shared_resources = shared_resources
         self.config = shared_resources.config
         self.prompt_config = shared_resources.prompt_config
-        self.registered_functions = shared_resources.registered_functions
         self.object_domain = shared_resources.object_domain
         self.relationship_domain = shared_resources.relationship_domain
         self.attribute_domain = shared_resources.attribute_domain
         self.dataset = shared_resources.dataset
-        self.labeling_budget = shared_resources.labeling_budget
-        self.n_selection_samples = shared_resources.n_selection_samples
         self.num_interpretations = shared_resources.num_interpretations
         self.num_parameter_search = shared_resources.num_parameter_search
         self.program_with_pixels = shared_resources.program_with_pixels
         self.program_with_pretrained_models = shared_resources.program_with_pretrained_models
-        self.query_class_name = shared_resources.query_class_name
+        self.query_filename = shared_resources.query_filename
         self.query_id = shared_resources.query_id
         self.run_id = shared_resources.run_id
         self.num_workers = shared_resources.num_workers
         self.selection_strategy = shared_resources.selection_strategy
-        self.selection_labels = shared_resources.selection_labels
         self.allow_kwargs_in_udf = shared_resources.allow_kwargs_in_udf
         self.llm_method = shared_resources.llm_method
         self.is_async = shared_resources.is_async
         self.openai_model_name = shared_resources.openai_model_name
         self.client = shared_resources.client
         self.executor = shared_resources.executor
-        self.n_train_selection = shared_resources.n_train_selection
-        self.n_test_selection = shared_resources.n_test_selection
         self.n_train_distill = shared_resources.n_train_distill
         self.n_test_distill = shared_resources.n_test_distill
         self.save_labeled_data = shared_resources.save_labeled_data
@@ -135,16 +129,10 @@ class UDFGenerator(UtilsMixin):
 
     async def _implement(self):
         if self.selection_strategy == "program":
-            if self.selection_labels == "none" and self.allow_kwargs_in_udf:
-                self.allow_kwargs_in_udf = False
-                logger.info(f"[{self.udf_signature}] Turning off allow_kwargs_in_udf since no labels are provided")
             return await self._generate_program()
         elif self.selection_strategy == "model":
             return await self._distill_model()
         elif self.selection_strategy == "llm":
-            if self.selection_labels == "none" and self.allow_kwargs_in_udf:
-                self.allow_kwargs_in_udf = False
-                logger.info(f"[{self.udf_signature}] Turning off allow_kwargs_in_udf since no labels are provided")
             llm_decision = await self._llm_decides_udf_type()
             if llm_decision == "programUDF":
                 return await self._generate_program()
@@ -212,10 +200,6 @@ class UDFGenerator(UtilsMixin):
     async def _generate_program(self):
         """
         Implements the UDF program based on the given UDF signature and description.
-
-        Args:
-            udf_signature (str): The signature of the UDF.
-            udf_description (str): The description of the UDF.
 
         Returns:
             list: A list of UDFCandidate objects representing the implemented UDFs.
@@ -322,7 +306,7 @@ class UDFGenerator(UtilsMixin):
                 logger.exception(f"[{self.udf_signature}] ERROR: failed to implement UDF: {e}")
                 logger.debug(f"[{self.udf_signature}] {response}")
 
-        # Read UDF candidates from json files
+        # Instantiate hyperparameters for the UDF
         udf_candidate_list = []  # List[UDFCandidate]
         for i in range(len(verifed_implemented_udfs)):
             try:
@@ -464,10 +448,26 @@ class UDFGenerator(UtilsMixin):
     ##############################################################
     async def _distill_model(self):
         """
-        gt_udf_name: ground truth UDF name. If provided, compute llm's TP, FP, TN, FN, f1 score and test the trained model.
+        Perform model distillation using large language model (LLM) annotations and active learning.
+
+        This asynchronous method distills a model by iteratively performing active learning rounds.
+        In each round, it loads data, annotates it using an LLM, trains a multi-layer perceptron (MLP),
+        and selects new data points for labeling based on uncertainty.
+
+        Steps:
+        1. Initialize and filter relevant object classes.
+        2. Perform multiple rounds of active learning:
+           - Load and preprocess data.
+           - Annotate data using LLM.
+           - Train the model.
+           - Evaluate the model and compute metrics.
+           - Select new data points with the highest uncertainty for the next round.
+        3. Save the best model checkpoint and return a new UDF candidate.
+
+        Returns:
+            List[UDFCandidate]: A list containing one distilled model.
         """
         logger.info(f"[{self.udf_signature}] Model distillation started")
-
         logger.info(f"[{self.udf_signature}] Model distillation (initialization) started")
         _start = time.time()
         attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
@@ -481,6 +481,7 @@ class UDFGenerator(UtilsMixin):
         logger.debug(f"[{self.udf_signature}] filtered_objects: {filtered_objects}, filtered_subjects: {filtered_subjects}, filtered_targets: {filtered_targets}")
         logger.info(f"[{self.udf_signature}] Model distillation (initialization) finished")
 
+        # Perform active learning rounds. Each round LLM annotates 100 samples.
         num_active_learning_rounds = (self.n_train_distill - 1) // 100
         labeled_indices = set()
         for active_learning_round in range(num_active_learning_rounds + 1):
@@ -511,6 +512,7 @@ class UDFGenerator(UtilsMixin):
             self.execution_time["model_distillation_model_training"] += time.time() - _start
 
             if active_learning_round < num_active_learning_rounds:
+                # TODO: The active learning step could be accelerated by performing it on a sample of the unlabeled dataset
                 logger.info(f"[{self.udf_signature}] Model distillation (active learning) started")
                 _start = time.time()
                 checkpoint = torch.load(best_ckpt)
@@ -663,7 +665,7 @@ class UDFGenerator(UtilsMixin):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
         llm_positive_df = []
         llm_negative_df = []
-        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method, self.query_class_name)
+        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method, self.query_filename)
         labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_query-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_name.lower(), self.query_id, self.run_id, self.n_train_distill))
         os.makedirs(labeled_data_dir, exist_ok=True)
         if self.load_labeled_data and os.path.exists(labeled_data_path):
@@ -684,7 +686,7 @@ class UDFGenerator(UtilsMixin):
             self.llm_TP, self.llm_FP, self.llm_TN, self.llm_FN = 0, 0, 0, 0
             # Training and validation data
             self.label_count = 0
-            if self.llm_method == "gpt4v":
+            if self.llm_method == "gpt":
                 if self.is_async:
                     self.execution_time["model_distillation_data_labeling"] += time.time() - _start
                     tasks = [asyncio.create_task(self.label_one(row, labeled_data, llm_positive_df, llm_negative_df, active_learning_round)) for _, row in self.df_train.iterrows()]
@@ -1199,9 +1201,7 @@ class UDFGenerator(UtilsMixin):
     def replace_objects(self, input_string, row, image_size):
         # Find all occurrences of "o" followed by integers
         objects = re.findall(r'o\d+', input_string)
-        # Sort the objects based on the integer part of the identifier
 
-        h, w = image_size
         if len(objects) == 1:
             new_string = input_string.replace(objects[0], f"{row['o1_oname']} {objects[0]}")
         elif len(objects) == 2 and self.n_obj == 2:

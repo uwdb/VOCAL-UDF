@@ -7,7 +7,7 @@ import numpy as np
 import argparse
 import os
 import sys
-from vocaludf.async_udf_proposer import UDFGenerator, SharedResources
+from vocaludf.async_udf_generator import UDFGenerator
 import ast
 from openai import OpenAI, AsyncOpenAI
 from collections import defaultdict
@@ -41,7 +41,6 @@ class LlmDecidesUdfType(UDFGenerator):
         load_labeled_data,
         n_train_distill,
         selection_strategy,
-        selection_labels,
         allow_kwargs_in_udf,
         llm_method,
         is_async,
@@ -66,7 +65,6 @@ class LlmDecidesUdfType(UDFGenerator):
         self.run_id = run_id
         self.num_workers = num_workers
         self.selection_strategy = selection_strategy
-        self.selection_labels = selection_labels
         self.allow_kwargs_in_udf = allow_kwargs_in_udf
         self.llm_method = llm_method
         self.is_async = is_async
@@ -79,9 +77,9 @@ class LlmDecidesUdfType(UDFGenerator):
         self.cost_estimation = defaultdict(float)
 
 async def main():
-    # clevrer: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_class_name "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
-    # charades: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_class_name "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
-    # cityflow: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_class_name "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --selection_labels "user" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
+    # clevrer: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
+    # charades: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_filename "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
+    # cityflow: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -90,7 +88,7 @@ async def main():
     parser.add_argument("--query_id", type=int, help="query id")
     parser.add_argument("--run_id", type=int, help="run id")
     parser.add_argument("--dataset", type=str, help="dataset name")
-    parser.add_argument("--query_class_name", type=str, help="query class name")
+    parser.add_argument("--query_filename", type=str, help="query filename")
     parser.add_argument("--allow_kwargs_in_udf", action="store_true", help="allow kwargs in UDF")
     parser.add_argument("--num_parameter_search", type=int, help="for udf candidate with kwargs, the number of different parameter values to explore")
     parser.add_argument("--budget", type=int, help="labeling budget")
@@ -100,7 +98,6 @@ async def main():
     parser.add_argument("--program_with_pretrained_models", action="store_true", help="program with pretrained models")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
-    parser.add_argument("--selection_labels", type=str, choices=["none", "user", "llm"], default="user", help="strategy for UDF selection")
     parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
     parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
     parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
@@ -109,7 +106,7 @@ async def main():
     query_id = args.query_id
     run_id = args.run_id
     dataset = args.dataset
-    query_class_name = args.query_class_name
+    query_filename = args.query_filename
     allow_kwargs_in_udf = args.allow_kwargs_in_udf
     num_parameter_search = args.num_parameter_search
     labeling_budget = args.budget
@@ -122,16 +119,10 @@ async def main():
         assert program_with_pixels, "program_with_pretrained_models requires program_with_pixels"
     n_train_distill = args.n_train_distill
     selection_strategy = args.selection_strategy
-    selection_labels = args.selection_labels
     is_async = args.is_async
     openai_model_name = args.openai_model_name
 
-    if selection_strategy == "both":
-        assert selection_labels != "none"
-    elif selection_strategy == "model":
-        assert selection_labels == "none"
-
-    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-labels={}-budget={}-llm_method={}".format(
+    config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-budget={}-llm_method={}".format(
         num_interpretations,
         num_parameter_search,
         allow_kwargs_in_udf,
@@ -140,12 +131,11 @@ async def main():
         n_train_distill,
         n_selection_samples,
         selection_strategy,
-        selection_labels,
         labeling_budget,
         llm_method,
     )
 
-    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_class_name}.json")
+    input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
 
     """
@@ -156,7 +146,7 @@ async def main():
         config["log_dir"],
         "llm_decides_udf_type",
         dataset,
-        query_class_name,
+        query_filename,
         config_name,
         openai_model_name,
     )
@@ -200,7 +190,7 @@ async def main():
             config["log_dir"],
             "udf_generation",
             dataset,
-            query_class_name,
+            query_filename,
             f"num_missing_udfs={num_missing_udfs}",
             config_name,
             "qid={}-run={}.log".format(query_id, run_id),
@@ -254,7 +244,6 @@ async def main():
             load_labeled_data,
             n_train_distill,
             selection_strategy,
-            selection_labels,
             allow_kwargs_in_udf,
             llm_method,
             is_async,
@@ -278,7 +267,7 @@ async def main():
         config["output_dir"],
         "llm_decides_udf_type",
         dataset,
-        query_class_name,
+        query_filename,
         config_name,
         openai_model_name,
     )

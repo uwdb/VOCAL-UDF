@@ -16,13 +16,13 @@ num_missing_udfs=$1
 query_id=$2
 run_id=$3
 dataset=$4
-query_class_name=$5
+query_filename=$5
 
 echo "num_missing_udfs: $num_missing_udfs"
 echo "query_id: $query_id"
 echo "run_id: $run_id"
 echo "dataset: $dataset"
-echo "query_class_name: $query_class_name"
+echo "query_filename: $query_filename"
 
 bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
     python \
@@ -31,8 +31,8 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         --query_id $query_id \
         --run_id $run_id \
         --dataset "$dataset" \
-        --query_class_name "$query_class_name" \
-        --cpus 4 \
+        --query_filename "$query_filename" \
+        --num_workers 4 \
         --pred_batch_size 4096 \
         --dali_batch_size 1 \
         --openai_model_name "gpt-4o"

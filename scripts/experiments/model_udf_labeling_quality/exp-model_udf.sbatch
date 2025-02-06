@@ -25,7 +25,7 @@ bash /gscratch/balazinska/enhaoz/VOCAL-UDF/scripts/apptainer-script.sh \
         /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/evaluate_model_udf.py \
         --dataset $dataset \
         --udf_name $udf_name \
-        --llm_method "gpt4v" \
+        --llm_method "gpt" \
         --n_train_distill 500 \
         --balanced \
         --run_id $run_id \
