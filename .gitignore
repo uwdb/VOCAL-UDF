@@ -34,8 +34,13 @@ LLaVA/
 */.cache/*
 vocaludf/OAI_CONFIG_LIST
 experiments/lightning_logs/
-# Un-ignore the following
-!LICENSE.txt
-!data/clevr/vocab_clevrer.json
 *.ckpt
 *.DS_Store
+*.parquet
+
+# Un-ignore the following
+!LICENSE.txt
+!duckdb_dir/features/
+!duckdb_dir/load_clevrer.py
+!duckdb_dir/load_cityflow.py
+!duckdb_dir/load_charades.py

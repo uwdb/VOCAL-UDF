@@ -36,8 +36,8 @@ if __name__ == '__main__':
     parser.add_argument("--num_workers", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
-    parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
-    parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
+    parser.add_argument("--pred_batch_size", type=int, default=4096, help="batch size for prediction data loader. A greater batch size will make the data loading faster but consume more memory.")
+    parser.add_argument("--dali_batch_size", type=int, default=1, help="batch size for DALI")
     parser.add_argument("--llm_method", type=str, choices=["gpt", "llava"], default="gpt", help="LLM method for distill model annotations")
     parser.add_argument("--udf_selection_mode", type=str, choices=["random", "active", "no_dummy"], default="active", help="UDF selection mode")
 

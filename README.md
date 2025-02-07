@@ -25,38 +25,72 @@ export OPENAI_API_KEY="your_api_key_here"
 
 ## Prepare Data
 
-TODO
+### CLEVRER
+1. Download the CLEVRER dataset from [here](http://data.csail.mit.edu/clevrer/videos/train/video_train.zip). Place the videos in `data/clevrer/`.
+2. Extract the frames from the videos using the following command. This will create a `video_frames` directory in `data/clevrer/`.
+```sh
+cd data/clevrer
+python extract_frames.py
+```
+3. Prepare the database. Download the annotations from [here](https://drive.google.com/drive/folders/1FBmPlQ1haRCxsmgYMSqaZVPdCp6fcI1m?usp=drive_link) and place them in `duckdb_dir/`.
+4. Create relations and load data into the database.
+```sh
+cd duckdb_dir
+python load_clevrer.py
+```
+5. Extract the features from the frames using the following command. This will create a `features` directory in `data/clevrer/`.
+```sh
+```
+
+### CityFlow
+
+### Charades
 
 ## Example Usage
-```bash
-cd scripts
-```
+We provide an example of how to use VOCAL-UDF to process a query with three missing UDFs on the CLEVRER dataset.
 1. Generate UDFs
 ```bash
-    python experiments/run_query_executor.py \
-            --num_missing_udfs $num_missing_udfs \
-            --run_id $run \
-            --query_id $query_id \
-            --dataset "$dataset" \
-            --query_class_name "$query_class_name" \
-            --budget $budget \
-            --n_selection_samples 500 \
-            --num_interpretations $num_interpretations \
-            --allow_kwargs_in_udf \
-            --program_with_pixels \
-            --num_parameter_search 5 \
-            --cpus 8 \
-            --n_train_distill 100 \
-            --selection_strategy "both" \
-            --selection_labels "user" \
-            --pred_batch_size 4096 \
-            --dali_batch_size 1 \
-            --llm_method "gpt4v"
+    python experiments/async_main.py \
+        --num_missing_udfs 3 \
+        --run_id 0 \
+        --query_id 0 \
+        --dataset "clevrer" \
+        --query_filename "3_new_udfs_labels" \
+        --budget 20 \
+        --n_selection_samples 500 \
+        --num_interpretations 10 \
+        --allow_kwargs_in_udf \
+        --program_with_pixels \
+        --num_parameter_search 5 \
+        --num_workers 8 \
+        --save_labeled_data \
+        --n_train_distill 100 \
+        --selection_strategy "both" \
+        --llm_method "gpt" \
+        --is_async \
+        --openai_model_name "gpt-4o"
 ```
 
 2. Execute query with new UDFs
 ```bash
-./exp-vocal_udf_query_execution_{dataset}.sh
+    python experiments/run_query_executor.py \
+            --num_missing_udfs 3 \
+            --run_id 0 \
+            --query_id 0 \
+            --dataset "clevrer" \
+            --query_filename "3_new_udfs_labels" \
+            --budget 20 \
+            --n_selection_samples 500 \
+            --num_interpretations 10 \
+            --allow_kwargs_in_udf \
+            --program_with_pixels \
+            --num_parameter_search 5 \
+            --num_workers 8 \
+            --n_train_distill 100 \
+            --selection_strategy "both" \
+            --pred_batch_size 4096 \
+            --dali_batch_size 1 \
+            --llm_method "gpt"
 ```
 
 ## Reproduce Experiments
