@@ -2,6 +2,8 @@ import os
 import cv2
 import argparse
 
+import yaml
+
 
 def check_and_create(folder_path):
     if not os.path.isdir(folder_path):
@@ -9,13 +11,13 @@ def check_and_create(folder_path):
     return folder_path
 
 
-def main(args):
-    seq_list = os.listdir(args.data_root)
+def main(data_root):
+    seq_list = os.listdir(data_root)
 
     for seq_name in seq_list:
         if seq_name[0] != 'c':
             continue
-        path_data = os.path.join(args.data_root, seq_name)
+        path_data = os.path.join(data_root, seq_name)
         path_vdo = os.path.join(path_data, 'vdo.avi')
         path_images = os.path.join(path_data, 'img1')
         if os.path.exists(path_images):
@@ -36,14 +38,13 @@ def main(args):
 
 
 if __name__ == '__main__':
-    print("Loading parameters...")
-    parser = argparse.ArgumentParser(description='Extract video frames')
-    parser.add_argument('--data_root', dest='data_root', default='/gscratch/balazinska/enhaoz/VOCAL-UDF/data/cityflow/data',
-                        help='dataset root path')
-
-    args = parser.parse_args()
+    config = yaml.safe_load(
+        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+    )
+    data_dir = config["data_dir"]
+    base_data_root = os.path.join(data_dir, 'cityflow', 'data')
 
     seg_list = ["train/S01", "train/S03", "train/S04", "validation/S02", "validation/S05"]
     for seg in seg_list:
-        args.data_root = os.path.join('/gscratch/balazinska/enhaoz/VOCAL-UDF/data/cityflow/data', seg)
-        main(args)
+        data_root = os.path.join(base_data_root, seg)
+        main(data_root)

@@ -108,7 +108,7 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
     clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
 
     _start = time.time()
-    pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, batch_size=batch_size, num_threads=num_threads)
+    pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, video_directory=os.path.join(config["data_dir"], "clevrer"), batch_size=batch_size, num_threads=num_threads)
 
     video_iterator = DALIGenericIterator(
             [pipe],
@@ -235,19 +235,6 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
         bytes_written += batch.nbytes
         time4 = time.time()
         print("time4", time4 - time3)
-        # Run SQL
-        # return dbcon.execute("""
-        #     SELECT a.vid,
-        #         CASE WHEN c.start_time < a.start_time THEN a.start_time ELSE c.start_time END AS start_time,
-        #         CASE WHEN c.end_time < a.end_time THEN c.end_time ELSE a.end_time END AS end_time,
-        #         a.label
-        #     FROM clip_dataset c
-        #         JOIN annotations a
-        #         ON c.vid=a.vid
-        #             AND ((c.start_time <= a.start_time AND a.start_time <= c.end_time)
-        #                 OR (c.start_time <= a.end_time AND a.end_time <= c.end_time)
-        #                 OR (a.start_time <= c.start_time AND c.end_time <= a.end_time))
-        #     """).arrow()
 
 def extract_relationship_features(conn, config, sequence_length, batch_size, num_threads, dataset="clevrer", patch_size=(224, 224)):
     df_grouped = conn.execute(f"""
@@ -265,7 +252,7 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
     clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
 
     _start = time.time()
-    pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, batch_size=batch_size, num_threads=num_threads)
+    pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, video_directory=os.path.join(config["data_dir"], "clevrer"), batch_size=batch_size, num_threads=num_threads)
 
     video_iterator = DALIGenericIterator(
             [pipe],
@@ -454,10 +441,9 @@ if __name__ == "__main__":
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
     )
-    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    db_dir = config["db_dir"]
+    conn = duckdb.connect(database=os.path.join(db_dir, "annotations.duckdb"), read_only=True)
 
-    print("pa.cpu_count()", pa.cpu_count())
-    print("pa.io_thread_count()", pa.io_thread_count())
     if method == "attribute":
         extract_attribute_features(conn, config, sequence_length=128, batch_size=1, num_threads=1)
     elif method == "relationship":
