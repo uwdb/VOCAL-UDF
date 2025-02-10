@@ -90,18 +90,18 @@ python extract_cityflow.py --method "relationship"
 ### Charades
 1. Download the Charades dataset (scaled to 480p) from [here](https://prior.allenai.org/projects/charades). Place the videos in `data/charades/`.
 2. Download Action Genome annotations from [here](https://drive.google.com/drive/folders/1LGGPK_QgGbh9gH9SDFv_9LIhBliZbZys?usp=sharing). Place the annotations in `data/charades/`.
-2. Extract the frames from the videos using the following command. This will create a `frames` directory in `data/charades/`.
+3. Extract the frames from the videos using the following command. This will create a `frames` directory in `data/charades/`.
 ```sh
 cd data/charades
 python dump_frames.py
 ```
-3. Prepare the database. Download the processed annotations from [here](https://drive.google.com/drive/folders/1FBmPlQ1haRCxsmgYMSqaZVPdCp6fcI1m?usp=drive_link) and place them in `duckdb_dir/`.
-4. Create relations and load data into the database.
+4. Prepare the database. Download the processed annotations from [here](https://drive.google.com/drive/folders/1FBmPlQ1haRCxsmgYMSqaZVPdCp6fcI1m?usp=drive_link) and place them in `duckdb_dir/`.
+5. Create relations and load data into the database.
 ```sh
 cd duckdb_dir
 python load_charades.py
 ```
-5. Extract the features from the frames using the following command. This will create a `features/charades_five_clips` directory in `duckdb_dir`.
+6. Extract the features from the frames using the following command. This will create a `features/charades_five_clips` directory in `duckdb_dir`.
 ```sh
 cd featurestore
 # Extract relationship features (about 15GB; takes around 2 hours). Charades has no attribute features
@@ -156,3 +156,4 @@ We provide an example of how to use VOCAL-UDF to process a query with three miss
 ```
 
 ## Reproduce Experiments
+The experiment scripts are located in the `scripts/experiments` directory.
