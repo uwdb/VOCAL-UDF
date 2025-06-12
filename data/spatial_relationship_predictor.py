@@ -177,6 +177,26 @@ def behind(row: pd.Series, depth: np.array, reduce: Literal['avg', 'center'] = '
 
     return subj_depth < obj_depth
 
+def near(row: pd.Series):
+    '''
+    subject's bbox is near object's bbox
+    math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2) < 1
+    '''
+    subj_c = get_obj_center(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'])
+    obj_c = get_obj_center(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'])
+    distance = np.sqrt((subj_c[0] - obj_c[0]) ** 2 + (subj_c[1] - obj_c[1]) ** 2) / ((row['o1_x2'] - row['o1_x1'] + row['o2_x2'] - row['o2_x1']) / 2)
+    return distance < 1.5
+
+def far(row: pd.Series):
+    '''
+    subject's bbox is far from object's bbox
+    math.sqrt(math.pow(cx1 - cx2, 2.0) + math.pow(cy1 - cy2, 2.0)) / ((o1_x2 - o1_x1 + o2_x2 - o2_x1) / 2) > 1
+    '''
+    subj_c = get_obj_center(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'])
+    obj_c = get_obj_center(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'])
+    distance = np.sqrt((subj_c[0] - obj_c[0]) ** 2 + (subj_c[1] - obj_c[1]) ** 2) / ((row['o1_x2'] - row['o1_x1'] + row['o2_x2'] - row['o2_x1']) / 2)
+    return distance > 3.0
+
 def below_or_overlap(row: pd.Series):
     return below(row) or overlap(row)
 
@@ -382,6 +402,8 @@ def run_cityflow():
         "to_the_right_of": partial(right),
         "in_front_of": partial(in_front_of),
         "behind": partial(behind),
+        # "near": partial(near),
+        # "far": partial(far),
     }
     verifier = Verifier(rules, device)
 

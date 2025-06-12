@@ -12,9 +12,7 @@ from vocaludf.utils import (
     SharedResources,
 )
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 class UDFProposer:
     def __init__(self, shared_resources: SharedResources):
@@ -76,7 +74,6 @@ class UDFProposer:
             },
         )
 
-        # TODO: Add cost estimation
         user_proxy = autogen.UserProxyAgent(
             name="user_proxy",
             is_termination_msg=lambda x: x.get("content", "")
@@ -141,5 +138,5 @@ class UDFProposer:
             # TODO: Implement this
             return self.proposed_functions
         except Exception as e:
-            f"Error: {e}"
+            logger.error(f"Error: {e}")
             return {}

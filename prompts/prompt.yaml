@@ -5,13 +5,13 @@ dsl_definition: |
 udf_definition:
   with_object: |
     A function can take one of the following three formats, depending on if it is an object predicate, a relationship predicate, or an attribute predicate:
-    - object predicate: objec(o0, oname). For example, object(o0, 'car') checks whether o0 is a car.
-    - relationship predicate: relationshipName(o0, o1). For example, jumping_in(o0, o1) checks whether o0 is jumping in o1.
-    - attribute predicate: key_value(o0). For example, color_bronze(o0) checks whether the color of o0 is bronze.
+    - object predicate: object(o0, oname). The function name is ``object'', and the first argument is the object variable. The second argument is the name of the object. The function checks whether the object variable o0 is an instance of the object name ``oname''. For example, object(o0, 'car') checks whether o0 is a car.
+    - relationship predicate: relationshipName(o0, o1). The function name is the name of the relationship. The first argument is the object variable representing the subject, and the second argument is the object variable representing the object. The function checks whether o0 has a relationship with o1. For example, eating(o0, o1) checks whether o0 is eating o1. Note that only binary relationships are supported.
+    - attribute predicate: attributeName(o0). The function name is the name of the attribute. The first argument is the object variable. The function checks whether the object o0 has the attribute. For example, color_bronze(o0) checks whether the color of o0 is bronze.
   without_object: |
     A function can take one of the following three formats, depending on if it is a relationship predicate or an attribute predicate:
-    - relationship predicate: relationshipName(o0, o1). For example, jumping_in(o0, o1) checks whether o0 is jumping in o1.
-    - attribute predicate: key_value(o0). For example, color_bronze(o0) checks whether the color of o0 is bronze.
+    - relationship predicate: relationshipName(o0, o1). The function name is the name of the relationship. The first argument is the object variable representing the subject, and the second argument is the object variable representing the object. The function checks whether o0 has a relationship with o1. For example, eating(o0, o1) checks whether o0 is eating o1. Note that only binary relationships are supported.
+    - attribute predicate: attributeName(o0). The function name is the name of the attribute. The first argument is the object variable. The function checks whether the object o0 has the attribute. For example, color_bronze(o0) checks whether the color of o0 is bronze.
 registered_udfs: |
   You have access to the following functions:
   {{functions}}

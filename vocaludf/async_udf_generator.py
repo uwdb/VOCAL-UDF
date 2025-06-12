@@ -37,9 +37,7 @@ from vocaludf.utils import (
     UDFCandidate,
 )
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 class CustomImageDataset(Dataset):
     def __init__(self, data, train):
@@ -539,40 +537,42 @@ class UDFGenerator(UtilsMixin):
                         all_uncertainties.append(uncertainty.cpu())
 
                 rows = torch.cat(all_rows).tolist()
-                predictions = torch.cat(all_predictions).tolist()
+                # predictions = torch.cat(all_predictions).tolist()
                 uncertainties = torch.cat(all_uncertainties).tolist()
 
                 if self.n_obj == 1:
-                    check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
-                    check_df['aname'] = self.gt_udf_name
-                    result = check_df.merge(attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
-                    result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
-                    result = result.rename(columns={"oid": "o1_oid"})
+                    result = pd.DataFrame(rows, columns=['vid', 'fid', 'o1_oid'])
+                    # check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid'])
+                    # check_df['aname'] = self.gt_udf_name
+                    # result = check_df.merge(attribute_df, on=['vid', 'fid', 'oid', 'aname'], how='left', indicator=True)
+                    # result = result.drop_duplicates(subset=['vid', 'fid', 'oid', 'aname'])
+                    # result = result.rename(columns={"oid": "o1_oid"})
                 else:
-                    check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
-                    check_df['rname'] = self.gt_udf_name
-                    result = check_df.merge(relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
-                    result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
-                    result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
-                result['label'] = (result['_merge'] == 'both').astype(int)
-                result = result.reset_index(drop=True)
-                labels = result['label'].tolist()
+                    result = pd.DataFrame(rows, columns=['vid', 'fid', 'o1_oid', 'o2_oid'])
+                    # check_df = pd.DataFrame(rows, columns=['vid', 'fid', 'oid1', 'oid2'])
+                    # check_df['rname'] = self.gt_udf_name
+                    # result = check_df.merge(relationship_df, on=['vid', 'fid', 'oid1', 'oid2', 'rname'], how='left', indicator=True)
+                    # result = result.drop_duplicates(subset=['vid', 'fid', 'oid1', 'oid2', 'rname'])
+                    # result = result.rename(columns={"oid1": "o1_oid", "oid2": "o2_oid"})
+                # result['label'] = (result['_merge'] == 'both').astype(int)
+                # result = result.reset_index(drop=True)
+                # labels = result['label'].tolist()
 
                 # Compute F1 score
-                f1 = f1_score(labels, predictions)
-                logger.info(f"[{self.udf_signature}] F1 score: {f1}")
-                tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
-                logger.info(f"[{self.udf_signature}] TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
-                if self.dataset == "charades":
-                    result['pred'] = predictions
-                    result['uncertainty'] = uncertainties
-                    result_human_object = result[result["o1_oid"] == 0]
-                    labels_human_object = result_human_object["label"].tolist()
-                    predictions_human_object = result_human_object["pred"].tolist()
-                    f1_human_object = f1_score(labels_human_object, predictions_human_object)
-                    logger.info(f"[{self.udf_signature}] [human-object only] F1 score: {f1_human_object}")
-                    tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
-                    logger.info(f"[{self.udf_signature}] [human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
+                # f1 = f1_score(labels, predictions)
+                # logger.info(f"[{self.udf_signature}] F1 score: {f1}")
+                # tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
+                # logger.info(f"[{self.udf_signature}] TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
+                # if self.dataset == "charades":
+                #     result['pred'] = predictions
+                #     result['uncertainty'] = uncertainties
+                #     result_human_object = result[result["o1_oid"] == 0]
+                #     labels_human_object = result_human_object["label"].tolist()
+                #     predictions_human_object = result_human_object["pred"].tolist()
+                #     f1_human_object = f1_score(labels_human_object, predictions_human_object)
+                #     logger.info(f"[{self.udf_signature}] [human-object only] F1 score: {f1_human_object}")
+                #     tn_1, fp_1, fn_1, tp_1 = confusion_matrix(labels_human_object, predictions_human_object).ravel()
+                #     logger.info(f"[{self.udf_signature}] [human-object only] TP: {tp_1}, FP: {fp_1}, TN: {tn_1}, FN: {fn_1}")
 
                 # Active learning: select a batch of rows with the highest uncertainty that are not labeled
                 selected_indices = np.argsort(-np.array(uncertainties))

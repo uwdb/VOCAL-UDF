@@ -30,9 +30,7 @@ import nvidia.dali.types as types
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 from torchvision.io import read_image, ImageReadMode
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 def remove_duplicates(query):
     for item in query:

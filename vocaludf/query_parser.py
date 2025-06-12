@@ -7,9 +7,7 @@ import os
 from vocaludf.parser import parse
 from vocaludf.utils import replace_slot, MODEL_COST, RESOLVE_MODEL_NAME
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 class QueryParser:
     def __init__(

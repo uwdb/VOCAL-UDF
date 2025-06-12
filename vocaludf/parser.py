@@ -79,8 +79,9 @@ def parse_udf():
     number = ppc.number()
     value = string | number | TRUE | FALSE
     fn_name = ungroup(~Literal("Duration") + ~Literal("object") + Word(alphas, alphanums + "_"))
-    fn_args = Group(var - Opt(comma + var))
-    udf = fn_name("fn_name") - lpar - fn_args('variables') - Opt(comma + value)('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar | Literal("object")("fn_name") - lpar - Group(var)('variables') - comma - Word(alphas, alphanums + "_")('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar
+    # fn_args = Group(var - Opt(comma + var))
+    fn_args = Group(delimitedList(var))
+    udf = fn_name("fn_name") - lpar - fn_args('variables') - Opt(comma + value)('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar | Literal("object")("fn_name") - lpar - Group(var)('variables') - comma - string('parameter').set_parse_action(lambda t: t[0] if t else None) - rpar
     return udf
 
 if __name__ == "__main__":

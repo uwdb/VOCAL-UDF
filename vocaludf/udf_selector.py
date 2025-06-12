@@ -20,9 +20,7 @@ from vocaludf.utils import (
     UDFCandidate,
 )
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 SamplingStrategy = Enum('SamplingStrategy', ['positive', 'negative', 'uncertainty'])
 

@@ -4,6 +4,7 @@ output_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/outputs
 prompt_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/prompts
 log_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/logs
 model_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models
+interactive_labeling_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/interactive_labeling_dir
 llava_path: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/models/llava-1.5-7b-hf # Not used
 query_parser:
   temperature: 0.2

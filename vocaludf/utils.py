@@ -19,37 +19,53 @@ from openai import AsyncOpenAI
 from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, LlavaNextForConditionalGeneration, LlavaNextProcessor
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 MODEL_COST = {
     "gpt-4o": [2.5 / 1e6, 10 / 1e6], # input cost per token, output cost per token
     "gpt-4o-2024-08-06": [2.5 / 1e6, 10 / 1e6],
     "gpt-4-turbo-2024-04-09": [10 / 1e6, 30 / 1e6],
+    "o3-2025-04-16": [2 / 1e6, 8 / 1e6],
+    "o3": [2 / 1e6, 8 / 1e6],
 }
 
 RESOLVE_MODEL_NAME = {
     "gpt-4o": "gpt-4o-2024-08-06",
     "gpt-4o-2024-08-06": "gpt-4o-2024-08-06",
     "gpt-4-turbo-2024-04-09": "gpt-4-turbo-2024-04-09",
+    "o3": "o3-2025-04-16",
 }
 
-class StreamToLogger(object):
+class StreamTee:
     """
-    Fake file-like stream object that redirects writes to a logger instance.
-    """
-    def __init__(self, logger, level):
-       self.logger = logger
-       self.level = level
-       self.linebuf = ''
+    A file-like object that duplicates every write:
 
-    def write(self, buf):
-       for line in buf.rstrip().splitlines():
-          self.logger.log(self.level, line.rstrip())
+        • to the original console stream (so the user still sees it)
+        • to a logger (so it lands in the log file)
+
+    level is the log-level at which the message should be recorded.
+    """
+    def __init__(self, logger: logging.Logger, level: int, stream):
+        self.logger = logger
+        self.level  = level
+        self.stream = stream      # usually sys.__stdout__ / sys.__stderr__
+        self.linebuf = ""
+
+    def write(self, buf: str):
+       # 1) show in terminal
+        self.stream.write(buf)
+        # 2) copy to log (skip purely empty lines to avoid blanks)
+        if buf.rstrip():
+            for line in buf.rstrip().splitlines():
+                self.logger.log(self.level, line.rstrip())
 
     def flush(self):
-        pass
+        self.stream.flush()
+
+    # make hasattr(stream, "encoding") etc. still work
+    def __getattr__(self, attr):
+        return getattr(self.stream, attr)
+
 
 def exception_hook(exc_type, exc_value, exc_traceback, logger=logger):
     logger.error(
@@ -57,7 +73,7 @@ def exception_hook(exc_type, exc_value, exc_traceback, logger=logger):
         exc_info=(exc_type, exc_value, exc_traceback)
     )
 
-def setup_logging(config, base_dir, log_filename, logger):
+def setup_logging(config, base_dir, log_filename, logger, show_debug_console=True):
     # Create a directory if it doesn't already exist
     log_dir = os.path.join(
         config["log_dir"],
@@ -65,13 +81,16 @@ def setup_logging(config, base_dir, log_filename, logger):
     )
     os.makedirs(log_dir, exist_ok=True)
 
+    # Create a console handler with a higher log level
+    # for h in list(logger.handlers):
+    #     if isinstance(h, logging.StreamHandler):
+    #         logger.removeHandler(h)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if show_debug_console else logging.INFO)
+
     # Create a file handler that logs even debug messages
     file_handler = logging.FileHandler(os.path.join(log_dir, log_filename), mode="w")
     file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
 
     # Create formatters and add them to the handlers
     formatter = logging.Formatter(
@@ -81,11 +100,11 @@ def setup_logging(config, base_dir, log_filename, logger):
     # console_handler.setFormatter(formatter)
 
     # Add the handlers to the logger
+    logger.addHandler(console_handler)
     logger.addHandler(file_handler)
 
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
+    sys.stdout = StreamTee(logger, logging.DEBUG, sys.__stdout__)
+    sys.stderr = StreamTee(logger, logging.ERROR, sys.__stderr__)
     sys.excepthook = exception_hook
 
 class UDFCandidate:
@@ -182,6 +201,9 @@ class SharedResources:
         logger.info("Table initialization finished")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.interactive_labeling_dir = os.path.join(self.config["interactive_labeling_dir"])
+        os.makedirs(self.interactive_labeling_dir, exist_ok=True)
 
         # Load the CLIP model
         clip_model_name = os.path.join(self.config['model_dir'], 'clip-vit-base-patch32')
@@ -316,7 +338,7 @@ class UtilsMixin:
             try:
                 return bool(udf(*args, **kwargs))
             except Exception as e:
-                logger.exception(f"exec_udf_with_data Error: {e}")
+                logger.debug(f"exec_udf_with_data Error: {e}")
                 return False  # Default value in case of error
 
         if requires_no_error:
@@ -598,6 +620,8 @@ def parse_signature(signature):
     # tokens = list(tokenize.generate_tokens(io.StringIO(signature).readline))
     # udf_name = tokens[0].string
     # udf_vars = [token for token in tokens[2:-3] if token.string not in [',','=']]
+    if len(udf_vars) > 2:
+        raise ValueError(f"UDF signature {signature} has more than 2 variables")
     return udf_name, udf_vars
 
 def transform_function(original_code, instantiation_dict):
