@@ -177,9 +177,9 @@ class QueryExecutor:
         self.available_udf_names = available_udf_names
         self.materialized_udf_names = [f"udf_{udf_name}" for udf_name in materialized_udf_names]
         self.on_the_fly_udf_names = on_the_fly_udf_names
-        logger.info(f"available_udf_names: {self.available_udf_names}")
-        logger.info(f"materialized_udf_names: {self.materialized_udf_names}")
-        logger.info(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")
+        logger.debug(f"available_udf_names: {self.available_udf_names}")
+        logger.debug(f"materialized_udf_names: {self.materialized_udf_names}")
+        logger.debug(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")
         self.program_with_pixels = program_with_pixels
         self.attribute_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "attribute")
         self.relationship_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "relationship")
@@ -360,7 +360,7 @@ class QueryExecutor:
         else:
             input_vids = list(range(dataset_size // 2, dataset_size))
         program["query"] = remove_duplicates(program["query"])
-        logger.info("Running query: {}".format(program["query"]))
+        logger.debug("Running query: {}".format(program["query"]))
 
         if self.program_with_pixels:
             _start = time.time()
@@ -374,9 +374,9 @@ class QueryExecutor:
                 materialized_udf_names=self.materialized_udf_names,
                 on_the_fly_udf_names=[]
             )
-            logger.info("Time to execute first query: {}".format(time.time() - _start))
+            logger.debug("Time to execute first query: {}".format(time.time() - _start))
             result = sorted(result)
-            logger.info("output vids: {}".format(result))
+            logger.debug("output vids: {}".format(result))
             if len(self.on_the_fly_udf_names) > 0 and len(result) > 0:
                 self.materialize_on_the_fly_udfs(result)
                 for udf_name, df in self.materialized_udfs.items():
@@ -391,9 +391,9 @@ class QueryExecutor:
                     materialized_udf_names=self.materialized_udf_names,
                     on_the_fly_udf_names=self.on_the_fly_udf_names
                 )
-                logger.info("Time to execute second query: {}".format(time.time() - _start))
+                logger.debug("Time to execute second query: {}".format(time.time() - _start))
                 result = sorted(result)
-                logger.info("output vids: {}".format(result))
+                logger.debug("output vids: {}".format(result))
         else:
             _start = time.time()
             result = duckdb_execute_video_materialize(
@@ -404,21 +404,23 @@ class QueryExecutor:
                 materialized_udf_names=self.materialized_udf_names,
                 on_the_fly_udf_names=self.on_the_fly_udf_names
             )
-            logger.info("Time to execute query: {}".format(time.time() - _start))
+            logger.debug("Time to execute query: {}".format(time.time() - _start))
             result = sorted(result)
-            logger.info("output vids: {}".format(result))
+            logger.debug("output vids: {}".format(result))
         y_pred = [1 if vid in result else 0 for vid in input_vids]
 
-        f1 = f1_score(y_true[:len(y_pred)], y_pred)
-        precision = precision_score(y_true[:len(y_pred)], y_pred)
-        recall = recall_score(y_true[:len(y_pred)], y_pred)
         self.query_execution_time += time.time() - _start_run
         logger.info("Test data initialization time: {}".format(self.test_data_init_time))
         logger.info("Query execution time: {}".format(self.query_execution_time))
-        logger.info("F1 score: {}".format(f1))
-        logger.info("Precision: {}".format(precision))
-        logger.info("Recall: {}".format(recall))
-        return y_pred
+
+        if y_true is not None:
+            f1 = f1_score(y_true[:len(y_pred)], y_pred)
+            precision = precision_score(y_true[:len(y_pred)], y_pred)
+            recall = recall_score(y_true[:len(y_pred)], y_pred)
+            logger.info("F1 score: {}".format(f1))
+            logger.info("Precision: {}".format(precision))
+            logger.info("Recall: {}".format(recall))
+        return result
 
     def remove_on_the_fly_udfs(self, query):
         target_query = []
@@ -439,12 +441,12 @@ class QueryExecutor:
                 logger.exception(f"exec_udf_with_data Error: {e}")
                 return False  # Default value in case of error
 
-        logger.info("Start materializing on-the-fly UDFs")
+        logger.debug("Start materializing on-the-fly UDFs")
 
         # Filter on-the-fly UDFs
         on_the_fly_udfs = [func for func in self.registered_functions if parse_signature(func["signature"])[0] in self.on_the_fly_udf_names]
 
-        logger.info("filtering tables by matching vids")
+        logger.debug("filtering tables by matching vids")
         # Group one_object and two_objects tables by vid and fid
         parameters = ','.join('?' for _ in vids)
         df_one_object = self.conn.execute(f"""
@@ -459,26 +461,26 @@ class QueryExecutor:
             WHERE vid = ANY([{parameters}])
         """, vids).df()
 
-        logger.info("grouping tables by vid and fid")
+        logger.debug("grouping tables by vid and fid")
         df_one_object_grouped = df_one_object.groupby(['vid', 'fid'], as_index=True, sort=False)
         df_two_objects_grouped = df_two_objects.groupby(['vid', 'fid'], as_index=True, sort=False)
 
-        logger.info("converting dataframes to numpy arrays")
+        logger.debug("converting dataframes to numpy arrays")
         np_one_object = df_one_object.values
         np_two_objects = df_two_objects.values
 
-        logger.info("grouping numpy arrays by vid and fid")
+        logger.debug("grouping numpy arrays by vid and fid")
         # Construct numpy arrays for each group
         grouped_np_one_object = np.array([np_one_object[i.values, :] for _, i in df_one_object_grouped.groups.items()], dtype=object)
         grouped_np_two_objects = np.array([np_two_objects[i.values, :] for _, i in df_two_objects_grouped.groups.items()], dtype=object)
 
-        logger.info("building lookup dictionaries")
+        logger.debug("building lookup dictionaries")
         # Lookup dictionary, where key is (vid, fid) and value is the index in the grouped_np_one_object/grouped_np_two_objects
         group_keys_one_object = dict(zip(df_one_object_grouped.groups.keys(), range(len(df_one_object_grouped.groups))))
         group_keys_two_objects = dict(zip(df_two_objects_grouped.groups.keys(), range(len(df_two_objects_grouped.groups))))
 
-        logger.info(f"df_one_object shape: {df_one_object.shape}")
-        logger.info(f"df_two_objects shape: {df_two_objects.shape}")
+        logger.debug(f"df_one_object shape: {df_one_object.shape}")
+        logger.debug(f"df_two_objects shape: {df_two_objects.shape}")
 
         udf_map = {}
         for func in on_the_fly_udfs:
@@ -489,7 +491,7 @@ class QueryExecutor:
             udf_obj = globals()[py_func_name]
             udf_map[udf_name] = (udf_obj, n_obj)
 
-        logger.info("building video dataloader")
+        logger.debug("building video dataloader")
         # Create DALI pipeline for loading video frames
         if self.dataset == "clevrer":
             pipe = ClevrerDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
@@ -522,7 +524,7 @@ class QueryExecutor:
         udf_to_df_map = defaultdict(list)
         udf_to_pred_map = defaultdict(list)
 
-        logger.info("executing on-the-fly UDFs")
+        logger.debug("executing on-the-fly UDFs")
         loading_time = 0
         transform_time = 0
         udf_execution_time = 0
@@ -600,14 +602,14 @@ class QueryExecutor:
                     udf_map_time += time.time() - _start
 
             _start = time.time()
-        logger.info(f"loading_time: {loading_time}")
-        logger.info(f"transform_time: {transform_time}")
-        logger.info(f"group_by_time: {group_by_time}")
-        logger.info(f"frames_broadcast_time: {frames_broadcast_time}")
-        logger.info(f"partial_udf_time: {partial_udf_time}")
-        logger.info(f"prepare_args_time: {prepare_args_time}")
-        logger.info(f"udf_execution_time: {udf_execution_time}")
-        logger.info(f"udf_map_time: {udf_map_time}")
+        logger.debug(f"loading_time: {loading_time}")
+        logger.debug(f"transform_time: {transform_time}")
+        logger.debug(f"group_by_time: {group_by_time}")
+        logger.debug(f"frames_broadcast_time: {frames_broadcast_time}")
+        logger.debug(f"partial_udf_time: {partial_udf_time}")
+        logger.debug(f"prepare_args_time: {prepare_args_time}")
+        logger.debug(f"udf_execution_time: {udf_execution_time}")
+        logger.debug(f"udf_map_time: {udf_map_time}")
         # Concatenate and store materialized UDFs
         for udf_name, dfs in udf_to_df_map.items():
             n_obj = udf_map[udf_name][1]
@@ -620,10 +622,10 @@ class QueryExecutor:
                 df = df[["vid", "fid", "o1_oid", "o2_oid", "pred"]]
             self.materialized_udfs[f"udf_{udf_name}"] = df
             self.materialized_udf_names.append(f"udf_{udf_name}")
-            logger.info(f"Materialized UDF: {udf_name}, shape: {df.shape}")
+            logger.debug(f"Materialized UDF: {udf_name}, shape: {df.shape}")
 
         self.on_the_fly_udf_names = []
-        logger.info("Finish materializing on-the-fly UDFs")
-        logger.info(f"available_udf_names: {self.available_udf_names}")
-        logger.info(f"materialized_udf_names: {self.materialized_udf_names}")
-        logger.info(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")
+        logger.debug("Finish materializing on-the-fly UDFs")
+        logger.debug(f"available_udf_names: {self.available_udf_names}")
+        logger.debug(f"materialized_udf_names: {self.materialized_udf_names}")
+        logger.debug(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")

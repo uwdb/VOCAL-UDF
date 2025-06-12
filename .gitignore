@@ -37,6 +37,7 @@ experiments/lightning_logs/
 *.ckpt
 *.DS_Store
 *.parquet
+scripts/*
 
 # Un-ignore the following
 !LICENSE.txt
@@ -44,3 +45,4 @@ experiments/lightning_logs/
 !duckdb_dir/load_clevrer.py
 !duckdb_dir/load_cityflow.py
 !duckdb_dir/load_charades.py
+!scripts/experiments/

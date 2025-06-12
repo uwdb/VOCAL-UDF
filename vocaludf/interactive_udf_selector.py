@@ -130,27 +130,27 @@ Open the image below in any viewer, then come back here and type [bold]1[/bold] 
 
         sampling_strategy = SamplingStrategy.positive
         for iter in range(self.labeling_budget):
-            logger.info("iter {}: {}".format(iter, sampling_strategy))
+            logger.info("Iteration {}: {}".format(iter, sampling_strategy))
             _start_segment_selection_time_per_iter = time.time()
 
             if sampling_strategy == SamplingStrategy.positive and self.llm_positive_df is not None and len(self.llm_positive_df) > len(llm_positive_labeled_index):
                 new_labeled_index = [len(llm_positive_labeled_index)]
-                logger.info("pick next segments from llm_positive_df {}".format(new_labeled_index))
+                logger.debug("pick next segments from llm_positive_df {}".format(new_labeled_index))
                 llm_positive_labeled_index += new_labeled_index
                 new_labeled_df = self.llm_positive_df.iloc[new_labeled_index]
             elif sampling_strategy == SamplingStrategy.negative and self.llm_negative_df is not None and len(self.llm_negative_df) > len(llm_negative_labeled_index):
                 new_labeled_index = [len(llm_negative_labeled_index)]
-                logger.info("pick next segments from llm_negative_df {}".format(new_labeled_index))
+                logger.debug("pick next segments from llm_negative_df {}".format(new_labeled_index))
                 llm_negative_labeled_index += new_labeled_index
                 new_labeled_df = self.llm_negative_df.iloc[new_labeled_index]
             else:
                 new_labeled_index = self.select_sample(
                     udf_candidate_list, udf_name, df_train, n_obj, labeled_index, sampling_strategy
                 )
-                logger.info("pick next segments {}".format(new_labeled_index))
+                logger.debug("pick next segments {}".format(new_labeled_index))
                 labeled_index += new_labeled_index
                 new_labeled_df = df_train.iloc[new_labeled_index]
-            logger.info("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(llm_negative_labeled_index)) + len(set(labeled_index))))
+            logger.debug("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(llm_negative_labeled_index)) + len(set(labeled_index))))
 
             # Request labels on-the-fly
             label = self.request_label(new_labeled_df, n_obj)
@@ -209,7 +209,7 @@ Open the image below in any viewer, then come back here and type [bold]1[/bold] 
             "test segment_selection_time time: {}".format(segment_selection_time)
         )
 
-        logger.info("compute train F1 score")
+        logger.info("Compute training F1 score")
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
         if sum(y_true) == 0:
             logger.info("No positive samples are labeled. Returning the dummy UDF.")
@@ -240,7 +240,7 @@ Open the image below in any viewer, then come back here and type [bold]1[/bold] 
             for best_candidate in best_candidates:
                 f1_score_test_list.append(best_candidate.test_score)
             median_f1_score_test = np.median(f1_score_test_list)
-            logger.info("median test f1: {}".format(median_f1_score_test))
+            logger.debug("median test f1: {}".format(median_f1_score_test))
             # TODO: If there are multiple best udfs, select the one with faster execution time?
             # If there are multiple best udfs, dummy UDF will be preferred
             selected_udf_candidate = best_candidates[-1]
@@ -302,10 +302,10 @@ Open the image below in any viewer, then come back here and type [bold]1[/bold] 
             y_true.append(True)
             y_pred.append(True)
         score = f1_score(y_true, y_pred, zero_division=0.0)
-        logger.info("udf_candidate: {}, score: {}".format(udf_candidate.id, score))
+        logger.debug("udf_candidate: {}, score: {}".format(udf_candidate.id, score))
         # logger.info("y_true: {}, y_pred: {}".format(y_true, y_pred))
-        logger.info("predicted positive: {}, predicted negative: {}".format(sum(y_pred), len(y_pred) - sum(y_pred)))
-        logger.info("positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true)))
+        logger.debug("predicted positive: {}, predicted negative: {}".format(sum(y_pred), len(y_pred) - sum(y_pred)))
+        logger.debug("positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true)))
 
         # Compute y_true_new and num_misclassified
         if df_newly_labeled is not None:

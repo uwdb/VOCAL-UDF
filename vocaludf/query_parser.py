@@ -126,7 +126,7 @@ class QueryParser:
                     return error_message
 
         for trial in range(5): # retry 5 times
-            logger.info("Trial {}".format(trial))
+            logger.debug("Trial {}".format(trial))
             self.parser = autogen.AssistantAgent(
                 name="parser",
                 system_message=self.system_message,

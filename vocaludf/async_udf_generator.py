@@ -296,9 +296,13 @@ class UDFGenerator(UtilsMixin):
                         implemented_udf["udf_signature"] = self.udf_signature
                         implemented_udf["udf_description"] = self.udf_description
                         verifed_implemented_udfs.append(implemented_udf)
-                        logger.info(f"[{self.udf_signature}] [{idx}] semantic_interpretation: {implemented_udf['semantic_interpretation']}")
-                        logger.info(f"[{self.udf_signature}] [{idx}] function_implementation: {implemented_udf['function_implementation']}")
-                        logger.info(f"[{self.udf_signature}] [{idx}] kwargs: {implemented_udf.get('kwargs', {})}")
+                        logger.info(f"""
+[{self.udf_signature}] [id={idx}]
+Semantic Interpretation: {implemented_udf['semantic_interpretation']}
+Function Implementation:
+{implemented_udf['function_implementation']}
+Numeric Hyperparameters (kwargs): {implemented_udf.get('kwargs', {})}
+""")
                 break
             except Exception as e:
                 logger.exception(f"[{self.udf_signature}] ERROR: failed to implement UDF: {e}")
@@ -466,7 +470,7 @@ class UDFGenerator(UtilsMixin):
             List[UDFCandidate]: A list containing one distilled model.
         """
         logger.info(f"[{self.udf_signature}] Model distillation started")
-        logger.info(f"[{self.udf_signature}] Model distillation (initialization) started")
+        logger.debug(f"[{self.udf_signature}] Model distillation (initialization) started")
         _start = time.time()
         attribute_df = self.conn.execute(f"SELECT * FROM {self.dataset}_attributes").df()
         relationship_df = self.conn.execute(f"SELECT * FROM {self.dataset}_relationships").df()
@@ -477,41 +481,41 @@ class UDFGenerator(UtilsMixin):
         if self.dataset in ["charades"]:
             filtered_objects = list(set(await self.llm_filter_relevant_objects(self.udf_signature, self.udf_description) + ['person']))
         logger.debug(f"[{self.udf_signature}] filtered_objects: {filtered_objects}, filtered_subjects: {filtered_subjects}, filtered_targets: {filtered_targets}")
-        logger.info(f"[{self.udf_signature}] Model distillation (initialization) finished")
+        logger.debug(f"[{self.udf_signature}] Model distillation (initialization) finished")
 
         # Perform active learning rounds. Each round LLM annotates 100 samples.
         num_active_learning_rounds = (self.n_train_distill - 1) // 100
         labeled_indices = set()
         for active_learning_round in range(num_active_learning_rounds + 1):
-            logger.info(f"[{self.udf_signature}] Active learning round: {active_learning_round}")
+            logger.debug(f"[{self.udf_signature}] Active learning round: {active_learning_round}")
 
             if active_learning_round == 0:
-                logger.info(f"[{self.udf_signature}] Model distillation (data loading) started")
+                logger.debug(f"[{self.udf_signature}] Model distillation (data loading) started")
                 _start = time.time()
                 # NOTE: LLM refuses to generate labels in some cases, so we need to double the number of samples (i.e., self.n_train_distill * 1.2) to ensure we have enough training samples
                 if self.gt_udf_name:
                     self.df_train, self.df_test = self.construct_train_and_test_data(self.n_obj, int(self.n_train_distill * 1.2), self.n_test_distill, df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
                 else:
                     self.df_train = self.construct_train_and_test_data(self.n_obj, int(self.n_train_distill * 1.2), df_with_img_column=True, filtered_objects=filtered_objects, filtered_subjects=filtered_subjects, filtered_targets=filtered_targets)
-                logger.info(f"[{self.udf_signature}] Model distillation (data loading) finished")
+                logger.debug(f"[{self.udf_signature}] Model distillation (data loading) finished")
                 self.execution_time["model_distillation_data_loading"] += time.time() - _start
 
-            logger.info(f"[{self.udf_signature}] Model distillation (data labeling) started")
+            logger.debug(f"[{self.udf_signature}] Model distillation (data labeling) started")
             await self.llm_annotate_data(active_learning_round=active_learning_round)
-            logger.info(f"[{self.udf_signature}] Model distillation (data labeling) finished")
+            logger.debug(f"[{self.udf_signature}] Model distillation (data labeling) finished")
 
-            logger.info(f"[{self.udf_signature}] Model distillation (model training) started")
+            logger.debug(f"[{self.udf_signature}] Model distillation (model training) started")
             _start = time.time()
             self.mlp_prepare_data()
             best_ckpt = self.train(active_learning_round)
             if self.gt_udf_name and hasattr(self, 'df_test'):
                 self.test()
-            logger.info(f"[{self.udf_signature}] Model distillation (model training) finished")
+            logger.debug(f"[{self.udf_signature}] Model distillation (model training) finished")
             self.execution_time["model_distillation_model_training"] += time.time() - _start
 
             if active_learning_round < num_active_learning_rounds:
                 # TODO: The active learning step could be accelerated by performing it on a sample of the unlabeled dataset
-                logger.info(f"[{self.udf_signature}] Model distillation (active learning) started")
+                logger.debug(f"[{self.udf_signature}] Model distillation (active learning) started")
                 _start = time.time()
                 checkpoint = torch.load(best_ckpt)
                 hyper_parameters = checkpoint["hyper_parameters"]
@@ -590,7 +594,7 @@ class UDFGenerator(UtilsMixin):
                 # Random sampling:
                 # selected_indices = np.random.choice(len(uncertainties), min(100, self.n_train_distill - 100 * active_learning_round), replace=False)
                 labeled_indices.update(selected_indices)
-                logger.info(f"[{self.udf_signature}] labeled_indices: {sorted(labeled_indices)}, len(labeled_indices): {len(labeled_indices)}")
+                logger.debug(f"[{self.udf_signature}] labeled_indices: {sorted(labeled_indices)}, len(labeled_indices): {len(labeled_indices)}")
                 if self.n_obj == 1:
                     columns = ['vid', 'fid', 'o1_oid']
                     df_source = self.one_object_df
@@ -601,7 +605,7 @@ class UDFGenerator(UtilsMixin):
                 self.df_train = df_source.merge(selected_rows, on=columns, how='inner').reset_index(drop=True)
                 self.df_train = self.df_train.drop_duplicates(subset=columns)
                 self.df_train["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, self.df_train["vid"], self.df_train["fid"]), total=len(self.df_train), file=sys.stdout, desc="Processing frames"))
-                logger.info(f"[{self.udf_signature}] Model distillation (active learning) finished")
+                logger.debug(f"[{self.udf_signature}] Model distillation (active learning) finished")
                 self.execution_time["model_distillation_active_learning"] += time.time() - _start
 
         udf_dict = {}
@@ -665,7 +669,9 @@ class UDFGenerator(UtilsMixin):
         labeled_data = defaultdict(list) # dictionary with 'train' and 'test' fields. Each field is a list of tuples (image_features, label)
         llm_positive_df = []
         llm_negative_df = []
-        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method, self.query_filename)
+        labeled_data_dir = os.path.join(self.config["model_dir"], "labeled_data", self.dataset, self.llm_method)
+        if self.query_filename:
+            labeled_data_dir = os.path.join(labeled_data_dir, self.query_filename)
         labeled_data_path = os.path.join(labeled_data_dir, "udf-{}_query-{}_run-{}_ntrain-{}_labeled_data.pt".format(self.udf_name.lower(), self.query_id, self.run_id, self.n_train_distill))
         os.makedirs(labeled_data_dir, exist_ok=True)
         if self.load_labeled_data and os.path.exists(labeled_data_path):
@@ -800,6 +806,8 @@ class UDFGenerator(UtilsMixin):
                 llm_f1 = -1
             labeled_data["metadata"] = {"llm_TP": self.llm_TP, "llm_FP": self.llm_FP, "llm_TN": self.llm_TN, "llm_FN": self.llm_FN, "llm_f1": llm_f1}
 
+            logger.info(f"[{self.udf_signature}] Labeled {len(labeled_data['train'])} training samples")
+
             llm_positive_df = pd.DataFrame(llm_positive_df).reset_index(drop=True)
             self.llm_positive_df = pd.concat([self.llm_positive_df, llm_positive_df], ignore_index=True) if self.llm_positive_df is not None else llm_positive_df
             llm_negative_df = pd.DataFrame(llm_negative_df).reset_index(drop=True)
@@ -835,7 +843,7 @@ class UDFGenerator(UtilsMixin):
     def mlp_prepare_data(self):
         splits = ['train', 'test'] if self.gt_udf_name is not None else ['train']
         for split in splits:
-            logger.info(f"[{self.udf_signature}] Processing {split} data")
+            logger.debug(f"[{self.udf_signature}] Processing {split} data")
             idx_to_remove = []
             for i in range(len(self.labeled_data[split])):
                 if "image_features" in self.labeled_data[split][i]:
@@ -947,7 +955,7 @@ class UDFGenerator(UtilsMixin):
             if current_model_score < best_model_score:
                 best_model_score = current_model_score
                 best_ckpt = checkpoint_callback.best_model_path
-        logger.debug(f"[{self.udf_signature}] Best model checkpoint: {best_ckpt}")
+        logger.info(f"[{self.udf_signature}] Best model checkpoint: {best_ckpt}")
         # best_mlp_model = mlp.MLP.load_from_checkpoint(best_ckpt)
         return best_ckpt
 

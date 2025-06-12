@@ -76,7 +76,7 @@ class MLP(pl.LightningModule):
         return loss
 
     def on_train_epoch_end(self):
-        self.my_logger.info(f'train_loss: {self.trainer.callback_metrics["train_loss"]}')
+        self.my_logger.debug(f'train_loss: {self.trainer.callback_metrics["train_loss"]}')
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
@@ -95,8 +95,8 @@ class MLP(pl.LightningModule):
         self.log('val_f1', val_f1)
         self.val_acc.reset()
         self.val_f1.reset()
-        self.my_logger.info(f'val_loss: {self.trainer.callback_metrics["val_loss"]}')
-        self.my_logger.info(f'val_acc: {val_acc}, val_f1: {val_f1}')
+        self.my_logger.debug(f'val_loss: {self.trainer.callback_metrics["val_loss"]}')
+        self.my_logger.debug(f'val_acc: {val_acc}, val_f1: {val_f1}')
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -113,7 +113,7 @@ class MLP(pl.LightningModule):
         self.log('test_f1', test_f1)
         self.test_acc.reset()
         self.test_f1.reset()
-        self.my_logger.info(f'test_acc: {test_acc}, test_f1: {test_f1}')
+        self.my_logger.debug(f'test_acc: {test_acc}, test_f1: {test_f1}')
 
     def predict_step(self, batch, batch_idx):
         row, x = batch

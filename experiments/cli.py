@@ -61,16 +61,17 @@ async def process_udf(udf_signature, udf_description, shared_resources):
 
 def choose_registered_udfs(udf_corpus: List[Any]) -> List[Any]:
     """Let the user pick a subset of UDFs to expose to the pipeline."""
-    sigs: List[str] = [udf_dict["signature"].split("(")[0] for udf_dict in udf_corpus if udf_dict["signature"].split("(")[0] != "object"]
+    udf_list: List[tuple[str, str]] = [(udf_dict["signature"].split("(")[0], udf_dict["description"]) for udf_dict in udf_corpus if udf_dict["signature"].split("(")[0] != "object"]
 
     table = Table(title="Registered UDFs")
     table.add_column("#", justify="right", style="bold")
-    table.add_column("Signature")
-    for i, sig in enumerate(sigs):
-        table.add_row(str(i), sig)
+    table.add_column("UDF Name")
+    table.add_column("UDF Description", style="dim")
+    for i, (sig, desc) in enumerate(udf_list):
+        table.add_row(str(i), sig, desc)
     print(table)
 
-    raw = Prompt.ask("Indices of UDFs to include (comma-separated, object UDFs are always included)")
+    raw = Prompt.ask("[bold cyan]Indices of UDFs to include (comma-separated, object UDFs are always included)[/bold cyan]",)
     try:
         chosen = [int(tok) for tok in raw.replace(",", " ").split()]  # type: ignore[arg-type]
     except ValueError:
@@ -85,9 +86,9 @@ def choose_registered_udfs(udf_corpus: List[Any]) -> List[Any]:
 
 async def main() -> None:
     ### clevrer:
-    # python tui.py --dataset clevrer --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --program_with_pixels --num_workers 8 --save_labeled_data --load_labeled_data --n_train_distill 100 --selection_strategy program --llm_method gpt --is_async --openai_model_name gpt-4o
-    # user query: For at least 15 frames, a cyan-colored object o0 is present while another object o1 is in front of a third object o2. Next, for a duration of at least 10 frames, o0 is behind and near o2, o1 is in front of o0, and o2 is made of rubber. Finally, for at least 10 frames, o2 is at the top of the video frame.
-    # registered UDFs: 0,1,2,3,4,5,6,7,8,9,10,12,14
+    # python cli.py --dataset clevrer --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --program_with_pixels --num_workers 8 --save_labeled_data --n_train_distill 100 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
+    # user query: A cyan-colored object o1 is in front of a cylinder o2, then o1 moves to be behind and close to o2.
+    # registered UDFs: 1, 14, 19
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
@@ -148,17 +149,20 @@ async def main() -> None:
 
 
     # 1. Natural-language query ------------------------------------------------
+    print(Panel(f"[bold green]Welcome to VOCAL-UDF CLI![/bold green]"))
+    print(Panel(f"[bold green]Expressing the query...[/bold green]"))
     query_nl = Prompt.ask("[bold cyan]Enter your query in natural language[/bold cyan]")
 
     # 2. Choose registered UDFs ----------------------------------------------
+    print(Panel(f"[bold green]Choosing registered UDFs...[/bold green]"))
     registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
     udf_base = registered_udfs_json[f"{dataset}_base"]
     udf_additional = [v for _, v in registered_udfs_json[dataset].items()]
     udf_corpus = udf_base + udf_additional
     registered_functions = choose_registered_udfs(udf_corpus)
-    logger.info("Registered functions: {}".format(registered_functions))
+    logger.debug("Registered functions: {}".format(registered_functions))
     object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
-    logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
+    logger.debug("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
     available_udf_names = [parse_signature(func["signature"])[0] for func in registered_functions]
     materialized_df_names = []
     on_the_fly_udf_names = []
@@ -168,19 +172,20 @@ async def main() -> None:
     udf_generation_execution_time = defaultdict(float)
 
     # 3. Parse the query -------------------------------------------------------
-    logger.info("Query parsing started")
+    logger.debug("Query parsing started")
+    print(Panel(f"[bold green]Parsing the query...[/bold green]"))
     _start = time.time()
     qp = QueryParser(
         config, prompt_config, dataset, registered_functions, object_domain, 0, openai_model_name
     )
     flag = qp.parse(query_nl)
     cost_estimation['query_parser'] += qp.get_cost_estimation()
-    logger.info("Query parsing finished")
+    logger.debug("Query parsing finished")
     total_execution_time['query_parsing'] += time.time() - _start
     if 'parse_no' in flag:
         print(Panel(f"[green]Query contains predicates that existing UDFs cannot resolve. Generate UDFs now...[/green]"))
         # 4. Initialize shared resources
-        logger.info("Shared resources initialization started")
+        logger.debug("Shared resources initialization started")
         print(Panel(f"[green]Initializing shared resources... [/green]"))
         _start = time.time()
         shared_resources = SharedResources(
@@ -197,9 +202,9 @@ async def main() -> None:
             num_parameter_search,
             program_with_pixels,
             program_with_pretrained_models,
-            None, # query_filename not used in TUI
-            None, # query_id not used in TUI
-            0, # run_id not used in TUI
+            None, # query_filename not used in CLI
+            None, # query_id not used in CLI
+            0, # run_id not used in CLI
             num_workers,
             save_labeled_data,
             load_labeled_data,
@@ -210,11 +215,11 @@ async def main() -> None:
             is_async,
             openai_model_name
         )
-        logger.info("Shared resources initialization finished")
+        logger.debug("Shared resources initialization finished")
         total_execution_time['resource_init'] += time.time() - _start
 
         # 5. Propose missing UDFs -------------------------------------
-        logger.info("UDF proposal started")
+        logger.debug("UDF proposal started")
         print(Panel(f"[green]Proposing new UDFs... [/green]"))
         _start = time.time()
         up = UDFProposer(shared_resources)
@@ -222,11 +227,11 @@ async def main() -> None:
         up_cost_estimation = up.get_cost_estimation()
         for key, value in up_cost_estimation.items():
             cost_estimation[key] += value
-        logger.info("UDF proposal finished")
+        logger.debug("UDF proposal finished")
         total_execution_time['udf_proposal'] += time.time() - _start
 
         # 6. generate missing UDFs, concurrently
-        logger.info("UDF generation started")
+        logger.debug("UDF generation started")
         print(Panel(f"[green]Generating new UDFs... [/green]"))
         _start = time.time()
         tasks = [
@@ -236,11 +241,11 @@ async def main() -> None:
 
         # Run tasks concurrently
         results = await asyncio.gather(*tasks)
-        logger.info("UDF generation finished")
+        logger.debug("UDF generation finished")
         total_execution_time['udf_generation'] += time.time() - _start
 
         # 7. Interactive UDF selection / labeling --------------------------------
-        logger.info("UDF selection started")
+        logger.debug("UDF selection started")
         _start = time.time()
         for result in results:
             (
@@ -261,11 +266,11 @@ async def main() -> None:
             for key, value in execution_time_per_udf.items():
                 udf_generation_execution_time[key] += value
 
-            logger.info(f"UDF selection for {udf_signature} started")
+            logger.debug(f"UDF selection for {udf_signature} started")
             print(Panel(f"[green]Selecting UDF for {udf_signature}... [/green]"))
             us = InteractiveUDFSelector(shared_resources, llm_positive_df, llm_negative_df)
             selected_udf_candidate = us.select(None, udf_candidate_list)
-            logger.info(f"UDF selection for {udf_signature} finished")
+            logger.debug(f"UDF selection for {udf_signature} finished")
             if selected_udf_candidate is None:
                 logger.warning("No UDF candidate is selected. Skipping...")
                 continue
@@ -273,7 +278,7 @@ async def main() -> None:
             semantic_interpretation = selected_udf_candidate.semantic_interpretation
             function_implementation = selected_udf_candidate.function_implementation
 
-            logger.info(
+            logger.debug(
                 "Best: {}, implementation: {}".format(
                     udf_signature, function_implementation
                 )
@@ -293,11 +298,12 @@ async def main() -> None:
                 materialized_df_names.append(udf_name)
             else:
                 on_the_fly_udf_names.append(udf_name)
-        logger.info("UDF selection finished")
+        logger.debug("UDF selection finished")
         total_execution_time['udf_selection'] += time.time() - _start
 
         # 8. Re-parse with final UDF set ------------------------------------------
-        logger.info("Query parsing started")
+        logger.debug("Query parsing started")
+        print(Panel(f"[green]Re-parsing the query with updated UDFs... [/green]"))
         _start = time.time()
         qp = QueryParser(
             config,
@@ -311,33 +317,25 @@ async def main() -> None:
         )
         qp.parse(query_nl)
         cost_estimation['query_parser'] += qp.get_cost_estimation()
-        logger.info("Query parsing finished")
+        logger.debug("Query parsing finished")
         total_execution_time['query_parsing'] += time.time() - _start
+        # Cleanup memory
+        del shared_resources, up, us
 
-    # Save the generation output to disk
-    output_dir = os.path.join(
-        config["output_dir"],
-        base_dir
-    )
-    os.makedirs(output_dir, exist_ok=True)
     parsed_program = qp.get_parsed_program()
     parsed_dsl = qp.get_parsed_query()
-    generation_output = dict(
-        dataset=dataset,
-        object_domain=object_domain,
-        relationship_domain=relationship_domain,
-        attribute_domain=attribute_domain,
-        parsed_program=parsed_program,
-        parsed_dsl=parsed_dsl,
-        registered_functions=registered_functions,
-        available_udf_names=available_udf_names,
-        materialized_df_names=materialized_df_names,
-        on_the_fly_udf_names=on_the_fly_udf_names,
-        program_with_pixels=program_with_pixels,
-    )
-    logger.info(generation_output)
-    with open(os.path.join(output_dir, "out.json"), "w") as f:
-        json.dump(generation_output, f)
+    logger.info("Parsed DSL: {}".format(parsed_dsl))
+
+    # Cleanup memory
+    del qp
+
+    # 9. Execute the query
+    print(Panel(f"[green]Executing the query (over the test split)... [/green]"))
+    pred_batch_size = 4096
+    dali_batch_size = 1
+    qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size)
+    output_vids = qe.run(parsed_program, y_true=None, debug=False)
+    logger.info("Matching vids: {}".format(output_vids))
 
     logger.info("Total execution time: {}".format(total_execution_time))
     logger.info("UDF generation execution time: {}".format(udf_generation_execution_time))
