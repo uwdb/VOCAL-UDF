@@ -14,9 +14,6 @@ from vocaludf.udf_selector import UDFSelector
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# Interactive selector
-# --------------------------------------------------------------------------- #
 class InteractiveUDFSelector(UDFSelector):
     def _ask_binary_label(self, img_path: Path, n_obj: int) -> bool:
         """
@@ -68,15 +65,17 @@ Open the image below in any viewer, then come back here and type [bold]1[/bold] 
         frame = self.frame_processing_for_program(vid, fid)
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         image_size = frame.shape[:2]
+        # Set thickness based on image size
+        thickness = min(image_size) // 400 + 1
         # Draw bounding box on the frame and save it to a temporary file
         if n_obj == 1:
-            x1, y1, x2, y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=1)
+            x1, y1, x2, y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size, factor=1.2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=thickness)
         else:
-            o1_x1, o1_y1, o1_x2, o1_y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size)
-            o2_x1, o2_y1, o2_x2, o2_y2 = expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size)
-            cv2.rectangle(frame, (o1_x1, o1_y1), (o1_x2, o1_y2), color=(0, 0, 255), thickness=1)
-            cv2.rectangle(frame, (o2_x1, o2_y1), (o2_x2, o2_y2), color=(255, 0, 0), thickness=1)
+            o1_x1, o1_y1, o1_x2, o1_y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], image_size, factor=1.2)
+            o2_x1, o2_y1, o2_x2, o2_y2 = expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], image_size, factor=1.2)
+            cv2.rectangle(frame, (o1_x1, o1_y1), (o1_x2, o1_y2), color=(0, 0, 255), thickness=thickness)
+            cv2.rectangle(frame, (o2_x1, o2_y1), (o2_x2, o2_y2), color=(255, 0, 0), thickness=thickness)
         img_path = Path(self.shared_resources.interactive_labeling_dir) / f"frame_{vid}_{fid}.jpg"
         cv2.imwrite(str(img_path), frame)
 

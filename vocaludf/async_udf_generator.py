@@ -1009,7 +1009,7 @@ Numeric Hyperparameters (kwargs): {implemented_udf.get('kwargs', {})}
             llm_label, base64_image, image_prompt = await self._async_llm_annotate_frame(frame, image_size, row, gt_label, log_msgs)
         except Exception as e:
             logger.debug("\n".join(log_msgs))
-            logger.exception(f"[{self.udf_signature}] Error: {e}")
+            logger.debug(f"[{self.udf_signature}] Error: {e}")
             return
 
         if len(labeled_data['train']) >= min(100, self.n_train_distill - 100 * active_learning_round):

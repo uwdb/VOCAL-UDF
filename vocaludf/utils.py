@@ -261,11 +261,10 @@ class SharedResources:
         metadata_join_clause = '' if self.dataset in ['clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
         height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevrer'] else 'm.height AS height, m.width AS width'
         group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
-        obj_parameters = ','.join('?' for _ in self.object_domain)
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
         dataset_size = self.config[self.dataset]["dataset_size"]
         # Use the first half of the dataset for training
-        where_clause = f"WHERE o1.oname = ANY([{obj_parameters}]) AND o1.vid < {dataset_size // 2}"
+        where_clause = f"WHERE o1.vid < {dataset_size // 2}"
         gt_attr_select_clause = f"COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames," if self.test_with_gt else ''
         gt_attr_join_clause = f"LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid" if self.test_with_gt else ''
         sql = f"""
@@ -284,20 +283,21 @@ class SharedResources:
         """
         # ORDER BY o1.vid, o1.fid, o1.oid, o1.x1, o1.y1, o1.x2, o1.y2
         logger.debug(f"Create one_object table:\n{sql}")
-        one_object_df = self.conn.execute(sql, self.attribute_domain + self.object_domain).df()
+        one_object_df = self.conn.execute(sql, self.attribute_domain).df()
 
         rel_parameters = ','.join('?' for _ in self.relationship_domain)
         # Use the first half of the dataset for training
-        obj_where_clause = f"WHERE oname = ANY([{obj_parameters}]) AND vid < {dataset_size // 2}"
+        obj_where_clause = f"WHERE vid < {dataset_size // 2}"
         attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid < {dataset_size // 2}"
-        rel_where_clause = f"WHERE vid < {dataset_size // 2}"
+        gt_rel_where_clause = f"WHERE vid < {dataset_size // 2}"
+        rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid < {dataset_size // 2}"
         gt_rel_cte_clause = f"""
             relationships_expanded AS (
                 SELECT
                     vid, fid, oid1, oid2,
                     ARRAY_AGG(DISTINCT rname) AS gt_rnames
                 FROM {self.dataset}_relationships
-                {rel_where_clause}
+                {gt_rel_where_clause}
                 GROUP BY vid, fid, oid1, oid2
             ),
         """ if self.test_with_gt else ''
@@ -327,7 +327,7 @@ class SharedResources:
                 relationship_predictions_expanded AS (
                     SELECT
                         vid, fid, oid1, oid2,
-                        COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
+                        COALESCE(ARRAY_AGG(DISTINCT rname), ARRAY[]::varchar[]) AS rnames
                     FROM {self.dataset}_relationship_predictions
                     {rel_where_clause}
                     GROUP BY vid, fid, oid1, oid2
@@ -349,7 +349,7 @@ class SharedResources:
         """
         # ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         logger.debug(f"Create two_objects table:\n{sql}")
-        two_objects_df = self.conn.execute(sql, self.object_domain + self.attribute_domain + self.relationship_domain).df()
+        two_objects_df = self.conn.execute(sql, self.attribute_domain + self.relationship_domain).df()
         return one_object_df, two_objects_df
 
 

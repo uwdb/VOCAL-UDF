@@ -1,5 +1,6 @@
 import os
 from enum import Enum
+import sys
 import time
 import duckdb
 import logging
@@ -10,6 +11,7 @@ import torch
 import pandas as pd
 import torchvision.ops as ops
 import torchvision.transforms as T
+from tqdm import tqdm
 from vocaludf import mlp
 from vocaludf.utils import (
     parse_signature,
@@ -77,32 +79,30 @@ class UDFSelector(UtilsMixin):
     ######               ######
     ###########################
     def select(self, gt_udf_name, udf_candidate_list):
-        df_with_img_column = self.program_with_pixels
+        self.df_with_img_column = self.program_with_pixels
         for udf_candidate in udf_candidate_list:
             if udf_candidate.id == "model":
-                df_with_img_column = True
+                self.df_with_img_column = True
                 break
-        return self._select(gt_udf_name, udf_candidate_list, df_with_img_column=df_with_img_column)
+        return self._select(gt_udf_name, udf_candidate_list)
 
 
-    def _select(self, gt_udf_name, udf_candidate_list, df_with_img_column):
+    def _select(self, gt_udf_name, udf_candidate_list):
         if len(udf_candidate_list) == 0:
             return None
-        udf_signature = udf_candidate_list[0].udf_signature
-        udf_name, udf_vars = parse_signature(udf_signature)
+        self.udf_signature = udf_candidate_list[0].udf_signature
+        udf_name, udf_vars = parse_signature(self.udf_signature)
         n_obj = len(udf_vars)
         # Add a dummy UDF that always returns True
-        udf_description = udf_candidate_list[0].udf_description
-        self.udf_signature = udf_signature
-        self.udf_description = udf_description
-        dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': udf_signature, 'udf_description': udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
+        self.udf_description = udf_candidate_list[0].udf_description
+        dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': self.udf_signature, 'udf_description': self.udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
         udf_candidate_list.append(dummy_udf)
 
         # Construct training data and test data
         if gt_udf_name is None:
-            df_train = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=None, df_with_img_column=df_with_img_column)
+            df_train = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=None, df_with_img_column=False)
         else:
-            df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train_selection, self.n_test_selection, df_with_img_column=df_with_img_column)
+            df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train_selection, self.n_test_selection, df_with_img_column=False)
 
         # Select new video segments to label
         # TODO: df_train and llm_positive_df may contain the same tuples
@@ -141,6 +141,10 @@ class UDFSelector(UtilsMixin):
             # Request labels from either user or ground truth
             label = self.request_label(new_labeled_df, n_obj, gt_udf_name)
             y_true.append(label)
+            # Load frame if df_with_img_column is True
+            if self.df_with_img_column:
+                new_labeled_df = new_labeled_df.copy()
+                new_labeled_df["img"] = list(map(self.frame_processing_for_program, new_labeled_df["vid"], new_labeled_df["fid"]))
             labeled_df = pd.concat([labeled_df, new_labeled_df])
             # log number of positive and negative samples
             logger.info(
@@ -159,7 +163,7 @@ class UDFSelector(UtilsMixin):
 
             # Update scores
             indices_to_remove = []
-            for i in range(len(udf_candidate_list)):
+            for i in tqdm(range(len(udf_candidate_list)), total=len(udf_candidate_list), file=sys.stdout, desc="Updating UDF scores"):
                 try:
                     score, loss_t = self.compute_udf_score(
                         udf_candidate_list[i],
@@ -201,7 +205,10 @@ class UDFSelector(UtilsMixin):
                 y_true_test = [gt_udf_name in o1_gt_anames for o1_gt_anames in df_test['o1_gt_anames']]
             elif n_obj == 2:
                 y_true_test = [gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df_test['o1_o2_gt_rnames']]
-            for i in range(len(udf_candidate_list)):
+            # Load frame if df_with_img_column is True
+            if self.df_with_img_column:
+                df_test["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df_test["vid"], df_test["fid"]), total=len(df_test), file=sys.stdout, desc="Loading frames into memory"))
+            for i in tqdm(range(len(udf_candidate_list)), total=len(udf_candidate_list), file=sys.stdout, desc="Updating UDF scores"):
                 try:
                     udf_candidate_list[i].test_score = self.compute_udf_score(
                         udf_candidate_list[i],
@@ -216,14 +223,14 @@ class UDFSelector(UtilsMixin):
                     udf_candidate_list[i].test_score = -1
                     continue
 
-        logger.info("compute train F1 score")
+        logger.info("Computing training F1 score")
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
         if sum(y_true) == 0:
             logger.info("No positive samples are labeled. Returning the dummy UDF.")
             selected_udf_candidate = [udf_candidate for udf_candidate in udf_candidate_list if udf_candidate.id == "dummy"][0]
         else:
             # Compute final f1 score (without adding one)
-            for i in range(len(udf_candidate_list)):
+            for i in tqdm(range(len(udf_candidate_list)), total=len(udf_candidate_list), file=sys.stdout, desc="Updating UDF scores"):
                 try:
                     udf_candidate_list[i].score = self.compute_udf_score(
                         udf_candidate_list[i],
@@ -286,7 +293,10 @@ class UDFSelector(UtilsMixin):
         else:
             sampled_index = unlabeled_index
 
-        df_sampled = df_train.iloc[sampled_index]
+        df_sampled = df_train.iloc[sampled_index].copy()
+        # Load frame if df_with_img_column is True
+        if self.df_with_img_column:
+            df_sampled["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df_sampled["vid"], df_sampled["fid"]), total=len(df_sampled), file=sys.stdout, desc="Loading frames into memory"))
 
         indices_to_remove = []
         for i, udf_candidate in enumerate(udf_candidate_list):
@@ -356,8 +366,6 @@ class UDFSelector(UtilsMixin):
         logger.debug("query weights {}".format(posterior_t))
         logger.debug(f"test: sampling_strategy: {sampling_strategy}")
         if sampling_strategy == SamplingStrategy.positive:
-            # TODO: filter objects?
-            # TODO: ask LLM?
             # find sample with highest weighted probability of being positive
             probability_list = np.zeros(len(sampled_index))
             for i in range(len(sampled_index)):
@@ -382,7 +390,6 @@ class UDFSelector(UtilsMixin):
                 entropy_list[i] = self._compute_u_t(posterior_t, prediction_matrix[i, :])
             ind = np.argsort(-entropy_list)
             logger.debug("entropy list {}".format(entropy_list[ind]))
-            # df_object_pairs_train[sampled_index[ind]].apply(lambda row: logger.info("o1: {}, o2: {}".format(row["o1"], row["o2"])), axis=1)
             logger.debug("sampled index {}".format(sampled_index[ind]))
             # find argmax of entropy (top k)
             max_entropy_index = sampled_index[np.argmax(entropy_list)]
@@ -603,12 +610,6 @@ class UDFSelector(UtilsMixin):
                 preds = mlp_model(features)
                 # predictions.extend([bool(pred.item()) for pred in preds])
                 predictions.extend(preds.cpu().tolist())
-        # predictions = []
-        # with torch.no_grad():
-        #     for _, row in tqdm(df_with_features.iterrows(), total=len(df_with_features), file=sys.stdout, desc="MLP Predicting"):
-        #         feature = torch.tensor(row["feature"], dtype=torch.float32).to(self.device)
-        #         pred = mlp_model(feature)
-        #         predictions.append(bool(pred.item()))
         return predictions
 
     def compute_udf_score(

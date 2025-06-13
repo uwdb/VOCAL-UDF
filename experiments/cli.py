@@ -86,9 +86,14 @@ def choose_registered_udfs(udf_corpus: List[Any]) -> List[Any]:
 
 async def main() -> None:
     ### clevrer:
-    # python cli.py --dataset clevrer --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --program_with_pixels --num_workers 8 --save_labeled_data --n_train_distill 100 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
+    # python cli.py --dataset clevrer --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --program_with_pixels --num_workers 8 --n_train_distill 100 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
     # user query: A cyan-colored object o1 is in front of a cylinder o2, then o1 moves to be behind and close to o2.
     # registered UDFs: 1, 14, 19
+
+    ### cityflow
+    # python cli.py --dataset cityflow --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --num_workers 8 --n_train_distill 500 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
+    # user query: A red car is initially in front of another car, then drives to be behind and near the car
+    # registered UDFs: 2, 9
 
     config = yaml.safe_load(
         open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")

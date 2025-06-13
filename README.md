@@ -47,7 +47,7 @@ python extract_clevrer.py --method "attribute"
 python extract_clevrer.py --method "relationship"
 ```
 
-### CityFlow
+### CityFlow-NL
 1. Obtain the CityFlow-NL dataset from [here](https://docs.google.com/forms/d/e/1FAIpQLSdOVC33d-R23PCuBdSsmo08e-98HiDLykhIIAzryjzjYoilVQ/viewform) (i.e., [2023 Track 2](https://www.aicitychallenge.org/2023-track2-download/); For more information, see [here](https://www.aicitychallenge.org/)). Place the videos in `data/cityflow/`. Next, run `python extract_vdo_frms.py` to extract the frames from the videos. The file structure should look like this:
 ```
 data/cityflow/data/
@@ -157,3 +157,28 @@ We provide an example of how to use VOCAL-UDF to process a query with three miss
 
 ## Reproduce Experiments
 The experiment scripts are located in the `scripts/experiments` directory.
+
+## Working with Your Own Queries
+We provide a Command-Line Interface (CLI) to process your own queries over the CLEVRER, CityFlow-NL, and Charades datasets.
+
+1. Run the following command to specify the dataset and hyperparameters:
+```bash
+python experiments/cli.py --dataset cityflow --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --num_workers 8 --n_train_distill 500 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
+```
+
+2. In the terminal, you will be prompted to enter your query in natural language. An example query could be as follows:
+```bash
+Enter your query in natural language: A red car is initially in front of another car, then drives to be behind and near the car
+```
+
+3. Next, you will be prompted to enter a list of UDFs that are available to answer the query.
+```bash
+Indices of UDFs to include (comma-separated, object UDFs are always included): 2, 9
+```
+
+4. Then, VOCAL-UDF will start to process the query and generate the missing UDFs when needed. You will see the progress in the terminal. During the UDF selection stage, you will be prompted to provide labels for system-selected frames.
+
+5. Once the query is processed, VOCAL-UDF will output all matching vids in the terminal. For CityFlow-NL and Charades datasets, to map the vid to the corresponding video file, please refer to the `duckdb_dir/{dataset}_metadata.csv` file.
+
+## Working with Your Own Data
+TODO
