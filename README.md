@@ -165,7 +165,7 @@ The experiment scripts are located in the `scripts/experiments` directory.
 ## Working with Your Own Queries
 We provide a Command-Line Interface (CLI) to process your own queries over the CLEVRER, CityFlow-NL, and Charades datasets.
 
-1. Run the following command to specify the dataset and hyperparameters:
+1. Run the following command to specify the dataset (`--dataset`) and hyperparameters:
 ```bash
 python experiments/cli.py \
     --dataset cityflow \
@@ -184,9 +184,9 @@ python experiments/cli.py \
 
 2. In the terminal, you will be prompted to enter your query in natural language and then a list of UDFs that are available to answer the query. Some good examples to start with:
 
-| Dataset     | Query  | List of UDFs (indices) |
+| Dataset     | Query  | List of available UDFs (indices) |
 | -------- | ------- | ----------------------- |
-| CLEVRER  |  A cyan-colored object o1 is in front of a cylinder o2, then o1 moves to be behind and close to o2.  | 1, 14,19 |
+| CLEVRER  |  A cyan-colored object o1 is in front of a cylinder o2, then o1 moves to be behind and close to o2.  | 1, 14, 19 |
 | CityFlow-NL | A red car is initially in front of another car, then drives to be behind and near the car     | 2, 9 |
 
 3. Then, VOCAL-UDF will start to process the query and generate the missing UDFs when needed. You will see the progress in the terminal. During the UDF selection stage, you will be prompted to provide labels for system-selected frames.
