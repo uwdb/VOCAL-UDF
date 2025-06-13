@@ -188,7 +188,9 @@ class QueryExecutor:
         self.dali_batch_size = dali_batch_size
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
+        logger.info("Table initialization started")
         self.init_table()
+        logger.info("Table initialization finished")
         self.test_data_init_time += time.time() - _start
         _start = time.time()
         self.materialized_udfs = {}
@@ -364,6 +366,7 @@ class QueryExecutor:
 
         if self.program_with_pixels:
             _start = time.time()
+            logger.info("First, executing the query with all on-the-fly UDFs removed")
             # First, execute the query with all on-the-fly UDFs removed
             query_program = self.remove_on_the_fly_udfs(program["query"])
             result = duckdb_execute_video_materialize(
@@ -383,6 +386,7 @@ class QueryExecutor:
                     exec(f"{udf_name} = df")
                 _start = time.time()
                 # Then, execute the query with all on-the-fly UDFs over the result of the previous query
+                logger.info("Now, executing the query with on-the-fly UDFs over the filtered results")
                 result = duckdb_execute_video_materialize(
                     self.conn,
                     program["query"],
@@ -410,16 +414,16 @@ class QueryExecutor:
         y_pred = [1 if vid in result else 0 for vid in input_vids]
 
         self.query_execution_time += time.time() - _start_run
-        logger.info("Test data initialization time: {}".format(self.test_data_init_time))
-        logger.info("Query execution time: {}".format(self.query_execution_time))
+        logger.debug("Test data initialization time: {}".format(self.test_data_init_time))
+        logger.debug("Query execution time: {}".format(self.query_execution_time))
 
         if y_true is not None:
             f1 = f1_score(y_true[:len(y_pred)], y_pred)
             precision = precision_score(y_true[:len(y_pred)], y_pred)
             recall = recall_score(y_true[:len(y_pred)], y_pred)
-            logger.info("F1 score: {}".format(f1))
-            logger.info("Precision: {}".format(precision))
-            logger.info("Recall: {}".format(recall))
+            logger.debug("F1 score: {}".format(f1))
+            logger.debug("Precision: {}".format(precision))
+            logger.debug("Recall: {}".format(recall))
         return result
 
     def remove_on_the_fly_udfs(self, query):
@@ -438,10 +442,10 @@ class QueryExecutor:
             try:
                 return udf(*args, **kwargs)
             except Exception as e:
-                logger.exception(f"exec_udf_with_data Error: {e}")
+                logger.debug(f"exec_udf_with_data Error: {e}")
                 return False  # Default value in case of error
 
-        logger.debug("Start materializing on-the-fly UDFs")
+        logger.info("Start materializing on-the-fly UDFs")
 
         # Filter on-the-fly UDFs
         on_the_fly_udfs = [func for func in self.registered_functions if parse_signature(func["signature"])[0] in self.on_the_fly_udf_names]
@@ -491,7 +495,7 @@ class QueryExecutor:
             udf_obj = globals()[py_func_name]
             udf_map[udf_name] = (udf_obj, n_obj)
 
-        logger.debug("building video dataloader")
+        logger.info("building video dataloader")
         # Create DALI pipeline for loading video frames
         if self.dataset == "clevrer":
             pipe = ClevrerDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
@@ -524,7 +528,7 @@ class QueryExecutor:
         udf_to_df_map = defaultdict(list)
         udf_to_pred_map = defaultdict(list)
 
-        logger.debug("executing on-the-fly UDFs")
+        logger.info("executing on-the-fly UDFs")
         loading_time = 0
         transform_time = 0
         udf_execution_time = 0
@@ -625,7 +629,7 @@ class QueryExecutor:
             logger.debug(f"Materialized UDF: {udf_name}, shape: {df.shape}")
 
         self.on_the_fly_udf_names = []
-        logger.debug("Finish materializing on-the-fly UDFs")
+        logger.info("Finish materializing on-the-fly UDFs")
         logger.debug(f"available_udf_names: {self.available_udf_names}")
         logger.debug(f"materialized_udf_names: {self.materialized_udf_names}")
         logger.debug(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")

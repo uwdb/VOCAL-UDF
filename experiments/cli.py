@@ -213,7 +213,8 @@ async def main() -> None:
             allow_kwargs_in_udf,
             llm_method,
             is_async,
-            openai_model_name
+            openai_model_name,
+            test_with_gt=False,
         )
         logger.debug("Shared resources initialization finished")
         total_execution_time['resource_init'] += time.time() - _start
@@ -337,10 +338,10 @@ async def main() -> None:
     output_vids = qe.run(parsed_program, y_true=None, debug=False)
     logger.info("Matching vids: {}".format(output_vids))
 
-    logger.info("Total execution time: {}".format(total_execution_time))
-    logger.info("UDF generation execution time: {}".format(udf_generation_execution_time))
-    logger.info("Cost estimation: {}".format(cost_estimation))
-    logger.info("Peak memory usuage (in GB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024.0/1024.0))
+    logger.debug("Total execution time: {}".format(total_execution_time))
+    logger.debug("UDF generation execution time: {}".format(udf_generation_execution_time))
+    logger.debug("Cost estimation: {}".format(cost_estimation))
+    logger.debug("Peak memory usuage (in GB): {}".format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024.0/1024.0))
 
 
 if __name__ == "__main__":

@@ -59,14 +59,23 @@ class UDFSelector(UtilsMixin):
         return self.cost_estimation
 
 
+    def request_label(self, df: pd.DataFrame, n_obj: int, gt_udf_name: str) -> int:
+        # Request label from ground truth
+        assert len(df) == 1, "InteractiveUDFSelector.request_label() expects a single-row DataFrame"
+        assert gt_udf_name is not None, "Ground truth UDF name must be provided for labeling"
+        row = df.iloc[0]
+        if n_obj == 1:
+            label = gt_udf_name in row['o1_gt_anames']
+        elif n_obj == 2:
+            label = gt_udf_name in row['o1_o2_gt_rnames']
+        return label
+
+
     ###########################
     ######               ######
     ###### UDF Selection ######
     ######               ######
     ###########################
-    # TODO: If all the generated UDFs are terrible, we do rather not select any UDF (by using a dummy UDF that always returns True).
-    # We could either add a dummy UDF to the candidate list,
-    # or only register UDFs when the F1 score is above a certain threshold (how to decide the threshold?) to avoid generating terrible UDFs
     def select(self, gt_udf_name, udf_candidate_list):
         df_with_img_column = self.program_with_pixels
         for udf_candidate in udf_candidate_list:
@@ -79,67 +88,60 @@ class UDFSelector(UtilsMixin):
     def _select(self, gt_udf_name, udf_candidate_list, df_with_img_column):
         if len(udf_candidate_list) == 0:
             return None
-        # if len(udf_candidate_list) == 1:
-        #     selected_udf_candidate = udf_candidate_list[0]
-        # else:
         udf_signature = udf_candidate_list[0].udf_signature
         udf_name, udf_vars = parse_signature(udf_signature)
         n_obj = len(udf_vars)
         # Add a dummy UDF that always returns True
         udf_description = udf_candidate_list[0].udf_description
+        self.udf_signature = udf_signature
+        self.udf_description = udf_description
         dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': udf_signature, 'udf_description': udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
         udf_candidate_list.append(dummy_udf)
 
         # Construct training data and test data
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train_selection, self.n_test_selection, df_with_img_column=df_with_img_column)
+        if gt_udf_name is None:
+            df_train = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=None, df_with_img_column=df_with_img_column)
+        else:
+            df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train_selection, self.n_test_selection, df_with_img_column=df_with_img_column)
 
         # Select new video segments to label
         # TODO: df_train and llm_positive_df may contain the same tuples
         labeled_index = []
         llm_positive_labeled_index = []
         llm_negative_labeled_index = []
+        labeled_df = pd.DataFrame()
+        y_true = []
         segment_selection_time = 0
         _start_segment_selection_time = time.time()
-        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
 
         sampling_strategy = SamplingStrategy.positive
         for iter in range(self.labeling_budget):
-            logger.info("iter {}: {}".format(iter, sampling_strategy))
+            logger.info("Iteration {}: {}".format(iter, sampling_strategy))
             _start_segment_selection_time_per_iter = time.time()
-
+            logger.debug(f"self.llm_positive_df is None: {self.llm_positive_df is None}, self.llm_negative_df is None: {self.llm_negative_df is None}")
             if sampling_strategy == SamplingStrategy.positive and self.llm_positive_df is not None and len(self.llm_positive_df) > len(llm_positive_labeled_index):
                 new_labeled_index = [len(llm_positive_labeled_index)]
-                logger.info("pick next segments from llm_positive_df {}".format(new_labeled_index))
+                logger.debug("pick next segments from llm_positive_df {}".format(new_labeled_index))
                 llm_positive_labeled_index += new_labeled_index
                 new_labeled_df = self.llm_positive_df.iloc[new_labeled_index]
             elif sampling_strategy == SamplingStrategy.negative and self.llm_negative_df is not None and len(self.llm_negative_df) > len(llm_negative_labeled_index):
                 new_labeled_index = [len(llm_negative_labeled_index)]
-                logger.info("pick next segments from llm_negative_df {}".format(new_labeled_index))
+                logger.debug("pick next segments from llm_negative_df {}".format(new_labeled_index))
                 llm_negative_labeled_index += new_labeled_index
                 new_labeled_df = self.llm_negative_df.iloc[new_labeled_index]
             else:
                 new_labeled_index = self.select_sample(
                     udf_candidate_list, udf_name, df_train, n_obj, labeled_index, sampling_strategy
                 )
-                logger.info("pick next segments {}".format(new_labeled_index))
+                logger.debug("pick next segments {}".format(new_labeled_index))
                 labeled_index += new_labeled_index
                 new_labeled_df = df_train.iloc[new_labeled_index]
-            logger.info("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(llm_negative_labeled_index)) + len(set(labeled_index))))
-            if n_obj == 1:
-                labeled_df_list = [df_train.iloc[labeled_index]['o1_gt_anames']]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df_list.append(self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_gt_anames'])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df_list.append(self.llm_negative_df.iloc[llm_negative_labeled_index]['o1_gt_anames'])
-                y_true = pd.Series([gt_udf_name in anames for anames in pd.concat(labeled_df_list)])
-            elif n_obj == 2:
-                labeled_df_list = [df_train.iloc[labeled_index]['o1_o2_gt_rnames']]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df_list.append(self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_o2_gt_rnames'])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df_list.append(self.llm_negative_df.iloc[llm_negative_labeled_index]['o1_o2_gt_rnames'])
-                logger.debug(f"pd.concat(labeled_df_list): {pd.concat(labeled_df_list)}")
-                y_true = pd.Series([gt_udf_name in rnames for rnames in pd.concat(labeled_df_list)])
+            logger.debug("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(llm_negative_labeled_index)) + len(set(labeled_index))))
+
+            # Request labels from either user or ground truth
+            label = self.request_label(new_labeled_df, n_obj, gt_udf_name)
+            y_true.append(label)
+            labeled_df = pd.concat([labeled_df, new_labeled_df])
             # log number of positive and negative samples
             logger.info(
                 "# positive: {}, # negative: {}".format(
@@ -158,20 +160,15 @@ class UDFSelector(UtilsMixin):
             # Update scores
             indices_to_remove = []
             for i in range(len(udf_candidate_list)):
-                labeled_df = [df_train.iloc[labeled_index]]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df.append(self.llm_positive_df.iloc[llm_positive_labeled_index])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df.append(self.llm_negative_df.iloc[llm_negative_labeled_index])
-                labeled_df = pd.concat(labeled_df)
                 try:
                     score, loss_t = self.compute_udf_score(
-                        gt_udf_name,
                         udf_candidate_list[i],
                         udf_name,
                         n_obj,
                         labeled_df,
+                        y_true,
                         new_labeled_df,
+                        label,
                         add_one=True, # add one to avoid zero f1 score
                     )
                     udf_candidate_list[i].score = score
@@ -198,22 +195,26 @@ class UDFSelector(UtilsMixin):
             "test segment_selection_time time: {}".format(segment_selection_time)
         )
 
-        # compute test F1 score
-        logger.info("compute test F1 score")
-        for i in range(len(udf_candidate_list)):
-            try:
-                udf_candidate_list[i].test_score = self.compute_udf_score(
-                    gt_udf_name,
-                    udf_candidate_list[i],
-                    udf_name,
-                    n_obj,
-                    df_test,
-                )
-                logger.info(str(udf_candidate_list[i]))
-            except Exception as e:
-                logger.exception(f"ERROR: failed to compute test F1 score of UDFCandidate(id={udf_candidate_list[i].id}): {e}")
-                udf_candidate_list[i].test_score = -1
-                continue
+        if gt_udf_name is not None:
+            logger.info("Computing test F1 score")
+            if n_obj == 1:
+                y_true_test = [gt_udf_name in o1_gt_anames for o1_gt_anames in df_test['o1_gt_anames']]
+            elif n_obj == 2:
+                y_true_test = [gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df_test['o1_o2_gt_rnames']]
+            for i in range(len(udf_candidate_list)):
+                try:
+                    udf_candidate_list[i].test_score = self.compute_udf_score(
+                        udf_candidate_list[i],
+                        udf_name,
+                        n_obj,
+                        df_test,
+                        y_true_test,
+                    )
+                    logger.debug(str(udf_candidate_list[i]))
+                except Exception as e:
+                    logger.exception(f"ERROR: failed to compute test F1 score of UDFCandidate(id={udf_candidate_list[i].id}): {e}")
+                    udf_candidate_list[i].test_score = -1
+                    continue
 
         logger.info("compute train F1 score")
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
@@ -223,19 +224,13 @@ class UDFSelector(UtilsMixin):
         else:
             # Compute final f1 score (without adding one)
             for i in range(len(udf_candidate_list)):
-                labeled_df = [df_train.iloc[labeled_index]]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df.append(self.llm_positive_df.iloc[llm_positive_labeled_index])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df.append(self.llm_negative_df.iloc[llm_negative_labeled_index])
-                labeled_df = pd.concat(labeled_df)
                 try:
                     udf_candidate_list[i].score = self.compute_udf_score(
-                        gt_udf_name,
                         udf_candidate_list[i],
                         udf_name,
                         n_obj,
                         labeled_df,
+                        y_true,
                     )
                 except Exception as e:
                     logger.exception(f"ERROR: failed to compute final f1 score of UDFCandidate(id={udf_candidate_list[i].id}): {e}")
@@ -252,7 +247,7 @@ class UDFSelector(UtilsMixin):
             for best_candidate in best_candidates:
                 f1_score_test_list.append(best_candidate.test_score)
             median_f1_score_test = np.median(f1_score_test_list)
-            logger.info("median test f1: {}".format(median_f1_score_test))
+            logger.debug("median test f1: {}".format(median_f1_score_test))
             # TODO: If there are multiple best udfs, select the one with faster execution time?
             # If there are multiple best udfs, dummy UDF will be preferred
             selected_udf_candidate = best_candidates[-1]
@@ -359,7 +354,7 @@ class UDFSelector(UtilsMixin):
         posterior_t /= np.sum(posterior_t)  # normalized weight
 
         logger.debug("query weights {}".format(posterior_t))
-
+        logger.debug(f"test: sampling_strategy: {sampling_strategy}")
         if sampling_strategy == SamplingStrategy.positive:
             # TODO: filter objects?
             # TODO: ask LLM?
@@ -618,27 +613,26 @@ class UDFSelector(UtilsMixin):
 
     def compute_udf_score(
         self,
-        gt_udf_name,
         udf_candidate,
         udf_name,
         n_obj,
         df,
+        y_true,
         df_newly_labeled=None,
+        label=None,
         add_one=False,
     ):
         """
         Compute the F1 score of the UDF candidate on the data (train or test), using the ground truth UDF as the label
         if df_newly_labeled is provided, also compute the number of misclassified samples of them (which is used to compute loss_t)
         """
+        # make a copy of y_true to avoid modifying the original list
+        y_true = y_true.copy()
         if udf_candidate.id == "model":
                 best_ckpt = udf_candidate.function_implementation
-                # logger.debug("df before predict_with_data: {}".format(df[["vid", "fid", "o1_oid"]].to_string()))
                 y_pred = self.predict_with_data(df, best_ckpt, n_obj)
-                # logger.debug(f"y_pred: {y_pred}")
-                # logger.debug("df after predict_with_data: {}".format(df[["vid", "fid", "o1_oid"]].to_string()))
                 if df_newly_labeled is not None:
                     y_pred_new = self.predict_with_data(df_newly_labeled, best_ckpt, n_obj)
-                    # logger.debug(f"y_pred_new: {y_pred_new}")
         else:
             try:
                 # For each sampled row in df, construct o1 and o2
@@ -654,43 +648,19 @@ class UDFSelector(UtilsMixin):
             except Exception as e:
                 logger.exception("ERROR: failed to execute udf_candidate {}: {}".format(udf_candidate.id, e))
                 raise
-                # y_pred = [False] * len(df)
-                # if df_newly_labeled is not None:
-                #     y_pred_new = [False] * len(df_newly_labeled)
 
-        # Compute y_true and f1 score
-        if n_obj == 1:
-            # y_true = df.apply(lambda row: gt_udf_name in row["o1_gt_anames"], axis=1)
-            y_true = [gt_udf_name in o1_gt_anames for o1_gt_anames in df['o1_gt_anames']]
-        elif n_obj == 2:
-            # y_true = df.apply(lambda row: gt_udf_name in row["o1_o2_gt_rnames"], axis=1)
-            y_true = [gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df['o1_o2_gt_rnames']]
-        # logger.debug(f"y_true: {y_true}, y_pred: {y_pred}")
         if add_one:
             # Add one TP prediction to the model
             y_true.append(True)
             y_pred.append(True)
         score = f1_score(y_true, y_pred, zero_division=0.0)
-        logger.info("udf_candidate: {}, score: {}".format(udf_candidate.id, score))
-        # logger.info("y_true: {}, y_pred: {}".format(y_true, y_pred))
-        logger.info("predicted positive: {}, predicted negative: {}".format(sum(y_pred), len(y_pred) - sum(y_pred)))
-        logger.info("positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true)))
+        logger.debug("udf_candidate: {}, score: {}".format(udf_candidate.id, score))
+        logger.debug("predicted positive: {}, predicted negative: {}".format(sum(y_pred), len(y_pred) - sum(y_pred)))
+        logger.debug("positive: {}, negative: {}".format(sum(y_true), len(y_true) - sum(y_true)))
 
         # Compute y_true_new and num_misclassified
         if df_newly_labeled is not None:
-            if n_obj == 1:
-                # y_true_new = df_newly_labeled.apply(
-                #     lambda row: gt_udf(row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["height"], row["width"]), axis=1
-                # )
-                y_true_new = [gt_udf_name in o1_gt_anames for o1_gt_anames in df_newly_labeled['o1_gt_anames']]
-            elif n_obj == 2:
-                # y_true_new = df_newly_labeled.apply(
-                #     lambda row: gt_udf(row["o1_oname"], row["o1_x1"], row["o1_y1"], row["o1_x2"], row["o1_y2"], row["o1_anames"], row["o2_oname"], row["o2_x1"], row["o2_y1"], row["o2_x2"], row["o2_y2"], row["o2_anames"], row["o1_o2_rnames"], row["o2_o1_rnames"], row["height"], row["width"]), axis=1
-                # )
-                y_true_new = [gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df_newly_labeled['o1_o2_gt_rnames']]
-            # Count the number of misclassifications for the new samples
-            # logger.debug(f"y_true_new: {y_true_new}, y_pred_new: {y_pred_new}")
-            # logger.debug(f"y_true_new: {y_true_new}, y_pred_new: {y_pred_new}")
+            y_true_new = [label]
             num_misclassified = np.sum(np.array(y_true_new != y_pred_new) * 1)
             return score, num_misclassified
         else:

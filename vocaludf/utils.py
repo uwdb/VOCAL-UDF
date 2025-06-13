@@ -150,7 +150,8 @@ class SharedResources:
         allow_kwargs_in_udf,
         llm_method,
         is_async,
-        openai_model_name
+        openai_model_name,
+        test_with_gt=True,
     ):
         self.config = config
         self.prompt_config = prompt_config
@@ -176,6 +177,9 @@ class SharedResources:
         self.openai_model_name = RESOLVE_MODEL_NAME[openai_model_name]
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
+        self.test_with_gt = test_with_gt
+        if self.query_filename is None:
+            assert(self.query_id is None and self.test_with_gt is False), "query_filename is None, so query_id must be None and test_with_gt must be False"
 
         self.conn = duckdb.connect(
             database=os.path.join(self.config["db_dir"], "annotations.duckdb"),
@@ -186,11 +190,11 @@ class SharedResources:
         # NOTE: probably put these values in the config file
         # cityflow has higher resolution images, so we use fewer samples
         self.n_train_selection = self.config[self.dataset]["n_train_selection"]
-        self.n_test_selection = self.config[self.dataset]["n_test_selection"]
+        self.n_test_selection = self.config[self.dataset]["n_test_selection"] if self.test_with_gt else None
 
         # Initialization for model distillation
         self.n_train_distill = n_train_distill
-        self.n_test_distill = self.config[self.dataset]["n_test_distill"]
+        self.n_test_distill = self.config[self.dataset]["n_test_distill"] if self.test_with_gt else None
         self.save_labeled_data = save_labeled_data
         self.load_labeled_data = load_labeled_data
         self.attribute_features_dir = os.path.join(self.config[self.dataset]["features_dir"], "attribute")
@@ -262,15 +266,17 @@ class SharedResources:
         dataset_size = self.config[self.dataset]["dataset_size"]
         # Use the first half of the dataset for training
         where_clause = f"WHERE o1.oname = ANY([{obj_parameters}]) AND o1.vid < {dataset_size // 2}"
+        gt_attr_select_clause = f"COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames," if self.test_with_gt else ''
+        gt_attr_join_clause = f"LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid" if self.test_with_gt else ''
         sql = f"""
             SELECT
                 o1.vid AS vid, o1.fid AS fid, o1.oid AS o1_oid, o1.oname AS o1_oname,
                 o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2,
-                COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS o1_gt_anames,
+                {gt_attr_select_clause}
                 COALESCE(ARRAY_AGG(DISTINCT ap.aname) FILTER (WHERE ap.aname = ANY([{attr_parameters}])), ARRAY[]::varchar[]) AS o1_anames,
                 {height_width_clause}
             FROM {self.dataset}_objects o1
-            LEFT OUTER JOIN {self.dataset}_attributes a ON o1.vid = a.vid AND o1.fid = a.fid AND o1.oid = a.oid
+            {gt_attr_join_clause}
             LEFT OUTER JOIN {self.dataset}_attribute_predictions ap ON o1.vid = ap.vid AND o1.fid = ap.fid AND o1.oid = ap.oid
             {metadata_join_clause}
             {where_clause}
@@ -282,53 +288,68 @@ class SharedResources:
 
         rel_parameters = ','.join('?' for _ in self.relationship_domain)
         # Use the first half of the dataset for training
-        obj_attr_where_clause = f"WHERE o.oname = ANY([{obj_parameters}]) AND o.vid < {dataset_size // 2}"
+        obj_where_clause = f"WHERE oname = ANY([{obj_parameters}]) AND vid < {dataset_size // 2}"
+        attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid < {dataset_size // 2}"
         rel_where_clause = f"WHERE vid < {dataset_size // 2}"
-        sql = f"""
-            WITH obj_with_attrs AS (
-                SELECT
-                    o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
-                    COALESCE(ARRAY_AGG(DISTINCT a.aname) FILTER (WHERE a.aname IS NOT NULL), ARRAY[]::varchar[]) AS attributes
-                FROM {self.dataset}_objects o
-                LEFT OUTER JOIN {self.dataset}_attribute_predictions a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid AND a.aname = ANY([{attr_parameters}])
-                {obj_attr_where_clause}
-                GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
-            )
-            , relationships_expanded AS (
+        gt_rel_cte_clause = f"""
+            relationships_expanded AS (
                 SELECT
                     vid, fid, oid1, oid2,
                     ARRAY_AGG(DISTINCT rname) AS gt_rnames
                 FROM {self.dataset}_relationships
                 {rel_where_clause}
                 GROUP BY vid, fid, oid1, oid2
-            )
-            , relationship_predictions_expanded AS (
-                SELECT
-                    vid, fid, oid1, oid2,
-                    COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
-                FROM {self.dataset}_relationship_predictions
-                {rel_where_clause}
-                GROUP BY vid, fid, oid1, oid2
-            )
+            ),
+        """ if self.test_with_gt else ''
+        gt_rel_select_clause = "COALESCE(r3.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames," if self.test_with_gt else ''
+        gt_rel_join_clause = "LEFT OUTER JOIN relationships_expanded r3 ON o1.vid = r3.vid AND o1.fid = r3.fid AND o1.oid = r3.oid1 AND o2.oid = r3.oid2" if self.test_with_gt else ''
+        sql = f"""
+            WITH
+                filtered_objects AS (
+                    SELECT vid, fid, oid, oname, x1, y1, x2, y2
+                    FROM {self.dataset}_objects
+                    {obj_where_clause}
+                ),
+                filtered_attributes AS (
+                    SELECT vid, fid, oid, aname
+                    FROM {self.dataset}_attribute_predictions
+                    {attr_where_clause}
+                ),
+                obj_with_attrs AS (
+                    SELECT
+                        o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2,
+                        COALESCE(ARRAY_AGG(DISTINCT a.aname), ARRAY[]::varchar[]) AS attributes
+                    FROM filtered_objects o
+                    LEFT OUTER JOIN filtered_attributes a ON o.vid = a.vid AND o.fid = a.fid AND o.oid = a.oid
+                    GROUP BY o.vid, o.fid, o.oid, o.oname, o.x1, o.y1, o.x2, o.y2
+                ),
+                {gt_rel_cte_clause}
+                relationship_predictions_expanded AS (
+                    SELECT
+                        vid, fid, oid1, oid2,
+                        COALESCE(ARRAY_AGG(DISTINCT rname) FILTER (WHERE rname = ANY([{rel_parameters}])), ARRAY[]::varchar[]) AS rnames
+                    FROM {self.dataset}_relationship_predictions
+                    {rel_where_clause}
+                    GROUP BY vid, fid, oid1, oid2
+                )
             SELECT
                 o1.vid AS vid, o1.fid AS fid,
                 o1.oid AS o1_oid, o1.oname AS o1_oname, o1.x1 AS o1_x1, o1.y1 AS o1_y1, o1.x2 AS o1_x2, o1.y2 AS o1_y2, o1.attributes AS o1_anames,
                 o2.oid AS o2_oid, o2.oname AS o2_oname, o2.x1 AS o2_x1, o2.y1 AS o2_y1, o2.x2 AS o2_x2, o2.y2 AS o2_y2, o2.attributes AS o2_anames,
                 COALESCE(r1.rnames, ARRAY[]::varchar[]) AS o1_o2_rnames,
                 COALESCE(r2.rnames, ARRAY[]::varchar[]) AS o2_o1_rnames,
-                COALESCE(r3.gt_rnames, ARRAY[]::varchar[]) AS o1_o2_gt_rnames,
+                {gt_rel_select_clause}
                 {height_width_clause}
             FROM obj_with_attrs o1
-            JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid
+            JOIN obj_with_attrs o2 ON o1.vid = o2.vid AND o1.fid = o2.fid AND o1.oid <> o2.oid
             LEFT OUTER JOIN relationship_predictions_expanded r1 ON o1.vid = r1.vid AND o1.fid = r1.fid AND o1.oid = r1.oid1 AND o2.oid = r1.oid2
             LEFT OUTER JOIN relationship_predictions_expanded r2 ON o1.vid = r2.vid AND o1.fid = r2.fid AND o2.oid = r2.oid1 AND o1.oid = r2.oid2
-            LEFT OUTER JOIN relationships_expanded r3 ON o1.vid = r3.vid AND o1.fid = r3.fid AND o1.oid = r3.oid1 AND o2.oid = r3.oid2
+            {gt_rel_join_clause}
             {metadata_join_clause}
-            WHERE o1.oid <> o2.oid
         """
         # ORDER BY o1.vid, o1.fid, o1.oid, o2.oid, o1.x1, o1.y1, o1.x2, o1.y2, o2.x1, o2.y1, o2.x2, o2.y2
         logger.debug(f"Create two_objects table:\n{sql}")
-        two_objects_df = self.conn.execute(sql, self.attribute_domain + self.object_domain + self.relationship_domain).df()
+        two_objects_df = self.conn.execute(sql, self.object_domain + self.attribute_domain + self.relationship_domain).df()
         return one_object_df, two_objects_df
 
 
