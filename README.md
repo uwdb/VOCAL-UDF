@@ -182,17 +182,12 @@ python experiments/cli.py \
     --openai_model_name gpt-4o
 ```
 
-2. In the terminal, you will be prompted to enter your query in natural language and then a list of UDFs that are available to answer the query. A good example to start with is:
+2. In the terminal, you will be prompted to enter your query in natural language and then a list of UDFs that are available to answer the query. Some good examples to start with:
 
-| Dataset     | Query  | list of UDFs (indices) |
+| Dataset     | Query  | List of UDFs (indices) |
 | -------- | ------- | ----------------------- |
 | CLEVRER  |  A cyan-colored object o1 is in front of a cylinder o2, then o1 moves to be behind and close to o2.  | 1, 14,19 |
 | CityFlow-NL | A red car is initially in front of another car, then drives to be behind and near the car     | 2, 9 |
-
-
-```bash
-Enter your query in natural language: A red car is initially in front of another car, then drives to be behind and near the car
-```
 
 3. Next, you will be prompted to enter a list of UDFs that are available to answer the query.
 ```bash
