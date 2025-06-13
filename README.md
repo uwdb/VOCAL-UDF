@@ -1,5 +1,9 @@
 # VOCAL-UDF
 
+<p align="center">
+    <img src="teaser.png" width="1000" style="margin-bottom: 0.2;"/>
+<p>
+
 A prototype implementation of VOCAL-UDF, which is a self-enhancing video data management system that empowers users to flexibly issue and answer compositional queries, even when the modules necessary to answer those queries are unavailable. See the [technical report](https://arxiv.org/pdf/2408.02243) for more details.
 
 ## Setup Instructions
