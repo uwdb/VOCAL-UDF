@@ -116,47 +116,47 @@ python extract_cityflow.py --include_text_features
 We provide an example of how to use VOCAL-UDF to process a query with three missing UDFs on the CLEVRER dataset.
 1. Generate UDFs
 ```bash
-    python experiments/async_main.py \
-        --num_missing_udfs 3 \
-        --run_id 0 \
-        --query_id 0 \
-        --dataset "clevrer" \
-        --query_filename "3_new_udfs_labels" \
-        --budget 20 \
-        --n_selection_samples 500 \
-        --num_interpretations 10 \
-        --allow_kwargs_in_udf \
-        --program_with_pixels \
-        --num_parameter_search 5 \
-        --num_workers 8 \
-        --save_labeled_data \
-        --n_train_distill 100 \
-        --selection_strategy "both" \
-        --llm_method "gpt" \
-        --is_async \
-        --openai_model_name "gpt-4o"
+python experiments/async_main.py \
+    --num_missing_udfs 3 \
+    --run_id 0 \
+    --query_id 0 \
+    --dataset "clevrer" \
+    --query_filename "3_new_udfs_labels" \
+    --budget 20 \
+    --n_selection_samples 500 \
+    --num_interpretations 10 \
+    --allow_kwargs_in_udf \
+    --program_with_pixels \
+    --num_parameter_search 5 \
+    --num_workers 8 \
+    --save_labeled_data \
+    --n_train_distill 100 \
+    --selection_strategy "both" \
+    --llm_method "gpt" \
+    --is_async \
+    --openai_model_name "gpt-4o"
 ```
 
 2. Execute query with new UDFs
 ```bash
-    python experiments/run_query_executor.py \
-            --num_missing_udfs 3 \
-            --run_id 0 \
-            --query_id 0 \
-            --dataset "clevrer" \
-            --query_filename "3_new_udfs_labels" \
-            --budget 20 \
-            --n_selection_samples 500 \
-            --num_interpretations 10 \
-            --allow_kwargs_in_udf \
-            --program_with_pixels \
-            --num_parameter_search 5 \
-            --num_workers 8 \
-            --n_train_distill 100 \
-            --selection_strategy "both" \
-            --pred_batch_size 4096 \
-            --dali_batch_size 1 \
-            --llm_method "gpt"
+python experiments/run_query_executor.py \
+    --num_missing_udfs 3 \
+    --run_id 0 \
+    --query_id 0 \
+    --dataset "clevrer" \
+    --query_filename "3_new_udfs_labels" \
+    --budget 20 \
+    --n_selection_samples 500 \
+    --num_interpretations 10 \
+    --allow_kwargs_in_udf \
+    --program_with_pixels \
+    --num_parameter_search 5 \
+    --num_workers 8 \
+    --n_train_distill 100 \
+    --selection_strategy "both" \
+    --pred_batch_size 4096 \
+    --dali_batch_size 1 \
+    --llm_method "gpt"
 ```
 
 ## Reproduce Experiments
@@ -167,7 +167,19 @@ We provide a Command-Line Interface (CLI) to process your own queries over the C
 
 1. Run the following command to specify the dataset and hyperparameters:
 ```bash
-python experiments/cli.py --dataset cityflow --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --num_workers 8 --n_train_distill 500 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
+python experiments/cli.py \
+    --dataset cityflow \
+    --allow_kwargs_in_udf \
+    --num_parameter_search 5 \
+    --budget 20 \
+    --n_selection_samples 500 \
+    --num_interpretations 10 \
+    --num_workers 8 \
+    --n_train_distill 500 \
+    --selection_strategy both \
+    --llm_method gpt \
+    --is_async \
+    --openai_model_name gpt-4o
 ```
 
 2. In the terminal, you will be prompted to enter your query in natural language. An example query could be as follows:
