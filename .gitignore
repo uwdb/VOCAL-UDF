@@ -47,3 +47,4 @@ scripts/*
 !duckdb_dir/load_charades.py
 !scripts/experiments/
 !teaser.png
+!data/models/save_model.py

@@ -27,6 +27,11 @@ To use OpenAI models, follow the instructions [here](https://platform.openai.com
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
+Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
+```sh
+python data/models/save_model.py
+```
+
 ## Prepare Data
 
 ### CLEVRER
@@ -162,7 +167,7 @@ python experiments/run_query_executor.py \
 ## Reproduce Experiments
 The experiment scripts are located in the `scripts/experiments` directory.
 
-## Working with Your Own Queries
+## Work with Your Own Queries
 We provide a Command-Line Interface (CLI) to process your own queries over the CLEVRER, CityFlow-NL, and Charades datasets.
 
 1. Run the following command to specify the dataset (`--dataset`) and hyperparameters:
@@ -193,5 +198,5 @@ python experiments/cli.py \
 
 4. Once the query is processed, VOCAL-UDF will output all matching vids in the terminal. For CityFlow-NL and Charades datasets, to map the vid to the corresponding video file, please refer to the `duckdb_dir/{dataset}_metadata.csv` file.
 
-## Working with Your Own Data
+## Work with Your Own Data
 TODO
