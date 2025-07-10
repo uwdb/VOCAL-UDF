@@ -21,7 +21,7 @@ conda activate vocal-udf
 python -m pip install -e .
 ```
 
-To use OpenAI models, follow the instructions [here](https://platform.openai.com/docs/quickstart#create-and-export-an-api-key) to create and export an API key.
+To use OpenAI models, follow the instructions [here](https://platform.openai.com/docs/libraries#create-and-export-an-api-key) to create and export an API key.
 ```sh
 # Export the API key as an environment variable
 export OPENAI_API_KEY="your_api_key_here"
@@ -29,6 +29,7 @@ export OPENAI_API_KEY="your_api_key_here"
 
 Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
 ```sh
+# Uncomment the corresponding lines in data/models/save_model.py to download the models you need
 python data/models/save_model.py
 ```
 
