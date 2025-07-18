@@ -96,7 +96,7 @@ dependencies:
       - pandas==2.2.2
       - pillow==10.2.0
       - pkginfo==1.10.0
-      - pyautogen==0.2.33
+      - ag2==0.2.33
       - pyclipper==1.3.0.post5
       - pycodestyle==2.12.1
       - pycparser==2.22
