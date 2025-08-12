@@ -633,3 +633,63 @@ class QueryExecutor:
         logger.debug(f"available_udf_names: {self.available_udf_names}")
         logger.debug(f"materialized_udf_names: {self.materialized_udf_names}")
         logger.debug(f"on_the_fly_udf_names: {self.on_the_fly_udf_names}")
+
+    def vid_to_filepath(self, vids):
+        if self.dataset == "clevrer":
+            return [os.path.join(
+                self.config[self.dataset]["video_dir"],
+                f"video_{str(vid//1000*1000).zfill(5)}-{str((vid//1000+1)*1000).zfill(5)}",
+                f"video_{str(vid).zfill(5)}.mp4",
+            ) for vid in vids]
+        elif self.dataset == "charades":
+            df_metadata = self.conn.execute(f"""
+                SELECT DISTINCT vname, vid
+                FROM charades_metadata
+            """).df()
+            vid_to_vname = {int(vid): vname for vname, vid in zip(df_metadata['vname'], df_metadata['vid'])}
+            video_filenames = [f"{vid_to_vname[vid]}.mp4" for vid in vids]
+            filepaths = [
+                os.path.join(
+                    self.config[self.dataset]["video_dir"],
+                    fname,
+                )
+                for fname in video_filenames
+            ]
+            return filepaths
+        elif self.dataset == "cityflow":
+            # All videos have a frame rate of 10 fps, except train/S03/c015 which has a frame rate of 8 fps
+            df_metadata = self.conn.execute(f"""
+                WITH parsed AS (
+                    SELECT
+                        LEFT(vname, POSITION('img1' IN vname) - 1) AS vprefix,
+                        vid,
+                        CAST(REPLACE(SPLIT_PART(vname, '/', -1), '.jpg', '') AS INT) AS frame_no
+                    FROM cityflow_metadata
+                )
+                SELECT vprefix AS vname, vid, MIN(frame_no) - 1 AS min_fid, MAX(frame_no) - 1 AS max_fid
+                FROM parsed
+                GROUP BY vprefix, vid;
+            """).df()
+            vid_to_vname = {int(vid): vname for vname, vid in zip(df_metadata['vname'], df_metadata['vid'])}
+            vid_to_fid_range = {int(vid): (min_fid, max_fid) for vid, min_fid, max_fid in zip(df_metadata['vid'], df_metadata['min_fid'], df_metadata['max_fid'])}
+            filepaths = []
+            for vid in vids:
+                vname = vid_to_vname[vid]
+                min_fid, max_fid = vid_to_fid_range[vid]
+                # Create a postfix to indicate timestamp range
+                start_time = min_fid / 10.0
+                end_time = max_fid / 10.0
+                if "train/S03/c015" in vname:
+                    start_time = min_fid / 8.0
+                    end_time = max_fid / 8.0
+                timestamp_postfix = f"@{start_time:.1f}-{end_time:.1f}s"
+                # Create the full filepath
+                filepaths.append(os.path.join(
+                    self.config[self.dataset]["video_dir"],
+                    vname,
+                    "vdo.avi",
+                ) + timestamp_postfix)
+            return filepaths
+        else:
+            logger.debug("Unknown dataset: {}".format(self.dataset))
+            return vids

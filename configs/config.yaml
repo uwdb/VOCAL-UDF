@@ -23,6 +23,7 @@ clevrer:
   n_test_selection: 10000
   n_test_distill: 1000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/clevrer_three_clips
+  video_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/video_frames
   onames:
     - object
@@ -32,6 +33,7 @@ cityflow:
   n_test_selection: 5000
   n_test_distill: 1000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/cityflow_three_clips
+  video_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/cityflow/data
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/cityflow/data
   onames:
     - car
@@ -41,6 +43,7 @@ charades:
   n_test_selection: 10000
   n_test_distill: 1000
   features_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/features/charades_five_clips
+  video_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/Charades_v1_480
   video_frames_dir: /gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/frames
   onames:
     - person

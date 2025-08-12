@@ -44,6 +44,7 @@ async def process_udf(udf_signature, udf_description, shared_resources):
     logger.info(f"UDF generation for {udf_signature} started")
     ug = UDFGenerator(shared_resources, udf_signature, udf_description, None)
     udf_candidate_list, llm_positive_df, llm_negative_df = await ug.implement()
+    print(Panel(f"[green]Generated {len(udf_candidate_list)} candidate(s) for {udf_signature}: [/green]" + "\n\n".join([str(c) for c in udf_candidate_list])))
     logger.info(f"UDF generation for {udf_signature} finished")
 
     cost_estimation = ug.get_cost_estimation()
@@ -71,12 +72,15 @@ def choose_registered_udfs(udf_corpus: List[Any]) -> List[Any]:
         table.add_row(str(i), sig, desc)
     print(table)
 
-    raw = Prompt.ask("[bold cyan]Indices of UDFs to include (comma-separated, object UDFs are always included)[/bold cyan]",)
+    raw = Prompt.ask("[bold cyan]Indices of UDFs to include (comma-separated, object UDFs are always included; empty for including all UDFs)[/bold cyan]", default="")
     try:
-        chosen = [int(tok) for tok in raw.replace(",", " ").split()]  # type: ignore[arg-type]
+        if raw.strip() == "":
+            chosen = list(range(len(udf_list)))
+        else:
+            chosen = [int(tok) for tok in raw.replace(",", " ").split()]  # type: ignore[arg-type]
     except ValueError:
-        print("[red]Invalid list - falling back to none.[/red]")
-        chosen = []
+        print("[red]Invalid list - falling back to all.[/red]")
+        chosen = list(range(len(udf_list)))
 
     return [
         udf_dict for i, udf_dict in enumerate(udf_corpus)
@@ -91,7 +95,7 @@ async def main() -> None:
     # registered UDFs: 1, 14, 19
 
     ### cityflow
-    # python cli.py --dataset cityflow --allow_kwargs_in_udf --num_parameter_search 5 --budget 20 --n_selection_samples 500 --num_interpretations 10 --num_workers 8 --n_train_distill 500 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
+    # python cli.py --dataset cityflow --allow_kwargs_in_udf --num_parameter_search 3 --budget 20 --n_selection_samples 100 --num_interpretations 5 --num_workers 8 --n_train_distill 300 --selection_strategy both --llm_method gpt --is_async --openai_model_name gpt-4o
     # user query: A red car is initially in front of another car, then drives to be behind and near the car
     # registered UDFs: 2, 9
 
@@ -230,6 +234,7 @@ async def main() -> None:
         _start = time.time()
         up = UDFProposer(shared_resources)
         proposed_functions = up.propose(query_nl)
+        print(Panel(f"[green]Proposed {len(proposed_functions)} new UDF(s): {proposed_functions} [/green]"))
         up_cost_estimation = up.get_cost_estimation()
         for key, value in up_cost_estimation.items():
             cost_estimation[key] += value
@@ -280,6 +285,7 @@ async def main() -> None:
             if selected_udf_candidate is None:
                 logger.warning("No UDF candidate is selected. Skipping...")
                 continue
+            print(Panel(f"[green]Selected UDF candidate: {str(selected_udf_candidate)} [/green]"))
 
             semantic_interpretation = selected_udf_candidate.semantic_interpretation
             function_implementation = selected_udf_candidate.function_implementation
@@ -330,7 +336,7 @@ async def main() -> None:
 
     parsed_program = qp.get_parsed_program()
     parsed_dsl = qp.get_parsed_query()
-    logger.info("Parsed DSL: {}".format(parsed_dsl))
+    print(Panel(f"[green]Final parsed DSL: {parsed_dsl} [/green]"))
 
     # Cleanup memory
     del qp
@@ -341,7 +347,9 @@ async def main() -> None:
     dali_batch_size = 1
     qe = QueryExecutor(config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, materialized_df_names, on_the_fly_udf_names, program_with_pixels, num_workers, pred_batch_size, dali_batch_size)
     output_vids = qe.run(parsed_program, y_true=None, debug=False)
-    logger.info("Matching vids: {}".format(output_vids))
+    filepaths = qe.vid_to_filepath(output_vids)
+    print(Panel(f"[bold green]Matching video IDs:[/bold green]\n" + ", ".join([str(vid) for vid in output_vids])))
+    print(Panel(f"[bold green]Matching videos:[/bold green]\n" + "\n".join(filepaths)))
 
     logger.debug("Total execution time: {}".format(total_execution_time))
     logger.debug("UDF generation execution time: {}".format(udf_generation_execution_time))
