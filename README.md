@@ -27,6 +27,11 @@ To use OpenAI models, follow the instructions [here](https://platform.openai.com
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
+Run the following command to export the project root directory:
+```sh
+export PROJECT_ROOT="$(pwd)"
+```
+
 Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
 ```sh
 # Uncomment the corresponding lines in data/models/save_model.py to download the models you need
@@ -37,6 +42,12 @@ python data/models/save_model.py
 
 ### CLEVRER
 1. Download the CLEVRER dataset from [here](http://data.csail.mit.edu/clevrer/videos/train/video_train.zip). Place the videos in `data/clevrer/`.
+```sh
+# Download the dataset using command line
+cd data/clevrer
+curl -L -O http://data.csail.mit.edu/clevrer/videos/train/video_train.zip
+unzip video_train.zip
+```
 2. Extract the frames from the videos using the following command. This will create a `video_frames` directory in `data/clevrer/`.
 ```sh
 cd data/clevrer
