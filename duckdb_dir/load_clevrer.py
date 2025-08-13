@@ -2,8 +2,10 @@ import duckdb
 import os
 import yaml
 
+project_root = os.getenv("PROJECT_ROOT")
+
 config = yaml.safe_load(
-    open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+    open(os.path.join(project_root, "configs", "config.yaml"), "r")
 )
 db_dir = config["db_dir"]
 

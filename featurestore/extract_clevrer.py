@@ -25,10 +25,12 @@ from tqdm import tqdm
 import time
 import torchvision.transforms as T
 
+project_root = os.getenv("PROJECT_ROOT")
+
 # Only videos 0 to 9999 are used
 def VideoFrameDaliDataloader(
     sequence_length=64,
-    video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/",
+    video_directory=os.path.join(project_root, "data", "clevrer"),
     device='gpu',
     batch_size=None,
     num_threads=None,
@@ -439,7 +441,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     method = args.method
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
     db_dir = config["db_dir"]
     conn = duckdb.connect(database=os.path.join(db_dir, "annotations.duckdb"), read_only=True)
