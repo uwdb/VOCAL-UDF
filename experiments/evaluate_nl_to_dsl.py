@@ -1,7 +1,7 @@
 import yaml
 import random
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
+from vocaludf.utils import setup_logging
 import logging
 import numpy as np
 from vocaludf.query_executor import QueryExecutor
@@ -96,7 +96,7 @@ if __name__ == '__main__':
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
-    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--llm_method", type=str, choices=["gpt", "llava"], default="gpt", help="LLM method for distill model annotations")
 
     args = parser.parse_args()
     query_id = args.query_id
@@ -146,37 +146,14 @@ if __name__ == '__main__':
     Set up logging
     """
     # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
+    base_dir = os.path.join(
         "nl_to_dsl",
         dataset,
         query_filename,
         config_name,
     )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     with open(
         os.path.join(

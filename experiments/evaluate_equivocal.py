@@ -50,16 +50,8 @@ if __name__ == '__main__':
     gt_dsl = input_query['dsl']
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
-    if dataset in ["gqa", "vaw"]: # Deprecated
-        conn = duckdb.connect(
-            database=os.path.join(config["db_dir"], "annotations.duckdb"),
-            read_only=True,
-        )
-        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
-        y_true = [1 if vid in positive_videos else 0 for vid in vids]
-    else:
-        # Evaluate on the second half of the dataset (test split)
-        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
+    # Evaluate on the second half of the dataset (test split)
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
 
     """
     Set up logging
