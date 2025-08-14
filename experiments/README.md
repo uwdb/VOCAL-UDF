@@ -1,6 +1,14 @@
 # Reproduce Experiments
 
-## End-to-end evaluation (Figure 5, 7)
+- [x] Figure 5, 7
+- [x] Table 4
+- [ ] Figure 6(a)
+- [ ] Figure 6(b)
+- [x] Table 5
+
+Scripts to run experiments are located in the `scripts/experiments` directory. Jupyter notebooks to visualize results are located in the `experiments/analysis` directory. Modify the `project_root` variable in each Jupyter notebook as necessary.
+
+## End-to-end evaluation (Figure 5, Figure 7)
 
 1. Run experiments
 ```bash
@@ -46,6 +54,9 @@ This experiment uses OpenAI’s Batch API that offers 50% lower cost.
 3. Visualize results
 
 
-## UDF proposal (Section 6.2)
-## UDF generation (Section 6.3)
-## UDF selection (Section 6.4)
+## UDF proposal (Table 5)
+1. Visualize results: `experiments/analysis/mircobenchmark.ipynb`, "Proposing UDFs" section
+
+## UDF generation (Table 6, Figure 8, Table 7)
+
+## UDF selection (Table 8, Table 9, Figure 9, Figure 10)
