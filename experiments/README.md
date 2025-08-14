@@ -18,7 +18,9 @@
 ./scripts/reproduce/end_to_end/exp-vocal_udf_query_execution_cityflow.sh
 ./scripts/reproduce/end_to_end/exp-vocal_udf_query_execution_charades.sh
 ```
-2. Visualize results: `experiments/analysis/end_to_end.ipynb`
+2. Visualize results:
+- Figure 5: `experiments/analysis/end_to_end.ipynb`
+- Figure 7: `experiments/analysis/execution_time.ipynb`
 
 ## Natural language to DSL correctness (Table 4)
 1. Run experiments
