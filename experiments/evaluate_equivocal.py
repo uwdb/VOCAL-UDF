@@ -16,6 +16,8 @@ import duckdb
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
@@ -38,7 +40,7 @@ if __name__ == '__main__':
     openai_model_name = args.openai_model_name
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
     program_with_pixels = False
     num_workers = args.num_workers
@@ -101,7 +103,7 @@ if __name__ == '__main__':
         Loader=yaml.FullLoader,
     )
 
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     if "single_semantic" in query_filename:
         # Unused for now
         registered_functions = [{

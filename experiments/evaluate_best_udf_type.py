@@ -9,10 +9,12 @@ import argparse
 import os
 import sys
 
+project_root = os.getenv("PROJECT_ROOT")
+
 def main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf, num_parameter_search, labeling_budget, n_selection_samples, llm_method, num_interpretations, program_with_pixels, program_with_pretrained_models, n_train_distill, selection_strategy):
     try:
         config = yaml.safe_load(
-            open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+            open(os.path.join(project_root, "configs", "config.yaml"), "r")
         )
 
         config_name = "ninterp={}-nparams={}-kwargs={}-pixels={}-pretrained_models={}-ntrain_distill={}-nselection_samples={}-selection={}-budget={}-llm_method={}".format(

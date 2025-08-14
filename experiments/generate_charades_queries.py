@@ -23,6 +23,8 @@ import yaml
 from openai import OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+project_root = os.getenv("PROJECT_ROOT")
+
 random.seed(1234)
 # np.random.seed(10)
 
@@ -30,7 +32,7 @@ m = multiprocessing.Manager()
 lock = m.Lock()
 memo = [LRU(10000) for _ in range(72159)]
 
-config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
 def generate_charades_queries(n_queries, ratio_lower_bound, ratio_upper_bound, npred, nobj_pred, nvars, depth, nunsupported_udfs, supported_list, unsupported_list, obj_classes, max_workers, dataset_name):
     """

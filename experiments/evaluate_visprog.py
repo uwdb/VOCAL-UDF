@@ -20,6 +20,8 @@ import random
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 if __name__ == "__main__":
     # VAW: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "vaw" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
     # CLEVRER: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "clevrer" --query_filename "3_new_udfs_labels" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
@@ -45,7 +47,7 @@ if __name__ == "__main__":
 
     random.seed(run_id)
 
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
     input_vids = list(range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"]))
     # [862, 1062, 1082, 1083, 1095, 1097, 1105, 1106, 1124, 1133, 1141, 1143, 1148, 1158, 1159, 1175, 1176, 1177, 1178, 1180, 1190, 1194, 1210, 1211, 1212, 1313, 1328, 1335, 1339, 1343, 1344, 1347, 1368, 1371, 1373, 1375, 1378, 1380, 1381, 1382, 1383, 1384, 1385, 1386, 1387, 1389, 1390, 1392, 1393, 1395, 1398, 1401, 1402, 1403, 1406, 1407, 1408, 1413, 1414, 1416, 1417, 1423, 1429, 1430, 1432, 1433, 1434, 1436, 1437, 1438, 1448, 1449, 1457, 1458, 1459, 1462, 1469, 1489, 1490, 1491, 1493, 1499, 1505, 1508, 1536, 1589, 1590, 1591, 1604, 1624, 1634, 1639]
@@ -108,7 +110,7 @@ if __name__ == "__main__":
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     if dataset == "clevrer":
         module_list = ["LOC", "TRACK", "GRAY", "RED", "BLUE", "GREEN", "CUBE", "SPHERE", "RUBBER", "LEFTOF", "FRONTOF", "LEFT", "TOP", "EVENT", "BEFORE", "EVAL", "RESULT"]
     elif dataset == "cityflow":

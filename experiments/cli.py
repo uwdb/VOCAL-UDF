@@ -40,6 +40,8 @@ from vocaludf.utils import parse_signature, get_active_domain, setup_logging, Sh
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 async def process_udf(udf_signature, udf_description, shared_resources):
     logger.info(f"UDF generation for {udf_signature} started")
     ug = UDFGenerator(shared_resources, udf_signature, udf_description, None)
@@ -100,7 +102,7 @@ async def main() -> None:
     # registered UDFs: 2, 9
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
@@ -164,7 +166,7 @@ async def main() -> None:
 
     # 2. Choose registered UDFs ----------------------------------------------
     print(Panel(f"[bold green]Choosing registered UDFs...[/bold green]"))
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     udf_base = registered_udfs_json[f"{dataset}_base"]
     udf_additional = [v for _, v in registered_udfs_json[dataset].items()]
     udf_corpus = udf_base + udf_additional

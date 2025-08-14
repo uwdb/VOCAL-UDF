@@ -1,7 +1,7 @@
 {
     "charades_base": [
         {
-            "signature": "object(o0, name)",
+            "signature": "object(o0, 'name')",
             "description": "Whether o0 is an object with the given name, where 'name' can be one of the following: ['person', 'bag', 'bed', 'blanket', 'book', 'box', 'broom', 'chair', 'closet/cabinet', 'clothes', 'cup/glass/bottle', 'dish', 'door', 'doorknob', 'doorway', 'floor', 'food', 'groceries', 'laptop', 'light', 'medicine', 'mirror', 'paper/notebook', 'phone/camera', 'picture', 'pillow', 'refrigerator', 'sandwich', 'shelf', 'shoe', 'sofa/couch', 'table', 'television', 'towel', 'vacuum', 'window'].",
             "function_implementation": ""
         },

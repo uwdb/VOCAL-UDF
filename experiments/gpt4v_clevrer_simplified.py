@@ -22,6 +22,8 @@ logger.setLevel(logging.DEBUG)
 
 client = OpenAI()
 
+project_root = os.getenv("PROJECT_ROOT")
+
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
@@ -67,7 +69,7 @@ def process_video(vid, prompt, pred_positive_videos, run_id, video_frames_dir, o
     return request_line
 
 def submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name):
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
     """
     Set up logging
@@ -155,7 +157,7 @@ def submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name
 
 
 def retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_name):
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
     """
     Set up logging

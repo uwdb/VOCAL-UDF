@@ -4,14 +4,11 @@ import os
 import argparse
 import warnings
 from tqdm import tqdm
+import yaml
 
+project_root = os.getenv("PROJECT_ROOT")
 
-def dump_frames(args):
-    video_dir = args.video_dir
-    frame_dir = args.frame_dir
-    annotation_dir = args.annotation_dir
-    all_frames = args.all_frames
-
+def dump_frames(video_dir, frame_dir, annotation_dir, all_frames):
     # Load the list of annotated frames
     frame_list = []
     with open(os.path.join(annotation_dir, 'frame_list.txt'), 'r') as f:
@@ -49,15 +46,12 @@ def dump_frames(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Dump frames")
-    parser.add_argument("--video_dir", default="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/Charades_v1_480",
-                        help="Folder containing Charades videos.")
-    parser.add_argument("--frame_dir", default="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/frames",
-                        help="Root folder containing frames to be dumped.")
-    parser.add_argument("--annotation_dir", default="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades",
-                        help=("Folder containing annotation files, including object_bbox_and_relationship.pkl, "
-                              "person_bbox.pkl and frame_list.txt."))
-    parser.add_argument("--all_frames", action="store_true",
-                        help="Set if you want to dump all frames, rather than the frames listed in frame_list.txt")
-    args = parser.parse_args()
-    dump_frames(args)
+    config = yaml.safe_load(
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
+    )
+
+    video_dir = config["charades"]["video_dir"] # Folder containing Charades videos.
+    frame_dir = config["charades"]["video_frames_dir"] # Root folder containing frames to be dumped.
+    annotation_dir = os.path.join(config["data_dir"], "charades") # Folder containing annotation files.
+    all_frames = False # Set if you want to dump all frames, rather than the frames listed in frame_list.txt
+    dump_frames(video_dir, frame_dir, annotation_dir, all_frames)

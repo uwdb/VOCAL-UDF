@@ -22,7 +22,6 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import yaml
 from tqdm import tqdm
-import time
 import torchvision.transforms as T
 
 project_root = os.getenv("PROJECT_ROOT")
@@ -109,7 +108,6 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
     clip_model = CLIPModel.from_pretrained(clip_model_name).to(device)
     clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
 
-    _start = time.time()
     pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, video_directory=os.path.join(config["data_dir"], "clevrer"), batch_size=batch_size, num_threads=num_threads)
 
     video_iterator = DALIGenericIterator(
@@ -120,7 +118,6 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
             # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
             reader_name='reader'
         )
-    print("Time to create DALI iterator", time.time() - _start)
 
     # Copied from https://github.com/openai/CLIP/blob/main/clip/clip.py
     # Specific values from print(model.transform)
@@ -154,10 +151,7 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
     partition_id = 0
     bytes_written = 0
     writer = pq.ParquetWriter(feature_file_path, schema=schema)
-    time4 = time.time()
     for batch in tqdm(video_iterator):
-        time0 = time.time()
-        print("time0", time0 - time4)
         batch = batch[0]
 
         # (B, 1, H, W, C) -> (B, H, W, C) -> (B, C, H, W)
@@ -181,15 +175,12 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
         parquet_y1s = []
         parquet_x2s = []
         parquet_y2s = []
-        df_time = 0
         for i in range(len(vids)):
-            df_start = time.time()
             # res = df[(df['vid'] == vids[i]) & (df['fid'] == fids[i])]
             if (vids[i], fids[i]) not in df_grouped.groups:
                 continue
             res = df_grouped.get_group((vids[i], fids[i]))
             # NOTE: Due to data noise, multiple objects can have the same oid
-            df_time += time.time() - df_start
             for _, row in res.iterrows():
                 x1, y1, x2, y2 = expand_box(row['x1'], row['y1'], row['x2'], row['y2'], (320, 480))
                 rois.append([i, x1, y1, x2, y2])
@@ -202,24 +193,15 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
                 parquet_y2s.append(np.uint32(row['y2']))
 
         rois_tensor = torch.tensor(rois, dtype=torch.float).to(device)
-        time0_5 = time.time()
-        print("time0_5", time0_5 - time0)
-        print("df_time", df_time)
         # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
         # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
         image_patches = ops.roi_align(frames, rois_tensor, output_size=patch_size, spatial_scale=1.0)
         # show_sequence(image_patches, parquet_vids, parquet_fids, parquet_oids)
-        time1 = time.time()
-        print("time1", time1 - time0_5)
 
         # Run CLIP model
         inputs = transforms(image_patches)
-        time2 = time.time()
-        print("time2", time2 - time1)
-        time3 = time.time()
         with torch.no_grad():
             features = clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (batch_size, output_dim)
-        print("time3", time3 - time2)
 
         # Save into Parquet file
         # Split it if too large
@@ -235,8 +217,6 @@ def extract_attribute_features(conn, config, sequence_length, batch_size, num_th
         batch = pa.record_batch([parquet_vids, parquet_fids, parquet_oids, parquet_x1s, parquet_y1s, parquet_x2s, parquet_y2s, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'feature'])
         writer.write_batch(batch)
         bytes_written += batch.nbytes
-        time4 = time.time()
-        print("time4", time4 - time3)
 
 def extract_relationship_features(conn, config, sequence_length, batch_size, num_threads, dataset="clevrer", patch_size=(224, 224)):
     df_grouped = conn.execute(f"""
@@ -253,7 +233,6 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
     clip_model = CLIPModel.from_pretrained(clip_model_name).to(device)
     clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
 
-    _start = time.time()
     pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, video_directory=os.path.join(config["data_dir"], "clevrer"), batch_size=batch_size, num_threads=num_threads)
 
     video_iterator = DALIGenericIterator(
@@ -264,7 +243,6 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
             # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
             reader_name='reader'
         )
-    print("Time to create DALI iterator", time.time() - _start)
 
     transforms = T.Compose([
         # T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
@@ -300,10 +278,7 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
     partition_id = 0
     bytes_written = 0
     writer = pq.ParquetWriter(feature_file_path, schema=schema)
-    time4 = time.time()
     for batch in tqdm(video_iterator):
-        time0 = time.time()
-        print("time0", time0 - time4)
         batch = batch[0]
 
         # (B, 1, H, W, C) -> (B, H, W, C) -> (B, C, H, W)
@@ -333,15 +308,12 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         parquet_o2_x2s = []
         parquet_o2_y2s = []
         batch_boxes = []
-        df_time = 0
         for i in range(len(vids)):
-            df_start = time.time()
             # res = df[(df['vid'] == vids[i]) & (df['fid'] == fids[i])]
             if (vids[i], fids[i]) not in df_grouped.groups:
                 continue
             res = df_grouped.get_group((vids[i], fids[i]))
             # NOTE: Due to data noise, multiple objects can have the same oid
-            df_time += time.time() - df_start
             for _, row in res.iterrows():
                 # x1, y1, x2, y2 = expand_box(row['x1'], row['y1'], row['x2'], row['y2'], (320, 480))
                 o1_x1, o1_y1, o1_x2, o1_y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (320, 480))
@@ -370,15 +342,10 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
 
 
         rois_tensor = torch.tensor(rois, dtype=torch.float).to(device)
-        time0_5 = time.time()
-        print("time0_5", time0_5 - time0)
-        print("df_time", df_time)
         # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
         # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
         image_patches = ops.roi_align(frames, rois_tensor, output_size=patch_size, spatial_scale=1.0)
         # show_sequence(image_patches, parquet_vids, parquet_fids, parquet_oids)
-        time1 = time.time()
-        print("time1", time1 - time0_5)
 
         # Run CLIP model
         batch_frames = image_patches.clone()
@@ -392,16 +359,10 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         batch_frames_subject = batch_frames * subject_masks.unsqueeze(1).expand(N, C, H, W)
         batch_frames_target = batch_frames * target_masks.unsqueeze(1).expand(N, C, H, W)
         images = torch.cat([batch_frames, batch_frames_subject, batch_frames_target], dim=0) # (3N, C, H, W)
-        time2 = time.time()
-        print("time2", time2 - time1)
         inputs = transforms(images)
-        time2_5 = time.time()
-        print("time2_5", time2_5 - time2)
         with torch.no_grad():
             outputs = clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (3N, 512)
         features = outputs.reshape(3, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 3 * 512)
-        time3 = time.time()
-        print("time3", time3 - time2_5)
 
         # Save into Parquet file
         # Split it if too large
@@ -417,8 +378,6 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         batch = pa.record_batch([parquet_vids, parquet_fids, parquet_o1_oids, parquet_o1_x1s, parquet_o1_y1s, parquet_o1_x2s, parquet_o1_y2s, parquet_o2_oids, parquet_o2_x1s, parquet_o2_y1s, parquet_o2_x2s, parquet_o2_y2s, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o2_oid', 'o2_x1', 'o2_y1', 'o2_x2', 'o2_y2', 'feature'])
         writer.write_batch(batch)
         bytes_written += batch.nbytes
-        time4 = time.time()
-        print("time4", time4 - time3)
 
 def show_sequence(sequence, parquet_vids, parquet_fids, parquet_oids):
     sequence = sequence.permute(0, 2, 3, 1).cpu().numpy()

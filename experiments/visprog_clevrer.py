@@ -23,6 +23,8 @@ import random
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--use_precomputed', action='store_true', help='use precomputed object detection results')
@@ -42,7 +44,7 @@ if __name__ == "__main__":
     task_name = args.task_name
     llm_model = args.llm_model
 
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
     """
     Set up logging

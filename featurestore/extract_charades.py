@@ -21,22 +21,24 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import yaml
 from tqdm import tqdm
-import time
 import math
 import torchvision.transforms as T
 import string
 import random
 import shutil
 
+project_root = os.getenv("PROJECT_ROOT")
+
 def VideoFrameDaliDataloader(
+    config,
     sequence_length=64,
-    video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/Charades_v1_480",
     device='gpu',
     batch_size=None,
     num_threads=None,
 ):
     assert device == 'gpu', 'dali video_resize only supports gpu backend'
-    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    video_directory = config["charades"]["video_dir"]
+    conn = duckdb.connect(database=os.path.join(config["db_dir"], "annotations.duckdb"), read_only=True)
     df_metadata = conn.execute(f"""
         SELECT DISTINCT vname, vid
         FROM charades_metadata
@@ -101,26 +103,6 @@ def _compute_new_box_after_crop(row, image_size):
     w_ratio = 224.0 / (max(o1_x2, o2_x2) - x_offset)
     return (row['o1_x1'] - x_offset) * w_ratio, (row['o1_y1'] - y_offset) * h_ratio, (row['o1_x2'] - x_offset) * w_ratio, (row['o1_y2'] - y_offset) * h_ratio, (row['o2_x1'] - x_offset) * w_ratio, (row['o2_y1'] - y_offset) * h_ratio, (row['o2_x2'] - x_offset) * w_ratio, (row['o2_y2'] - y_offset) * h_ratio
 
-def test(batch_size, num_threads):
-    _start = time.time()
-    pipe = VideoFrameDaliDataloader(batch_size=batch_size, num_threads=num_threads)
-
-    video_iterator = DALIGenericIterator(
-            [pipe],
-            ['data', 'label'],
-            last_batch_policy=LastBatchPolicy.PARTIAL,
-            # Required or iterator loops indefinitely (https://github.com/NVIDIA/DALI/issues/2873)
-            # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
-            reader_name='reader'
-        )
-    print("Time to create DALI iterator", time.time() - _start)
-    for i, batch in enumerate(video_iterator):
-        if i >= 10:
-            break
-        print("batch", batch)
-        print("batch['data'].shape", batch['data'].shape)
-        print("batch['label']", batch['label'])
-
 def extract_relationship_features(conn, config, sequence_length, batch_size, num_threads, dataset="charades", patch_size=(224, 224), include_text_features=False):
     df_grouped = conn.execute(f"""
         SELECT o1.vid AS vid, o1.fid AS fid,
@@ -137,8 +119,7 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
     if include_text_features:
         tokenizer = CLIPTokenizer.from_pretrained(clip_model_name)
 
-    _start = time.time()
-    pipe = VideoFrameDaliDataloader(sequence_length=sequence_length, batch_size=batch_size, num_threads=num_threads)
+    pipe = VideoFrameDaliDataloader(config, sequence_length=sequence_length, batch_size=batch_size, num_threads=num_threads)
 
     video_iterator = DALIGenericIterator(
             [pipe],
@@ -148,7 +129,6 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
             # reader_name must match name in frame::VideoFrameDaliDataloader::create_pipeline.
             reader_name='reader'
         )
-    print("Time to create DALI iterator", time.time() - _start)
 
     transforms = T.Compose([
         # T.Resize(224, interpolation=T.InterpolationMode.BICUBIC),
@@ -189,10 +169,7 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
     partition_id = 0
     bytes_written = 0
     writer = pq.ParquetWriter(feature_file_path, schema=schema)
-    time4 = time.time()
     for batch in tqdm(video_iterator):
-        time0 = time.time()
-        print("time0", time0 - time4)
         batch = batch[0]
 
         # (B, 1, H, W, C) -> (B, H, W, C) -> (B, C, H, W)
@@ -224,15 +201,12 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         parquet_o1_onames = []
         parquet_o2_onames = []
         batch_boxes = []
-        df_time = 0
         for i in range(len(vids)):
-            df_start = time.time()
             # res = df[(df['vid'] == vids[i]) & (df['fid'] == fids[i])]
             if (vids[i], fids[i]) not in df_grouped.groups:
                 continue
             res = df_grouped.get_group((vids[i], fids[i]))
             # NOTE: Due to data noise, multiple objects can have the same oid
-            df_time += time.time() - df_start
             for _, row in res.iterrows():
                 o1_x1, o1_y1, o1_x2, o1_y2 = expand_box(row['o1_x1'], row['o1_y1'], row['o1_x2'], row['o1_y2'], (_H, _W))
                 o2_x1, o2_y1, o2_x2, o2_y2 = expand_box(row['o2_x1'], row['o2_y1'], row['o2_x2'], row['o2_y2'], (_H, _W))
@@ -261,18 +235,12 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
                     batch_boxes.append([int(new_o1x1), int(new_o1y1), int(new_o1x2), int(new_o1y2), int(new_o2x1), int(new_o2y1), int(new_o2x2), int(new_o2y2)])
 
         if len(rois) == 0:
-            time4 = time.time()
             continue
         rois_tensor = torch.tensor(rois, dtype=torch.float).to(device)
-        time0_5 = time.time()
-        print("time0_5", time0_5 - time0)
-        print("df_time", df_time)
         # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
         # image_patches.shape: (K, C, 224, 224), where K is the number of bounding boxes
         image_patches = ops.roi_align(frames, rois_tensor, output_size=patch_size, spatial_scale=1.0)
         # show_sequence(image_patches, parquet_vids, parquet_fids, parquet_o1_oids, parquet_o2_oids)
-        time1 = time.time()
-        print("time1", time1 - time0_5)
 
         # Run CLIP model
         batch_frames = image_patches.clone()
@@ -286,13 +254,9 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         batch_frames_subject = batch_frames * subject_masks.unsqueeze(1).expand(N, C, H, W)
         batch_frames_target = batch_frames * target_masks.unsqueeze(1).expand(N, C, H, W)
         images = torch.cat([batch_frames, batch_frames_subject, batch_frames_target], dim=0) # (3N, C, H, W)
-        time2 = time.time()
-        print("time2", time2 - time1)
         image_inputs = transforms(images)
         if include_text_features:
             text_inputs = tokenizer(parquet_o1_onames + parquet_o2_onames, padding=True, return_tensors="pt").to(device)
-        time2_5 = time.time()
-        print("time2_5", time2_5 - time2)
         with torch.no_grad():
             image_outputs = clip_model.get_image_features(pixel_values=image_inputs) # torch.FloatTensor of shape (3N, 512)
             if include_text_features:
@@ -301,8 +265,6 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         if include_text_features:
             text_features = text_outputs.reshape(2, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 2 * 512)
             features = torch.cat([features, text_features], dim=1) # (N, 5 * 512)
-        time3 = time.time()
-        print("time3", time3 - time2_5)
 
         # Save into Parquet file
         # Split it if too large
@@ -318,8 +280,6 @@ def extract_relationship_features(conn, config, sequence_length, batch_size, num
         batch = pa.record_batch([parquet_vids, parquet_fids, parquet_o1_oids, parquet_o1_x1s, parquet_o1_y1s, parquet_o1_x2s, parquet_o1_y2s, parquet_o1_onames, parquet_o2_oids, parquet_o2_x1s, parquet_o2_y1s, parquet_o2_x2s, parquet_o2_y2s, parquet_o2_onames, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o1_oname', 'o2_oid', 'o2_x1', 'o2_y1', 'o2_x2', 'o2_y2', 'o2_oname', 'feature'])
         writer.write_batch(batch)
         bytes_written += batch.nbytes
-        time4 = time.time()
-        print("time4", time4 - time3)
 
 def show_sequence(sequence, parquet_vids, parquet_fids, parquet_o1_oids, parquet_o2_oids):
     sequence = sequence.permute(0, 2, 3, 1).cpu().numpy()
@@ -344,10 +304,11 @@ if __name__ == "__main__":
     include_text_features = args.include_text_features
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
-    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    db_dir = config["db_dir"]
+    conn = duckdb.connect(database=os.path.join(db_dir, "annotations.duckdb"), read_only=True)
 
     print("pa.cpu_count()", pa.cpu_count())
     print("pa.io_thread_count()", pa.io_thread_count())
-    extract_relationship_features(conn, config, sequence_length=128, batch_size=1, num_threads=1, include_text_features=include_text_features)
+    extract_relationship_features(conn, config, sequence_length=64, batch_size=1, num_threads=1, include_text_features=include_text_features)

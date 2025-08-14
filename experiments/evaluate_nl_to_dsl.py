@@ -14,6 +14,8 @@ import duckdb
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 class QueryExecutorWithGroundTruth(QueryExecutor):
     def init_table(self):
         metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
@@ -74,7 +76,7 @@ class QueryExecutorWithGroundTruth(QueryExecutor):
 if __name__ == '__main__':
     # python evaluate_nl_to_dsl.py --query_id 0 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --num_workers 4 --n_train_distill 100 --selection_strategy "both" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v"
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
 
     parser = argparse.ArgumentParser()
