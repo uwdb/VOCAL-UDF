@@ -1,7 +1,7 @@
 import yaml
 import random
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain, duckdb_execute_video_materialize
+from vocaludf.utils import parse_signature, setup_logging, duckdb_execute_video_materialize
 import logging
 import numpy as np
 from vocaludf.query_executor import QueryExecutor, ClevrerDaliDataloader
@@ -23,6 +23,8 @@ from itertools import chain
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
+
+project_root = os.getenv("PROJECT_ROOT")
 
 class SimplifiedQueryExecutor(QueryExecutor):
     def init_table(self):
@@ -337,7 +339,7 @@ class SimplifiedQueryExecutor(QueryExecutor):
 if __name__ == '__main__':
     # python run_clevrer_simplified_query.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_filename "simplified_3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --num_workers 8 --n_train_distill 100 --selection_strategy "both" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt4v" --openai_model_name "gpt-4o"
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
 
     parser = argparse.ArgumentParser()
@@ -358,7 +360,7 @@ if __name__ == '__main__':
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
     parser.add_argument("--pred_batch_size", type=int, default=262144, help="batch size for prediction data loader")
     parser.add_argument("--dali_batch_size", type=int, default=16, help="batch size for DALI")
-    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--llm_method", type=str, choices=["gpt", "llava"], default="gpt", help="LLM method for distill model annotations")
     parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
 
     args = parser.parse_args()
@@ -408,42 +410,16 @@ if __name__ == '__main__':
     y_true = [1 if i in positive_videos else 0 for i in range(9500, 10000)]
 
 
-    """
-    Set up logging
-    """
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
+    # Set up logging
+    base_dir = os.path.join(
         "query_execution",
         dataset,
         query_filename,
         "num_missing_udfs={}".format(num_missing_udfs),
         config_name,
     )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),

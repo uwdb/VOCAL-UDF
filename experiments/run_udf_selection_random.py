@@ -5,13 +5,13 @@ import yaml
 import random
 import json
 import os
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain, transform_function
+from vocaludf.utils import parse_signature, setup_logging, get_active_domain, transform_function, SharedResources, UDFCandidate
 import logging
 import argparse
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
 from vocaludf.query_parser import QueryParser
-from vocaludf.async_udf_proposer import SharedResources, UDFProposer, UDFGenerator, UDFSelector, UDFCandidate
+from vocaludf.udf_selector import UDFSelector
 from vocaludf.query_executor import QueryExecutor
 import duckdb
 import sys
@@ -24,6 +24,8 @@ import copy
 # logging.basicConfig()
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
+
+project_root = os.getenv("PROJECT_ROOT")
 
 def using(point=""):
     usage=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -249,7 +251,7 @@ async def main():
     # cityflow: python run_udf_selection_random.py --num_missing_udfs 2 --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
     # charades: python run_udf_selection_random.py --num_missing_udfs 2 --query_id 3 --run_id 0 --dataset "charades" --query_filename "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
 
     parser = argparse.ArgumentParser()
@@ -272,7 +274,7 @@ async def main():
     parser.add_argument("--load_labeled_data", action="store_true", help="load labeled data")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
-    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--llm_method", type=str, choices=["gpt", "llava"], default="gpt", help="LLM method for distill model annotations")
     parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
     parser.add_argument("--openai_model_name", type=str, default="gpt-4-turbo-2024-04-09", help="OpenAI model name")
 
@@ -321,22 +323,14 @@ async def main():
 
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
-    gt_dsl = input_query["dsl"]
-    user_query = input_query["question"]
-    positive_videos = input_query["positive_videos"]
-    if dataset in ["gqa", "vaw"]:
-        conn = duckdb.connect(
-            database=os.path.join(config["db_dir"], "annotations.duckdb"),
-            read_only=True,
-        )
-        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
-        y_true = [1 if vid in positive_videos else 0 for vid in vids]
-    else:
-        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"])]
 
-    """
-    Set up logging
-    """
+    output_dir = os.path.join(
+        config["output_dir"],
+        base_dir
+    )
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Set up logging
     base_dir = os.path.join(
         "udf_generation",
         dataset,
@@ -344,46 +338,14 @@ async def main():
         "num_missing_udfs={}".format(num_missing_udfs),
         random_sampling_config_name,
     )
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
-        base_dir
-    )
-    os.makedirs(log_dir, exist_ok=True)
-    output_dir = os.path.join(
-        config["output_dir"],
-        base_dir
-    )
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     if "single_semantic" in query_filename:
         registered_functions = [{
             "signature": "object(o0, name)",

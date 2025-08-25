@@ -8,7 +8,7 @@ for udf_name in "${UdfNameArray[@]}"; do
             for num_interpretations in 10; do
                 for run in {0..19}; do
                     python \
-                        /gscratch/balazinska/enhaoz/VOCAL-UDF/experiments/run_intent_ambiguity_clevrer.py \
+                        $PROJECT_ROOT/experiments/run_intent_ambiguity_clevrer.py \
                         --run_id $run \
                         --dataset "clevrer" \
                         --udf_name "$udf_name" \

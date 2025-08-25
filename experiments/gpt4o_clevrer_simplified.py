@@ -147,6 +147,7 @@ def retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_na
         batch_job = client.batches.retrieve(batch_job_id)
         if batch_job.status != "completed":
             num_imcomplete_jobs += 1
+            logger.info(f"batch_job {i} with id {batch_job_id} is not completed yet. Status: {batch_job.status}")
     if num_imcomplete_jobs > 0:
         logger.info(f"{num_imcomplete_jobs} batch jobs are not completed yet")
         return

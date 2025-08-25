@@ -1,13 +1,11 @@
 import yaml
 import random
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
+from vocaludf.utils import parse_signature, setup_logging, get_active_domain
 import logging
 import numpy as np
 from vocaludf.query_parser import QueryParser
 from vocaludf.query_executor import QueryExecutor
-from vocaludf.parser import parse
-from src.utils import program_to_dsl
 import argparse
 import os
 import sys
@@ -53,42 +51,16 @@ if __name__ == '__main__':
     # Evaluate on the second half of the dataset (test split)
     y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
 
-    """
-    Set up logging
-    """
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
+    # Set up logging
+    base_dir = os.path.join(
         "query_execution",
         dataset,
         query_filename,
         "num_missing_udfs={}".format(num_missing_udfs),
         "equi-vocal",
     )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),

@@ -1,18 +1,17 @@
 import os
 import sys
-module_path = os.path.abspath(os.path.join('..'))
-if module_path not in sys.path:
-    sys.path.append(module_path)
+# module_path = os.path.abspath(os.path.join('..'))
+# if module_path not in sys.path:
+#     sys.path.append(module_path)
 
 from PIL import Image
 from functools import partial
-import duckdb
 from visprog.engine.utils import ProgramGenerator, ProgramInterpreter
 import argparse
 import logging
 from tqdm import tqdm
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook
+from vocaludf.utils import parse_signature, setup_logging
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import yaml
 import random
@@ -23,7 +22,6 @@ logger.setLevel(logging.DEBUG)
 project_root = os.getenv("PROJECT_ROOT")
 
 if __name__ == "__main__":
-    # VAW: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "vaw" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=2-nattr_pred=1-nvars=3-min_npos=3000-max_npos=20000" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
     # CLEVRER: python evaluate_visprog.py --use_precomputed --num_missing_udfs 1 --dataset "clevrer" --query_filename "3_new_udfs_labels" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
     # Charades: python evaluate_visprog.py --use_precomputed --num_missing_udfs 0 --dataset "charades" --query_filename "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
     # CityFlow: python evaluate_visprog.py --use_precomputed --num_missing_udfs 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --run_id 0 --query_id 0 --llm_model "gpt-4-turbo-2024-04-09"
@@ -34,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--query_filename", type=str, help="query filename")
     parser.add_argument('--run_id', type=int, help='run id')
     parser.add_argument('--query_id', type=int, help='query id')
-    parser.add_argument('--llm_model', type=str, default="gpt-4-turbo-2024-04-09", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-turbo-2024-04-09', "gpt-4o"])
+    parser.add_argument('--llm_model', type=str, default="gpt-4o", help='llm model', choices=['gpt-3.5-turbo-instruct', 'gpt-3.5-turbo-1106', 'gpt-4-turbo-2024-04-09', "gpt-4o"])
     args = parser.parse_args()
     use_precomputed = args.use_precomputed
     assert use_precomputed, "use_precomputed must be True"
@@ -63,9 +61,8 @@ if __name__ == "__main__":
     y_true = [1 if i in positive_videos else 0 for i in input_vids]
     logger.debug(f"y_true: {y_true}")
 
-    """
-    Set up logging
-    """
+
+    # Set up logging
     base_dir = os.path.join(
         "query_execution",
         dataset,
@@ -73,35 +70,8 @@ if __name__ == "__main__":
         "num_missing_udfs={}".format(num_missing_udfs),
         f"visprog-llm={llm_model}",
     )
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
-        base_dir
-    )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     # Base modules
     prompt_config = yaml.load(
@@ -117,7 +87,7 @@ if __name__ == "__main__":
     elif dataset == "charades":
         module_list = ["LOC", "TRACK", "EVENT", "BEFORE", "EVAL", "RESULT", "PERSON", "BAG", "BED", "BLANKET", "BOOK", "BOX", "BROOM", "CHAIR", "CLOSETCABINET", "CLOTHES", "CUPGLASSBOTTLE", "DISH", "DOOR", "DOORKNOB", "DOORWAY", "FLOOR", "FOOD", "GROCERIES", "LAPTOP", "LIGHT", "MEDICINE", "MIRROR", "PAPERNOTEBOOK", "PHONECAMERA", "PICTURE", "PILLOW", "REFRIGERATOR", "SANDWICH", "SHELF", "SHOE", "SOFACOUCH", "TABLE", "TELEVISION", "TOWEL", "VACUUM", "WINDOW"]
         for func in registered_udfs_json[f"{dataset}_base"]:
-            if func["signature"] == "object(o0, name)":
+            if func["signature"] == "object(o0, 'name')":
                 continue
             else:
                 module_list.append(parse_signature(func["signature"])[0].replace("_", "").upper())

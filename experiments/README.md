@@ -4,6 +4,7 @@
 - [x] Table 4
 - [ ] Figure 6(a)
 - [ ] Figure 6(b)
+- [x] Figure 8
 - [x] Table 5
 - [x] Table 6
 - [x] Table 8, 9
@@ -63,13 +64,18 @@ This experiment uses OpenAI’s Batch API that offers 50% lower cost.
 ## UDF generation (Table 6, Figure 8, Table 7)
 1. Run experiments
 ```bash
+# Labeling quality (Table 7)
 ./scripts/reproduce/model_udf_labeling_quality/exp-model_udf.sh
+# Intent ambiguity (Figure 8)
+./scripts/reproduce/intent_ambiguity/exp-intent_ambiguity_baseline.sh
+./scripts/reproduce/intent_ambiguity/exp-intent_ambiguity_clevrer.sh
 ```
 
 2. Visualize results:
 - Table 6 (left columns): `experiments/analysis/mircobenchmark.ipynb`, "Program-based UDFs" section
 - Table 6 (right columns): `experiments/analysis/mircobenchmark.ipynb`, "Distilled-model UDFs" section
 - Table 7: `experiments/analysis/mircobenchmark.ipynb`, "Labeling quality" section
+- Figure 8: `experiments/analysis/intent_ambiguity.ipynb`
 
 ## UDF selection: selection strategy (Table 8, Table 9)
 1. Run the following command to post-process the log files:
@@ -88,4 +94,30 @@ python experiments/evaluate_best_udf_type.py
 - Table 8 (right columns): `experiments/analysis/mircobenchmark.ipynb`, "Selected UDF type distribution" section
 
 
-## UDF selection (Figure 9, Figure 10)
+## UDF selection: active learning (Figure 9, Figure 10)
+1. Run experiments
+```bash
+./scripts/reproduce/ablation_udf_selection/active_count/exp-vocal_udf_selection_active_clevrer.sh
+./scripts/reproduce/ablation_udf_selection/active_count/exp-vocal_udf_selection_active_cityflow.sh
+./scripts/reproduce/ablation_udf_selection/active_count/exp-vocal_udf_selection_active_charades.sh
+
+./scripts/reproduce/ablation_udf_selection/no_dummy/exp-vocal_udf_selection_no_dummy_clevrer.sh
+./scripts/reproduce/ablation_udf_selection/no_dummy/exp-vocal_udf_selection_no_dummy_cityflow.sh
+./scripts/reproduce/ablation_udf_selection/no_dummy/exp-vocal_udf_selection_no_dummy_charades.sh
+./scripts/reproduce/ablation_udf_selection/no_dummy/exp-vocal_udf_query_execution_no_dummy_clevrer.sh
+./scripts/reproduce/ablation_udf_selection/no_dummy/exp-vocal_udf_query_execution_no_dummy_cityflow.sh
+./scripts/reproduce/ablation_udf_selection/no_dummy/exp-vocal_udf_query_execution_no_dummy_charades.sh
+
+./scripts/reproduce/ablation_udf_selection/random/exp-vocal_udf_selection_random_clevrer.sh
+./scripts/reproduce/ablation_udf_selection/random/exp-vocal_udf_selection_random_cityflow.sh
+./scripts/reproduce/ablation_udf_selection/random/exp-vocal_udf_selection_random_charades.sh
+./scripts/reproduce/ablation_udf_selection/random/exp-vocal_udf_query_execution_random_clevrer.sh
+./scripts/reproduce/ablation_udf_selection/random/exp-vocal_udf_query_execution_random_cityflow.sh
+./scripts/reproduce/ablation_udf_selection/random/exp-vocal_udf_query_execution_random_charades.sh
+
+./scripts/reproduce/ablation_udf_selection/random_count/exp-vocal_udf_selection_random_clevrer.sh
+./scripts/reproduce/ablation_udf_selection/random_count/exp-vocal_udf_selection_random_cityflow.sh
+./scripts/reproduce/ablation_udf_selection/random_count/exp-vocal_udf_selection_random_charades.sh
+```
+
+2. Visualize results: `experiments/analysis/ablation_active_learning.ipynb`

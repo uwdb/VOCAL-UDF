@@ -3,7 +3,7 @@
 declare -a QueryClassArray=("3_new_udfs_labels")
 
 for query_filename in "${QueryClassArray[@]}"; do
-    for num_missing_udfs in 0 1 2 3; do
+    for num_missing_udfs in 3; do
         for budget in 20; do
             for num_interpretations in 10; do
                 for run in 0 1 2; do

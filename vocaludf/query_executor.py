@@ -66,6 +66,7 @@ class CityFlowImageDataset(Dataset):
         return frame, row['vid'], row['fid']
 
 def ClevrerDaliDataloader(
+    config,
     vids,
     sequence_length=64,
     device='gpu',
@@ -110,6 +111,7 @@ def ClevrerDaliDataloader(
     return pipe
 
 def CharadesDaliDataloader(
+    config,
     vids,
     sequence_length=64,
     device='gpu',
@@ -499,7 +501,7 @@ class QueryExecutor:
         logger.info("building video dataloader")
         # Create DALI pipeline for loading video frames
         if self.dataset == "clevrer":
-            pipe = ClevrerDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
+            pipe = ClevrerDaliDataloader(self.config, vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
             video_iterator = DALIGenericIterator(
             [pipe],
             ['frames', 'vid', 'fid'],
@@ -509,7 +511,7 @@ class QueryExecutor:
             reader_name='reader'
         )
         elif self.dataset == "charades":
-            pipe = CharadesDaliDataloader(vids, sequence_length=128, batch_size=1, num_threads=1)
+            pipe = CharadesDaliDataloader(self.config, vids, sequence_length=128, batch_size=1, num_threads=1)
             video_iterator = DALIGenericIterator(
             [pipe],
             ['frames', 'vid', 'fid'],

@@ -1,14 +1,11 @@
 import yaml
-import random
 import json
 import logging
 import numpy as np
 import argparse
 import os
 import sys
-import ast
-from openai import OpenAI, AsyncOpenAI
-from collections import defaultdict
+from openai import OpenAI
 import asyncio
 import importlib.util
 import pandas as pd
@@ -20,18 +17,22 @@ import importlib
 from itertools import chain
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 import torch
+from torch.utils.data import DataLoader
 from vocaludf.query_executor import CityFlowImageDataset, ClevrerDaliDataloader, CharadesDaliDataloader
 from vocaludf.async_udf_generator import UDFGenerator
 from vocaludf.udf_selector import UDFSelector, SamplingStrategy
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain, transform_function, SharedResources, UDFCandidate
+from vocaludf.utils import parse_signature, setup_logging, get_active_domain, transform_function, SharedResources, UDFCandidate
 
 client = OpenAI()
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 class IntentAmbiguityUDFSelector(UDFSelector):
     def select(self, gt_udf, udf_candidate_list):
+        self.df_with_img_column = self.program_with_pixels
         if len(udf_candidate_list) == 0:
             return None
         udf_signature = udf_candidate_list[0].udf_signature
@@ -43,16 +44,14 @@ class IntentAmbiguityUDFSelector(UDFSelector):
         udf_candidate_list.append(dummy_udf)
 
         # Construct training data and test data
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, df_with_img_column=self.program_with_pixels)
+        df_train = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=None, df_with_img_column=self.program_with_pixels)
 
         # Select new video segments to label
-        # TODO: df_train and llm_positive_df may contain the same tuples
         labeled_index = []
         llm_positive_labeled_index = []
         llm_negative_labeled_index = []
         segment_selection_time = 0
         _start_segment_selection_time = time.time()
-        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
 
         sampling_strategy = SamplingStrategy.positive
         for iter in range(self.labeling_budget):
@@ -296,11 +295,11 @@ class IntentAmbiguityUDFSelector(UDFSelector):
         return result
 
     def init_table_test(self, n_obj):
-        metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
-        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
-        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
+        metadata_join_clause = '' if self.dataset in ['clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
+        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevrer'] else 'm.height AS height, m.width AS width'
+        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
 
-        attr_parameters = ','.join('?' for _ in self.attribute_domain)
+        attr_parameters = ','.join('?' for _ in self.shared_resources.attribute_domain)
 
         if n_obj == 1:
             if self.dataset == 'clevrer':
@@ -324,9 +323,9 @@ class IntentAmbiguityUDFSelector(UDFSelector):
                 GROUP BY {group_by_clause}
             """
             logger.debug(f"Create one_object table:\n{sql}")
-            test_df = self.conn.execute(sql, self.attribute_domain).df()
+            test_df = self.conn.execute(sql, self.shared_resources.attribute_domain).df()
         else:
-            rel_parameters = ','.join('?' for _ in self.relationship_domain)
+            rel_parameters = ','.join('?' for _ in self.shared_resources.relationship_domain)
             if self.dataset == 'clevrer':
                 attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 5000 AND vid < 10000"
                 obj_where_clause = "WHERE vid >= 5000 AND vid < 10000"
@@ -385,7 +384,7 @@ class IntentAmbiguityUDFSelector(UDFSelector):
                 {metadata_join_clause}
             """
             logger.debug(f"Create two_objects table:\n{sql}")
-            test_df = self.conn.execute(sql, self.attribute_domain + self.relationship_domain).df()
+            test_df = self.conn.execute(sql, self.shared_resources.attribute_domain + self.shared_resources.relationship_domain).df()
 
         return test_df
 
@@ -441,7 +440,7 @@ class IntentAmbiguityUDFSelector(UDFSelector):
         logger.info("building video dataloader")
         # Create DALI pipeline for loading video frames
         if self.dataset == "clevrer":
-            pipe = ClevrerDaliDataloader(input_vids, sequence_length=128, batch_size=1, num_threads=1)
+            pipe = ClevrerDaliDataloader(self.config, input_vids, sequence_length=128, batch_size=1, num_threads=1)
             video_iterator = DALIGenericIterator(
             [pipe],
             ['frames', 'vid', 'fid'],
@@ -451,7 +450,7 @@ class IntentAmbiguityUDFSelector(UDFSelector):
             reader_name='reader'
         )
         elif self.dataset == "charades":
-            pipe = CharadesDaliDataloader(input_vids, sequence_length=128, batch_size=1, num_threads=1)
+            pipe = CharadesDaliDataloader(self.config, input_vids, sequence_length=128, batch_size=1, num_threads=1)
             video_iterator = DALIGenericIterator(
             [pipe],
             ['frames', 'vid', 'fid'],
@@ -577,7 +576,7 @@ async def main():
     # Baseline: python run_intent_ambiguity_clevrer.py --run_id 0 --dataset "clevrer" --udf_name "far" --interpretation_id 0 --budget 20 --n_selection_samples 500 --num_interpretations 1 --program_with_pixels --num_parameter_search 1 --num_workers 8 --n_train_distill 100 --selection_strategy "program" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
     parser = argparse.ArgumentParser()
     # parser.add_argument("--query_id", type=int, help="query id")
@@ -596,7 +595,7 @@ async def main():
     parser.add_argument("--num_workers", type=int, default=8, help="Maximum number of tasks to execute at once")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
-    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--llm_method", type=str, choices=["gpt", "llava"], default="gpt", help="LLM method for distill model annotations")
     parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
     parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
 
@@ -645,7 +644,7 @@ async def main():
         raise ValueError("Invalid UDF name")
 
     # Dynamically import the ground truth UDF
-    module_name = f"udfs.gt_{udf_name}"
+    module_name = f"vocaludf.udfs.gt_{udf_name}"
     module = importlib.import_module(module_name)
     gt_udf = getattr(module, f"gt_{interpretation_id}")
 
@@ -662,48 +661,22 @@ async def main():
         llm_method,
     )
 
-    """
-    Set up logging
-    """
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
+    # Set up logging
+    base_dir = os.path.join(
         "intent_ambiguity",
         dataset,
         udf_name,
         config_name,
     )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "interpretation={}-run={}.log".format(interpretation_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "interpretation={}-run={}.log".format(interpretation_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
         Loader=yaml.FullLoader,
     )
 
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     registered_functions = registered_udfs_json[f"{dataset}_base"]
     if num_interpretations == 1 and not allow_kwargs_in_udf:
         registered_functions = []
@@ -739,7 +712,8 @@ async def main():
         allow_kwargs_in_udf,
         llm_method,
         is_async,
-        openai_model_name
+        openai_model_name,
+        test_with_gt=False,
     )
 
     logger.info(f"UDF generation started")

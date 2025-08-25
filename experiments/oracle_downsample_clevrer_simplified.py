@@ -8,7 +8,7 @@ import json
 from sklearn.metrics import f1_score, precision_score, recall_score
 import torch
 from openai import OpenAI, AsyncOpenAI
-from vocaludf.utils import StreamToLogger, exception_hook, get_active_domain, parse_signature, duckdb_execute_video_materialize
+from vocaludf.utils import setup_logging, get_active_domain, parse_signature, duckdb_execute_video_materialize
 import sys
 import resource
 import duckdb
@@ -18,11 +18,13 @@ from vocaludf.parser import parse
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 def using(point=""):
     usage=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
-class Gpt4vConceptQueryExecutor(QueryExecutor):
+class Gpt4oConceptQueryExecutor(QueryExecutor):
     def __init__(self, config, dataset, object_domain, relationship_domain, attribute_domain, registered_functions, available_udf_names, sampling_rate, input_vids):
         self.test_data_init_time = 0
         self.query_execution_time = 0
@@ -49,21 +51,14 @@ class Gpt4vConceptQueryExecutor(QueryExecutor):
         return self.cost_estimation
 
     def init_table(self):
-        metadata_join_clause = '' if self.dataset in ['clevr', 'clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
-        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevr', 'clevrer'] else 'm.height AS height, m.width AS width'
-        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevr', 'clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
+        metadata_join_clause = '' if self.dataset in ['clevrer'] else f'LEFT OUTER JOIN {self.dataset}_metadata m ON o1.vid = m.vid AND o1.fid = m.fid'
+        height_width_clause = '320 AS height, 480 AS width' if self.dataset in ['clevrer'] else 'm.height AS height, m.width AS width'
+        group_by_clause = 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2' if self.dataset in ['clevrer'] else 'o1.vid, o1.fid, o1.oid, o1.oname, o1.x1, o1.y1, o1.x2, o1.y2, m.height, m.width'
 
         attr_parameters = ','.join('?' for _ in self.attribute_domain)
         vid_parameters = ','.join('?' for _ in self.input_vids)
-        # self.conn.execute(f"CREATE TEMPORARY TABLE obj_attr_filtered AS SELECT * FROM one_object WHERE vid = ANY([{parameters}]);", input_vids)
         if self.dataset == 'clevrer':
             where_clause = f"WHERE o1.vid = ANY([{vid_parameters}]) AND o1.fid % {self.sampling_rate} = 0"
-        # elif self.dataset == 'charades':
-        #     where_clause = f"WHERE o1.vid >= 4800 AND o1.vid < 9601"
-        # elif self.dataset == 'cityflow':
-        #     where_clause = f"WHERE o1.vid >= 824 AND o1.vid < 1648"
-        # else:
-        #     where_clause = ""
         else:
             raise ValueError("Unknown dataset: {}".format(self.dataset))
         sql = f"""
@@ -87,18 +82,6 @@ class Gpt4vConceptQueryExecutor(QueryExecutor):
             attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid = ANY([{vid_parameters}]) AND fid % {self.sampling_rate} = 0"
             obj_where_clause = f"WHERE vid = ANY([{vid_parameters}]) AND fid % {self.sampling_rate} = 0"
             rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid = ANY([{vid_parameters}]) AND fid % {self.sampling_rate} = 0"
-        # elif self.dataset == 'charades':
-        #     attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 4800 AND vid < 9601"
-        #     obj_where_clause = "WHERE vid >= 4800 AND vid < 9601"
-        #     rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 4800 AND vid < 9601"
-        # elif self.dataset == 'cityflow':
-        #     attr_where_clause = f"WHERE aname = ANY([{attr_parameters}]) AND vid >= 824 AND vid < 1648"
-        #     obj_where_clause = "WHERE vid >= 824 AND vid < 1648"
-        #     rel_where_clause = f"WHERE rname = ANY([{rel_parameters}]) AND vid >= 824 AND vid < 1648"
-        # else:
-        #     attr_where_clause = f"WHERE aname = ANY([{attr_parameters}])"
-        #     obj_where_clause = ""
-        #     rel_where_clause = f"WHERE rname = ANY([{rel_parameters}])"
         else:
             raise ValueError("Unknown dataset: {}".format(self.dataset))
         sql = f"""
@@ -192,40 +175,15 @@ def main():
 
     input_vids = [i for i in range(9500, 10000)]
 
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
-    """
-    Set up logging
-    """
+    # Set up logging
     base_dir = os.path.join(
         "oracle_clevrer_simplified",
         query_filename,
     )
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
-        base_dir
-    )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-sampling_rate={}.log".format(query_id, sampling_rate)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "qid={}-sampling_rate={}.log".format(query_id, sampling_rate)
+    setup_logging(config, base_dir, log_filename, logger)
 
     with open(os.path.join(config['data_dir'], "clevrer", f"{query_filename}.json"), "r") as f:
         input_query = json.load(f)['questions'][query_id]
@@ -235,7 +193,7 @@ def main():
     logger.info("vids: {}".format(input_vids))
     logger.info("y_true: {}".format(y_true))
 
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     registered_functions = registered_udfs_json[f"{dataset}_base"]
     new_modules = input_query["new_modules"]
     for new_module in new_modules:
@@ -252,7 +210,7 @@ def main():
 
     # Step 4: Execute the query
     _start = time.time()
-    qe = Gpt4vConceptQueryExecutor(
+    qe = Gpt4oConceptQueryExecutor(
         config,
         dataset,
         object_domain,
