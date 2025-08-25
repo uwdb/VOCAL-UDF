@@ -2,7 +2,7 @@ import ast
 import yaml
 import random
 import json
-from vocaludf.utils import StreamToLogger, exception_hook, parse_signature
+from vocaludf.utils import StreamTee, exception_hook, parse_signature
 import logging
 import numpy as np
 import argparse
@@ -47,25 +47,19 @@ def main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf, num_par
         file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
         file_handler.setLevel(logging.DEBUG)
 
-        # Create a console handler with a higher log level
-        # console_handler = logging.StreamHandler()
-        # console_handler.setLevel(logging.DEBUG)
-
         # Create formatters and add them to the handlers
         formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
         file_handler.setFormatter(formatter)
-        # console_handler.setFormatter(formatter)
 
         # Add the handlers to the logger
         logger = logging.getLogger(f"vocaludf_{query_filename}_{query_id}_{run_id}")
         logger.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
 
-        # logger.addHandler(console_handler)
-        sys.stdout = StreamToLogger(logger, logging.INFO)
-        sys.stderr = StreamToLogger(logger, logging.ERROR)
+        sys.stdout = StreamTee(logger, logging.DEBUG, sys.__stdout__)
+        sys.stderr = StreamTee(logger, logging.ERROR, sys.__stderr__)
         sys.excepthook = exception_hook
 
         if dataset == "clevrer":
@@ -104,7 +98,7 @@ def main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf, num_par
         udf_logs = {}
         current_udf_idx = 0
         for i, line in enumerate(lines):
-            if "compute test F1 score" in line:
+            if "Computing test F1 score" in line:
                 start = i
             if "Best: " in line:
                 end = i
@@ -199,15 +193,12 @@ def main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf, num_par
 
 
 if __name__ == '__main__':
-    # clevrer: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --n_train_distill 100 --selection_strategy "both" --llm_method "gpt4v"
-    # charades: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "charades" --query_filename "unavailable=2-npred=4-nobj_pred=1-nvars=3-depth=2" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v"
-    # cityflow: python evaluate_best_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v"
     # CLEVRER
     dataset = "clevrer"
     query_filename = "3_new_udfs_labels"
     for query_id in range(30):
         for run_id in range(3):
-            main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=20, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=True, program_with_pretrained_models=False, n_train_distill=100, selection_strategy="both")
+            main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=20, n_selection_samples=500, llm_method="gpt", num_interpretations=10, program_with_pixels=True, program_with_pretrained_models=False, n_train_distill=100, selection_strategy="both")
 
     # Charades
     dataset = "charades"
@@ -219,7 +210,7 @@ if __name__ == '__main__':
     for query_filename in query_filenames:
         for query_id in range(10):
             for run_id in range(3):
-                main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both")
+                main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both")
 
     # CityFlow
     dataset = "cityflow"
@@ -230,4 +221,4 @@ if __name__ == '__main__':
     for query_filename in query_filenames:
         for query_id in range(15):
             for run_id in range(3):
-                main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt4v", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both")
+                main(query_id, run_id, dataset, query_filename, allow_kwargs_in_udf=True, num_parameter_search=5, labeling_budget=50, n_selection_samples=500, llm_method="gpt", num_interpretations=10, program_with_pixels=False, program_with_pretrained_models=False, n_train_distill=500, selection_strategy="both")
