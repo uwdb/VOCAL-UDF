@@ -1,7 +1,7 @@
 import yaml
 import random
 import json
-from vocaludf.utils import parse_signature, StreamToLogger, exception_hook, get_active_domain
+from vocaludf.utils import parse_signature, StreamTee, exception_hook, get_active_domain
 import logging
 import numpy as np
 import argparse
@@ -100,7 +100,7 @@ async def main():
     parser.add_argument("--program_with_pretrained_models", action="store_true", help="program with pretrained models")
     parser.add_argument("--n_train_distill", type=int, help="number of training samples for distillation")
     parser.add_argument("--selection_strategy", type=str, choices=["program", "model", "llm", "both"], default="model", help="strategy for UDF selection")
-    parser.add_argument("--llm_method", type=str, choices=["gpt4v", "llava"], default="gpt4v", help="LLM method for distill model annotations")
+    parser.add_argument("--llm_method", type=str, choices=["gpt", "llava"], default="gpt", help="LLM method for distill model annotations")
     parser.add_argument("--is_async", action="store_true", help="use async for distilled-model UDF labeling")
     parser.add_argument("--openai_model_name", type=str, help="OpenAI model name")
 
@@ -158,23 +158,17 @@ async def main():
     file_handler = logging.FileHandler(os.path.join(log_dir, "qid={}-run={}.log".format(query_id, run_id)), mode="w")
     file_handler.setLevel(logging.DEBUG)
 
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
     # Create formatters and add them to the handlers
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
 
     # Add the handlers to the logger
     logger.addHandler(file_handler)
 
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
+    sys.stdout = StreamTee(logger, logging.DEBUG, sys.__stdout__)
+    sys.stderr = StreamTee(logger, logging.ERROR, sys.__stderr__)
     sys.excepthook = exception_hook
 
     prompt_config = yaml.load(
@@ -208,6 +202,7 @@ async def main():
             proposed_functions = ast.literal_eval(proposed_functions)
             break
 
+    logger.debug("openai_model_name: {}".format(openai_model_name))
     logger.info("Proposed functions: {}".format(proposed_functions))
 
     registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))

@@ -5,6 +5,9 @@
 - [ ] Figure 6(a)
 - [ ] Figure 6(b)
 - [x] Table 5
+- [x] Table 6
+- [x] Table 8, 9
+- [x] Table 7
 
 Scripts to run experiments are located in the `scripts/experiments` directory. Jupyter notebooks to visualize results are located in the `experiments/analysis` directory. Modify the `project_root` variable in each Jupyter notebook as necessary.
 
@@ -58,5 +61,31 @@ This experiment uses OpenAI’s Batch API that offers 50% lower cost.
 1. Visualize results: `experiments/analysis/mircobenchmark.ipynb`, "Proposing UDFs" section
 
 ## UDF generation (Table 6, Figure 8, Table 7)
+1. Run experiments
+```bash
+./scripts/reproduce/model_udf_labeling_quality/exp-model_udf.sh
+```
 
-## UDF selection (Table 8, Table 9, Figure 9, Figure 10)
+2. Visualize results:
+- Table 6 (left columns): `experiments/analysis/mircobenchmark.ipynb`, "Program-based UDFs" section
+- Table 6 (right columns): `experiments/analysis/mircobenchmark.ipynb`, "Distilled-model UDFs" section
+- Table 7: `experiments/analysis/mircobenchmark.ipynb`, "Labeling quality" section
+
+## UDF selection: selection strategy (Table 8, Table 9)
+1. Run the following command to post-process the log files:
+```bash
+python experiments/evaluate_best_udf_type.py
+```
+
+2. Run experiments with `llm` UDF generation strategy:
+```bash
+./scripts/reproduce/llm_decides_udf_type/exp-llm_decides_udf_type_clevrer.sh
+./scripts/reproduce/llm_decides_udf_type/exp-llm_decides_udf_type_cityflow_charades.sh
+```
+
+3. Visualize results:
+- Table 8 (left columns), Table 9: `experiments/analysis/mircobenchmark.ipynb`, "Selection Strategy" section
+- Table 8 (right columns): `experiments/analysis/mircobenchmark.ipynb`, "Selected UDF type distribution" section
+
+
+## UDF selection (Figure 9, Figure 10)
