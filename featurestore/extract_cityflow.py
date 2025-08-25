@@ -126,7 +126,6 @@ def extract_attribute_features(conn, config, batch_size, num_threads, dataset="c
         image_patches = []
         for i in range(len(batch_vnames)):
             rois = []
-            print("batch_vnames[i]", batch_vnames[i])
             vid = vname_to_vid_fid[batch_vnames[i]]["vid"]
             fid = vname_to_vid_fid[batch_vnames[i]]["fid"]
             if (vid, fid) not in df_grouped.groups:
