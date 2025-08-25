@@ -18,6 +18,8 @@ client = OpenAI()
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 class LlmDecidesUdfType(UDFGenerator):
     def __init__(
         self,
@@ -82,7 +84,7 @@ async def main():
     # cityflow: python evaluate_llm_decides_udf_type.py --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4-turbo-2024-04-09"
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
     parser = argparse.ArgumentParser()
     parser.add_argument("--query_id", type=int, help="query id")
@@ -208,7 +210,8 @@ async def main():
 
     logger.info("Proposed functions: {}".format(proposed_functions))
 
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
+
     registered_functions = registered_udfs_json[f"{dataset}_base"]
     new_modules = input_query["new_modules"]
     assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"

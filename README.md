@@ -27,6 +27,11 @@ To use OpenAI models, follow the instructions [here](https://platform.openai.com
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
+Run the following command to export the project root directory:
+```sh
+export PROJECT_ROOT="$(pwd)"
+```
+
 Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
 ```sh
 # Uncomment the corresponding lines in data/models/save_model.py to download the models you need
@@ -36,7 +41,13 @@ python data/models/save_model.py
 ## Prepare Data
 
 ### CLEVRER
-1. Download the CLEVRER dataset from [here](http://data.csail.mit.edu/clevrer/videos/train/video_train.zip). Place the videos in `data/clevrer/`.
+1. Download the CLEVRER dataset from [here](http://data.csail.mit.edu/clevrer/videos/train/video_train.zip). Place the videos in `data/clevrer/` and unzip.
+```sh
+# Download the dataset using command line
+cd data/clevrer
+curl -L -O http://data.csail.mit.edu/clevrer/videos/train/video_train.zip
+unzip video_train.zip
+```
 2. Extract the frames from the videos using the following command. This will create a `video_frames` directory in `data/clevrer/`.
 ```sh
 cd data/clevrer
@@ -98,8 +109,14 @@ python extract_cityflow.py --method "relationship"
 ```
 
 ### Charades
-1. Download the Charades dataset (scaled to 480p) from [here](https://prior.allenai.org/projects/charades). Place the videos in `data/charades/`.
-2. Download Action Genome annotations from [here](https://drive.google.com/drive/folders/1LGGPK_QgGbh9gH9SDFv_9LIhBliZbZys?usp=sharing). Place the annotations in `data/charades/`.
+1. Download the Charades dataset (scaled to 480p) from [here](https://prior.allenai.org/projects/charades). Place the videos in `data/charades/` and unzip.
+```sh
+# Download the dataset using command line
+cd data/charades
+curl -L -O https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/Charades_v1_480.zip
+unzip Charades_v1_480.zip
+```
+2. Download `frame_list.txt` from Action Genome annotations ([here](https://drive.google.com/drive/folders/1LGGPK_QgGbh9gH9SDFv_9LIhBliZbZys?usp=sharing)). Place the annotations in `data/charades/`.
 3. Extract the frames from the videos using the following command. This will create a `frames` directory in `data/charades/`.
 ```sh
 cd data/charades
@@ -115,7 +132,7 @@ python load_charades.py
 ```sh
 cd featurestore
 # Extract relationship features (about 15GB; takes around 2 hours). Charades has no attribute features
-python extract_cityflow.py --include_text_features
+python extract_charades.py --include_text_features
 ```
 
 ## Example Usage
@@ -166,7 +183,7 @@ python experiments/run_query_executor.py \
 ```
 
 ## Reproduce Experiments
-The experiment scripts are located in the `scripts/experiments` directory.
+The experiment scripts are located in the `scripts/experiments` directory. See `experiments/README.md` for more details.
 
 ## Work with Your Own Queries
 We provide a Command-Line Interface (CLI) to process your own queries over the CLEVRER, CityFlow-NL, and Charades datasets.

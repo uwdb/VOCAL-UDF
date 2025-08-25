@@ -5,8 +5,10 @@ import yaml
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+project_root = os.getenv("PROJECT_ROOT")
+
 config = yaml.safe_load(
-    open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+    open(os.path.join(project_root, "configs", "config.yaml"), "r")
 )
 
 # Download and save the CLIP model

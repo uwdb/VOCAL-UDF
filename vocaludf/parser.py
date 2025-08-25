@@ -124,7 +124,7 @@ if __name__ == "__main__":
 
 
     # unit tests for UDF
-    test_udf("object(o1, oname)", {'fn_name': 'object', 'variables': ['o1'], 'parameter': 'oname'})
+    test_udf("object(o1, 'bike')", {'fn_name': 'object', 'variables': ['o1'], 'parameter': 'bike'})
     test_udf("Color_red(o1)", {'fn_name': 'Color_red', 'variables': ['o1']})
     test_udf("Color_red(o1, o2)", {'fn_name': 'Color_red', 'variables': ['o1', 'o2']})
     test_udf("Color_red(o1, -1)", {'fn_name': 'Color_red', 'variables': ['o1'], 'parameter': -1})

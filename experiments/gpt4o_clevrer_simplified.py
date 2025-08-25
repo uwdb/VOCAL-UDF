@@ -2,25 +2,20 @@ import argparse
 import logging
 import yaml
 import os
-from PIL import Image
 from tqdm import tqdm
 import json
-from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
-import torch
+from sklearn.metrics import f1_score
 from openai import OpenAI
 import base64
-import requests
-import numpy as np
-import cv2
-from io import BytesIO
-from vocaludf.utils import StreamToLogger, exception_hook, MODEL_COST, RESOLVE_MODEL_NAME
-import sys
+from vocaludf.utils import MODEL_COST, RESOLVE_MODEL_NAME, setup_logging
 # https://cookbook.openai.com/examples/gpt_with_vision_for_video_understanding
 
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
 client = OpenAI()
+
+project_root = os.getenv("PROJECT_ROOT")
 
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
@@ -67,44 +62,15 @@ def process_video(vid, prompt, pred_positive_videos, run_id, video_frames_dir, o
     return request_line
 
 def submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name):
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
-    """
-    Set up logging
-    """
+    # Set up logging
     base_dir = os.path.join(
-        "gpt4v_clevrer_simplified",
+        "gpt4o_clevrer_simplified",
         query_filename,
     )
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
-        base_dir
-    )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "batch_tasks_qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "batch_tasks_qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     with open(os.path.join(config['data_dir'], "clevrer", f"{query_filename}.json"), "r") as f:
         input_query = json.load(f)['questions'][query_id]
@@ -129,7 +95,7 @@ def submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name
         for vid in vids:
             task = process_video(vid, prompt, pred_positive_videos, run_id, video_frames_dir, openai_model_name)
             tasks.append(task)
-        file_name = os.path.join(log_dir, f"batch_tasks_qid={query_id}-run={run_id}-chunk={chunk_id}.jsonl")
+        file_name = os.path.join(config["log_dir"], base_dir, f"batch_tasks_qid={query_id}-run={run_id}-chunk={chunk_id}.jsonl")
         with open(file_name, 'w') as file:
             for obj in tasks:
                 file.write(json.dumps(obj) + '\n')
@@ -155,48 +121,19 @@ def submit_batch(input_vids, run_id, query_id, query_filename, openai_model_name
 
 
 def retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_name):
-    config = yaml.safe_load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r"))
+    config = yaml.safe_load(open(os.path.join(project_root, "configs", "config.yaml"), "r"))
 
-    """
-    Set up logging
-    """
+    # Set up logging
     base_dir = os.path.join(
-        "gpt4v_clevrer_simplified",
+        "gpt4o_clevrer_simplified",
         query_filename,
     )
-    # Create a directory if it doesn't already exist
-    log_dir = os.path.join(
-        config["log_dir"],
-        base_dir
-    )
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create a file handler that logs even debug messages
-    file_handler = logging.FileHandler(os.path.join(log_dir, "batch_job_results_qid={}-run={}.log".format(query_id, run_id)), mode="w")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create a console handler with a higher log level
-    # console_handler = logging.StreamHandler()
-    # console_handler.setLevel(logging.DEBUG)
-
-    # Create formatters and add them to the handlers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    # console_handler.setFormatter(formatter)
-
-    # Add the handlers to the logger
-    logger.addHandler(file_handler)
-
-    # logger.addHandler(console_handler)
-    sys.stdout = StreamToLogger(logger, logging.INFO)
-    sys.stderr = StreamToLogger(logger, logging.ERROR)
-    sys.excepthook = exception_hook
+    log_filename = "batch_job_results_qid={}-run={}.log".format(query_id, run_id)
+    setup_logging(config, base_dir, log_filename, logger)
 
     # Retrieve the batch job id from the log file
     batch_job_ids = []
-    with open(os.path.join(log_dir, f"batch_tasks_qid={query_id}-run={run_id}.log"), "r") as file:
+    with open(os.path.join(config["log_dir"], base_dir, f"batch_tasks_qid={query_id}-run={run_id}.log"), "r") as file:
         # 2024-10-09 01:24:21,952 - vocaludf - INFO - batch_job.id: batch_67063db5c3ac819086795833bdc76d73
         lines = file.readlines()
         for line in lines:
@@ -223,7 +160,7 @@ def retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_na
         result = client.files.content(result_file_id).content
 
         mode = 'wb' if chunk_idx == 0 else 'ab'
-        result_file_name = os.path.join(log_dir, f"batch_job_results_qid={query_id}-run={run_id}.jsonl")
+        result_file_name = os.path.join(config["log_dir"], base_dir, f"batch_job_results_qid={query_id}-run={run_id}.jsonl")
 
         with open(result_file_name, mode) as file:
             file.write(result)
@@ -268,12 +205,12 @@ def retrieve_batch(input_vids, run_id, query_id, query_filename, openai_model_na
     logger.info(f"estimated_cost: {estimated_cost}")
 
 if __name__ == "__main__":
-    # python gpt4v_clevrer_simplified.py --query_id 0 --run_id 0 --query_filename "simplified_3_new_udfs_labels" --openai_model_name "gpt-4o" --stage "submit"
+    # python gpt4o_clevrer_simplified.py --query_id 0 --run_id 0 --query_filename "simplified_3_new_udfs_labels" --openai_model_name "gpt-4o" --stage "submit"
     parser = argparse.ArgumentParser()
     parser.add_argument('--query_id', type=int, help='query id')
     parser.add_argument('--run_id', type=int, help='run id')
     parser.add_argument('--query_filename', type=str, help='query filename')
-    parser.add_argument("--openai_model_name", type=str, default="gpt-4-turbo-2024-04-09", help="OpenAI model name")
+    parser.add_argument("--openai_model_name", type=str, default="gpt-4o", help="OpenAI model name")
     parser.add_argument("--stage", type=str, help="Stage: submit or retrieve")
     args = parser.parse_args()
     query_id = args.query_id

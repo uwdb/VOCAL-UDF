@@ -12,12 +12,15 @@ from vocaludf.utils import setup_logging
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 if __name__ == '__main__':
     # python run_query_executor.py --num_missing_udfs 3 --query_id 2 --run_id 3 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5 --num_workers 8 --n_train_distill 100 --selection_strategy "both" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt"
     # python run_query_executor.py --num_missing_udfs 2 --run_id 0 --query_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --num_workers 8 --n_train_distill 500 --selection_strategy "both" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt"
+    # python run_query_executor.py --num_missing_udfs 2 --run_id 0 --query_id 3 --dataset "charades" --query_filename "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf --num_parameter_search 5 --num_workers 8 --n_train_distill 500 --selection_strategy "both" --pred_batch_size 4096 --dali_batch_size 1 --llm_method "gpt"
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
 
     parser = argparse.ArgumentParser()

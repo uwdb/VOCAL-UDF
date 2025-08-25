@@ -22,12 +22,13 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import yaml
 from tqdm import tqdm
-import time
 import math
 import torchvision.transforms as T
 import string
 import random
 import shutil
+
+project_root = os.getenv("PROJECT_ROOT")
 
 def expand_box(x1,y1,x2,y2,img_size,factor=1.5):
     H, W = img_size
@@ -50,8 +51,8 @@ def _compute_new_box_after_crop(row, image_size):
     w_ratio = 224.0 / (max(o1_x2, o2_x2) - x_offset)
     return (row['o1_x1'] - x_offset) * w_ratio, (row['o1_y1'] - y_offset) * h_ratio, (row['o1_x2'] - x_offset) * w_ratio, (row['o1_y2'] - y_offset) * h_ratio, (row['o2_x1'] - x_offset) * w_ratio, (row['o2_y1'] - y_offset) * h_ratio, (row['o2_x2'] - x_offset) * w_ratio, (row['o2_y2'] - y_offset) * h_ratio
 
-def get_frame(vname):
-    image_directory = "/gscratch/balazinska/enhaoz/VOCAL-UDF/data/cityflow/data"
+def get_frame(vname, config):
+    image_directory = config["cityflow"]["video_dir"]
     image_file = os.path.join(
         image_directory,
         vname
@@ -110,11 +111,8 @@ def extract_attribute_features(conn, config, batch_size, num_threads, dataset="c
     partition_id = 0
     bytes_written = 0
     writer = pq.ParquetWriter(feature_file_path, schema=schema)
-    time4 = time.time()
     for batch_start in tqdm(range(0, num_samples, batch_size)):
         batch_end = batch_start + batch_size
-        time0 = time.time()
-        print("time0", time0 - time4)
 
         batch_vnames = vnames[batch_start:batch_end]
 
@@ -126,20 +124,16 @@ def extract_attribute_features(conn, config, batch_size, num_threads, dataset="c
         parquet_x2s = []
         parquet_y2s = []
         image_patches = []
-        df_time = 0
         for i in range(len(batch_vnames)):
             rois = []
-            df_start = time.time()
-            print("batch_vnames[i]", batch_vnames[i])
             vid = vname_to_vid_fid[batch_vnames[i]]["vid"]
             fid = vname_to_vid_fid[batch_vnames[i]]["fid"]
             if (vid, fid) not in df_grouped.groups:
                 continue
             res = df_grouped.get_group((vid, fid))
-            frame = get_frame(batch_vnames[i])
+            frame = get_frame(batch_vnames[i], config)
             _H, _W, _C = frame.shape
             # NOTE: Due to data noise, multiple objects can have the same oid
-            df_time += time.time() - df_start
             for _, row in res.iterrows():
                 x1, y1, x2, y2 = expand_box(row['x1'], row['y1'], row['x2'], row['y2'], (_H, _W), factor=1)
                 rois.append([0, x1, y1, x2, y2])
@@ -153,7 +147,6 @@ def extract_attribute_features(conn, config, batch_size, num_threads, dataset="c
 
             single_frame = torch.tensor(frame, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device) # Shape: (1, C, H, W)
             if len(rois) == 0:
-                time4 = time.time()
                 continue
             rois_tensor = torch.tensor(rois, dtype=torch.float).to(device)
             # https://pytorch.org/vision/main/generated/torchvision.ops.roi_align.html
@@ -162,24 +155,13 @@ def extract_attribute_features(conn, config, batch_size, num_threads, dataset="c
             image_patches.append(signle_frame_patches)
 
         if len(image_patches) == 0:
-            time4 = time.time()
             continue
         image_patches = torch.cat(image_patches, dim=0)
 
-        print("df_time", df_time)
-
-        # show_sequence(image_patches, parquet_vids, parquet_fids, parquet_oids)
-        time1 = time.time()
-        print("time1", time1 - time0)
-
         # Run CLIP model
         inputs = transforms(image_patches)
-        time2 = time.time()
-        print("time2", time2 - time1)
-        time3 = time.time()
         with torch.no_grad():
             features = clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (batch_size, output_dim)
-        print("time3", time3 - time2)
 
         # Save into Parquet file
         # Split it if too large
@@ -195,8 +177,6 @@ def extract_attribute_features(conn, config, batch_size, num_threads, dataset="c
         batch = pa.record_batch([parquet_vids, parquet_fids, parquet_oids, parquet_x1s, parquet_y1s, parquet_x2s, parquet_y2s, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'feature'])
         writer.write_batch(batch)
         bytes_written += batch.nbytes
-        time4 = time.time()
-        print("time4", time4 - time3)
 
 def data_loader(conn, batch_size, patch_size, device, dataset="cityflow"):
     df_grouped = conn.execute(f"""
@@ -232,7 +212,7 @@ def data_loader(conn, batch_size, patch_size, device, dataset="cityflow"):
         if (vid, fid) not in df_grouped.groups:
             continue
         res = df_grouped.get_group((vid, fid))
-        frame = get_frame(vname)
+        frame = get_frame(vname, config)
         _H, _W, _C = frame.shape
         # NOTE: Due to data noise, multiple objects can have the same oid
         for _, row in res.iterrows():
@@ -327,16 +307,9 @@ def extract_relationship_features(conn, config, batch_size, num_threads, dataset
     partition_id = 0
     bytes_written = 0
     writer = pq.ParquetWriter(feature_file_path, schema=schema)
-    time4 = time.time()
 
     for data in data_loader(conn, batch_size, patch_size, device, dataset):
         parquet_vids, parquet_fids, parquet_o1_oids, parquet_o1_x1s, parquet_o1_y1s, parquet_o1_x2s, parquet_o1_y2s, parquet_o2_oids, parquet_o2_x1s, parquet_o2_y1s, parquet_o2_x2s, parquet_o2_y2s, batch_boxes, image_patches = data
-        time0 = time.time()
-        print("time0", time0 - time4)
-
-        # show_sequence(image_patches, parquet_vids, parquet_fids, parquet_o1_oids, parquet_o2_oids)
-        time1 = time.time()
-        print("time1", time1 - time0)
 
         # Run CLIP model
         batch_frames = image_patches.clone()
@@ -350,16 +323,10 @@ def extract_relationship_features(conn, config, batch_size, num_threads, dataset
         batch_frames_subject = batch_frames * subject_masks.unsqueeze(1).expand(N, C, H, W)
         batch_frames_target = batch_frames * target_masks.unsqueeze(1).expand(N, C, H, W)
         images = torch.cat([batch_frames, batch_frames_subject, batch_frames_target], dim=0) # (3N, C, H, W)
-        time2 = time.time()
-        print("time2", time2 - time1)
         inputs = transforms(images)
-        time2_5 = time.time()
-        print("time2_5", time2_5 - time2)
         with torch.no_grad():
             outputs = clip_model.get_image_features(pixel_values=inputs) # torch.FloatTensor of shape (3N, 512)
         features = outputs.reshape(3, N, -1).permute(1, 0, 2).reshape(N, -1) # (N, 3 * 512)
-        time3 = time.time()
-        print("time3", time3 - time2_5)
 
         # Save into Parquet file
         # Split it if too large
@@ -375,8 +342,6 @@ def extract_relationship_features(conn, config, batch_size, num_threads, dataset
         batch = pa.record_batch([parquet_vids, parquet_fids, parquet_o1_oids, parquet_o1_x1s, parquet_o1_y1s, parquet_o1_x2s, parquet_o1_y2s, parquet_o2_oids, parquet_o2_x1s, parquet_o2_y1s, parquet_o2_x2s, parquet_o2_y2s, features], names=['vid', 'fid', 'o1_oid', 'o1_x1', 'o1_y1', 'o1_x2', 'o1_y2', 'o2_oid', 'o2_x1', 'o2_y1', 'o2_x2', 'o2_y2', 'feature'])
         writer.write_batch(batch)
         bytes_written += batch.nbytes
-        time4 = time.time()
-        print("time4", time4 - time3)
 
 def show_sequence(sequence, parquet_vids, parquet_fids, parquet_o1_oids, parquet_o2_oids=None):
     sequence = sequence.permute(0, 2, 3, 1).cpu().numpy()
@@ -403,9 +368,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     method = args.method
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
-    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    db_dir = config["db_dir"]
+    conn = duckdb.connect(database=os.path.join(db_dir, "annotations.duckdb"), read_only=True)
 
     print("pa.cpu_count()", pa.cpu_count())
     print("pa.io_thread_count()", pa.io_thread_count())

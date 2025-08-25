@@ -32,6 +32,8 @@ from torchvision.io import read_image, ImageReadMode
 
 logger = logging.getLogger(__name__)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 def remove_duplicates(query):
     for item in query:
         scene_graph = item['scene_graph']
@@ -66,13 +68,12 @@ class CityFlowImageDataset(Dataset):
 def ClevrerDaliDataloader(
     vids,
     sequence_length=64,
-    video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/clevrer/",
     device='gpu',
     batch_size=None,
     num_threads=None,
 ):
     assert device == 'gpu', 'dali video_resize only supports gpu backend'
-
+    video_directory = config["clevrer"]["video_dir"]
     video_files = [
         os.path.join(
             video_directory,
@@ -111,13 +112,13 @@ def ClevrerDaliDataloader(
 def CharadesDaliDataloader(
     vids,
     sequence_length=64,
-    video_directory="/gscratch/balazinska/enhaoz/VOCAL-UDF/data/charades/Charades_v1_480",
     device='gpu',
     batch_size=None,
     num_threads=None,
 ):
     assert device == 'gpu', 'dali video_resize only supports gpu backend'
-    conn = duckdb.connect(database="/gscratch/balazinska/enhaoz/VOCAL-UDF/duckdb_dir/annotations.duckdb", read_only=True)
+    video_directory = config["charades"]["video_dir"]
+    conn = duckdb.connect(database=os.path.join(config["db_dir"], "annotations.duckdb"), read_only=True)
     df_metadata = conn.execute(f"""
         SELECT DISTINCT vname, vid
         FROM charades_metadata

@@ -16,6 +16,8 @@ import duckdb
 logger = logging.getLogger("vocaludf")
 logger.setLevel(logging.DEBUG)
 
+project_root = os.getenv("PROJECT_ROOT")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_missing_udfs", type=int, help="number of missing UDFs")
@@ -38,7 +40,7 @@ if __name__ == '__main__':
     openai_model_name = args.openai_model_name
 
     config = yaml.safe_load(
-        open("/gscratch/balazinska/enhaoz/VOCAL-UDF/configs/config.yaml", "r")
+        open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
     program_with_pixels = False
     num_workers = args.num_workers
@@ -48,16 +50,8 @@ if __name__ == '__main__':
     gt_dsl = input_query['dsl']
     user_query = input_query["question"]
     positive_videos = input_query["positive_videos"]
-    if dataset in ["gqa", "vaw"]: # Deprecated
-        conn = duckdb.connect(
-            database=os.path.join(config["db_dir"], "annotations.duckdb"),
-            read_only=True,
-        )
-        vids = conn.execute(f"SELECT DISTINCT vid FROM {dataset}_metadata ORDER BY vid ASC").df()["vid"].tolist()
-        y_true = [1 if vid in positive_videos else 0 for vid in vids]
-    else:
-        # Evaluate on the second half of the dataset (test split)
-        y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
+    # Evaluate on the second half of the dataset (test split)
+    y_true = [1 if i in positive_videos else 0 for i in range(config[dataset]["dataset_size"] // 2, config[dataset]["dataset_size"])]
 
     """
     Set up logging
@@ -101,7 +95,7 @@ if __name__ == '__main__':
         Loader=yaml.FullLoader,
     )
 
-    registered_udfs_json = json.load(open("/gscratch/balazinska/enhaoz/VOCAL-UDF/vocaludf/registered_udfs.json", "r"))
+    registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
     if "single_semantic" in query_filename:
         # Unused for now
         registered_functions = [{
