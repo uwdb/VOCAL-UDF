@@ -8,7 +8,7 @@ A prototype implementation of VOCAL-UDF, which is a self-enhancing video data ma
 
 ## Setup Instructions
 
-The project uses `conda` to manage dependencies. To install conda, follow the instructions [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/).
+1. The project uses `conda` to manage dependencies. To install conda, follow the instructions [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/).
 
 ```sh
 # Clone the repository
@@ -21,22 +21,24 @@ conda activate vocal-udf
 python -m pip install -e .
 ```
 
-To use OpenAI models, follow the instructions [here](https://platform.openai.com/docs/libraries#create-and-export-an-api-key) to create and export an API key.
+2. To use OpenAI models, follow the instructions [here](https://platform.openai.com/docs/libraries#create-and-export-an-api-key) to create and export an API key.
 ```sh
 # Export the API key as an environment variable
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
-Run the following command to export the project root directory:
+3. Run the following command to export the project root directory:
 ```sh
 export PROJECT_ROOT="$(pwd)"
 ```
 
-Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
+4. Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
 ```sh
 # Uncomment the corresponding lines in data/models/save_model.py to download the models you need
 python data/models/save_model.py
 ```
+
+5. Modify the paths in `configs/config.yaml` to point to the correct directories on your machine.
 
 ## Prepare Data
 
