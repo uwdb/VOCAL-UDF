@@ -2,13 +2,14 @@
 
 - [x] Figure 5, 7
 - [x] Table 4
-- [ ] Figure 6(a)
-- [ ] Figure 6(b)
+- [x] Figure 6(a)
+- [x] Figure 6(b)
 - [x] Figure 8
 - [x] Table 5
 - [x] Table 6
 - [x] Table 8, 9
 - [x] Table 7
+- [ ] Figure 9, 10
 
 Scripts to run experiments are located in the `scripts/experiments` directory. Jupyter notebooks to visualize results are located in the `experiments/analysis` directory. Modify the `project_root` variable in each Jupyter notebook as necessary.
 
@@ -43,7 +44,7 @@ Scripts to run experiments are located in the `scripts/experiments` directory. J
 2. Visualize results: `experiments/analysis/mircobenchmark.ipynb`, "NL TO DSL" section
 
 ## Comparing with direct LLM methods (Figure 6)
-This experiment uses OpenAI’s Batch API that offers 50% lower cost.
+This experiment uses OpenAI’s Batch API that offers 50% lower cost and can take up to 24 hours to complete.
 
 1. Submit batch jobs
 ```bash
@@ -55,7 +56,13 @@ This experiment uses OpenAI’s Batch API that offers 50% lower cost.
 ./scripts/reproduce/naive_llm/exp-gpt4o_clevrer_simplified_retrieve.sh
 ```
 
-3. Visualize results
+3. Run other experiments
+```bash
+./scripts/reproduce/naive_llm/exp-vocal_udf_clevrer_simplified.sh
+./scripts/reproduce/naive_llm/exp-oracle_downsample_clevrer_simplified.sh
+```
+
+4. Visualize results: `experiments/analysis/vanilla_llm.ipynb`
 
 
 ## UDF proposal (Table 5)

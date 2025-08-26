@@ -222,7 +222,7 @@ class SimplifiedQueryExecutor(QueryExecutor):
 
         logger.info("building video dataloader")
         # Create DALI pipeline for loading video frames
-        pipe = ClevrerDaliDataloader(vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
+        pipe = ClevrerDaliDataloader(self.config, vids, sequence_length=128, batch_size=self.dali_batch_size, num_threads=1)
         video_iterator = DALIGenericIterator(
             [pipe],
             ['frames', 'vid', 'fid'],
