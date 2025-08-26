@@ -1,16 +1,5 @@
 # Reproduce Experiments
 
-- [x] Figure 5, 7
-- [x] Table 4
-- [x] Figure 6(a)
-- [x] Figure 6(b)
-- [x] Figure 8
-- [x] Table 5
-- [x] Table 6
-- [x] Table 8, 9
-- [x] Table 7
-- [ ] Figure 9, 10
-
 Scripts to run experiments are located in the `scripts/experiments` directory. Jupyter notebooks to visualize results are located in the `experiments/analysis` directory. Modify the `project_root` variable in each Jupyter notebook as necessary.
 
 ## End-to-end evaluation (Figure 5, Figure 7)

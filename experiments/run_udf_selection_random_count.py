@@ -34,7 +34,7 @@ def using(point=""):
 class RandomUDFSelector(UDFSelector):
     def random_count(self, gt_udf_name, n_obj, pos_count, neg_count):
         # Construct training data and test data
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, df_with_img_column=False)
+        df_train = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=None, df_with_img_column=False)
 
         # Select new video segments to label
         # TODO: df_train and llm_positive_df may contain the same tuples
@@ -175,12 +175,6 @@ async def main():
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
 
-    output_dir = os.path.join(
-        config["output_dir"],
-        base_dir
-    )
-    os.makedirs(output_dir, exist_ok=True)
-
     # Set up logging
     base_dir = os.path.join(
         "udf_generation",
@@ -191,6 +185,12 @@ async def main():
     )
     log_filename = "qid={}-run={}.log".format(query_id, run_id)
     setup_logging(config, base_dir, log_filename, logger)
+
+    output_dir = os.path.join(
+        config["output_dir"],
+        base_dir
+    )
+    os.makedirs(output_dir, exist_ok=True)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),

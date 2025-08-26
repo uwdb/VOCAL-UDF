@@ -29,34 +29,33 @@ def using(point=""):
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
 class ActiveUDFSelector(UDFSelector):
-    def _select(self, gt_udf_name, udf_candidate_list, df_with_img_column):
+    def _select(self, gt_udf_name, udf_candidate_list):
         if len(udf_candidate_list) == 0:
             return None
         # if len(udf_candidate_list) == 1:
         #     selected_udf_candidate = udf_candidate_list[0]
         # else:
-        udf_signature = udf_candidate_list[0].udf_signature
-        udf_name, udf_vars = parse_signature(udf_signature)
+        self.udf_signature = udf_candidate_list[0].udf_signature
+        udf_name, udf_vars = parse_signature(self.udf_signature)
         n_obj = len(udf_vars)
         # Add a dummy UDF that always returns True
-        udf_description = udf_candidate_list[0].udf_description
-        dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': udf_signature, 'udf_description': udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
+        self.udf_description = udf_candidate_list[0].udf_description
+        dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': self.udf_signature, 'udf_description': self.udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
         udf_candidate_list.append(dummy_udf)
 
         # Construct training data and test data
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, df_with_img_column=df_with_img_column)
+        df_train = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=None, df_with_img_column=False)
 
         # Select new video segments to label
         # TODO: df_train and llm_positive_df may contain the same tuples
         labeled_index = []
         llm_positive_labeled_index = []
         llm_negative_labeled_index = []
-        # TODO: perhaps regenerate one more UDF based on current labels after every k iterations
-
+        labeled_df = pd.DataFrame()
+        y_true = []
         sampling_strategy = SamplingStrategy.positive
         iter = 0
-        y_true = None
-        while (y_true is None) or sum(y_true) < 10:
+        while sum(y_true) < 10:
             logger.info("iter {}: {}".format(iter, sampling_strategy))
             _start_segment_selection_time_per_iter = time.time()
 
@@ -78,21 +77,15 @@ class ActiveUDFSelector(UDFSelector):
                 labeled_index += new_labeled_index
                 new_labeled_df = df_train.iloc[new_labeled_index]
             logger.info("# labeled segments {}".format(len(set(llm_positive_labeled_index)) + len(set(llm_negative_labeled_index)) + len(set(labeled_index))))
-            if n_obj == 1:
-                labeled_df_list = [df_train.iloc[labeled_index]['o1_gt_anames']]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df_list.append(self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_gt_anames'])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df_list.append(self.llm_negative_df.iloc[llm_negative_labeled_index]['o1_gt_anames'])
-                y_true = pd.Series([gt_udf_name in anames for anames in pd.concat(labeled_df_list)])
-            elif n_obj == 2:
-                labeled_df_list = [df_train.iloc[labeled_index]['o1_o2_gt_rnames']]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df_list.append(self.llm_positive_df.iloc[llm_positive_labeled_index]['o1_o2_gt_rnames'])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df_list.append(self.llm_negative_df.iloc[llm_negative_labeled_index]['o1_o2_gt_rnames'])
-                logger.debug(f"pd.concat(labeled_df_list): {pd.concat(labeled_df_list)}")
-                y_true = pd.Series([gt_udf_name in rnames for rnames in pd.concat(labeled_df_list)])
+
+            # Request labels from either user or ground truth
+            label = self.request_label(new_labeled_df, n_obj, gt_udf_name)
+            y_true.append(label)
+            # Load frame if df_with_img_column is True
+            if self.df_with_img_column:
+                new_labeled_df = new_labeled_df.copy()
+                new_labeled_df["img"] = list(map(self.frame_processing_for_program, new_labeled_df["vid"], new_labeled_df["fid"]))
+            labeled_df = pd.concat([labeled_df, new_labeled_df])
             # log number of positive and negative samples
             logger.info(
                 "# positive: {}, # negative: {}".format(
@@ -111,20 +104,15 @@ class ActiveUDFSelector(UDFSelector):
             # Update scores
             indices_to_remove = []
             for i in range(len(udf_candidate_list)):
-                labeled_df = [df_train.iloc[labeled_index]]
-                if self.llm_positive_df is not None and len(self.llm_positive_df):
-                    labeled_df.append(self.llm_positive_df.iloc[llm_positive_labeled_index])
-                if self.llm_negative_df is not None and len(self.llm_negative_df):
-                    labeled_df.append(self.llm_negative_df.iloc[llm_negative_labeled_index])
-                labeled_df = pd.concat(labeled_df)
                 try:
                     score, loss_t = self.compute_udf_score(
-                        gt_udf_name,
                         udf_candidate_list[i],
                         udf_name,
                         n_obj,
                         labeled_df,
+                        y_true,
                         new_labeled_df,
+                        label,
                         add_one=True, # add one to avoid zero f1 score
                     )
                     udf_candidate_list[i].score = score
@@ -160,67 +148,202 @@ def extract_udf_candidates(lines, udf_signature_to_gt_udf_name):
     results = {}
     gt_udf_name_to_best_ckpt = {}
     i = 0
+
+    # Old-format single-line matches (backward compatible)
+    old_info_re = re.compile(
+        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) - .* - INFO - '
+        r'\[(?P<sig>.*?)\] \[(?P<idx>\d+)\] (?P<field>\w+): (?P<val>.*)$'
+    )
+    old_ckpt_re = re.compile(
+        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) - .* - INFO - '
+        r'\[(?P<sig>.*?)\] Best model checkpoint: (?P<ckpt>.*)$'
+    )
+
+    # New-format anchors
+    # Example header we key off of:
+    # 2025-08-14 ... - vocaludf.async_udf_generator - INFO -
+    new_block_header_re = re.compile(
+        r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+ - .*async_udf_generator - INFO -\s*$'
+    )
+    # First non-empty line of block:
+    # [holding(o0, o1)] [id=0]
+    new_sig_id_re = re.compile(
+        r'^\[(?P<sig>.+?)\]\s+\[id=(?P<idx>\d+)\]\s*$'
+    )
+    # Field headers inside block:
+    # Semantic Interpretation: <one line text>
+    new_semantic_re = re.compile(r'^Semantic Interpretation:\s*(?P<txt>.*)\s*$')
+    # Function Implementation:  (code follows on subsequent lines)
+    new_func_header_re = re.compile(r'^Function Implementation:\s*$')
+    # Numeric Hyperparameters (kwargs): {...}   (possibly on one line)
+    new_kwargs_inline_re = re.compile(
+        r'^Numeric Hyperparameters\s*\(kwargs\):\s*(?P<val>.*)\s*$'
+    )
+
+    def _init_slot(sig, idx):
+        if sig not in results:
+            results[sig] = {}
+        if idx not in results[sig]:
+            results[sig][idx] = {}
+
     while i < len(lines):
         line = lines[i]
-        # Regular expression to match the log pattern
-        info_match = re.match(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) - .* - INFO - \[(.*?)\] \[(\d+)\] (\w+): (.*)$', line)
-        debug_match = re.match(
-            r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) - .* - DEBUG - \[(.*?)\] Best model checkpoint: (.*)$',
-            line
-        )
-        if info_match:
-            timestamp, udf_signature, idx, field_name, value = info_match.groups()
-            idx = int(idx)
-            # Initialize data structures if necessary
-            if udf_signature not in results:
-                results[udf_signature] = {}
-            if idx not in results[udf_signature]:
-                results[udf_signature][idx] = {}
-            if field_name == 'function_implementation':
-                # Read the function implementation, including subsequent lines
-                function_implementation = value + '\n'
+
+        # --- 1) Backward-compatible old single-line format ---
+        m_old = old_info_re.match(line)
+        if m_old:
+            sig = m_old.group('sig')
+            idx = int(m_old.group('idx'))
+            field = m_old.group('field')
+            val = m_old.group('val')
+            _init_slot(sig, idx)
+
+            if field == 'function_implementation':
+                # capture subsequent non-timestamp lines as body
+                func = val + '\n'
                 i += 1
                 while i < len(lines) and not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+', lines[i]):
-                    function_implementation += lines[i] + '\n'
-                    i +=1
-                results[udf_signature][idx][field_name] = function_implementation.rstrip('\n')
-                continue  # Skip incrementing i here because it's already done
-            elif field_name == 'kwargs':
-                # Read kwargs, possibly spanning multiple lines
-                kwargs_str = value
+                    func += lines[i] + '\n'
+                    i += 1
+                results[sig][idx][field] = func.rstrip('\n')
+                continue
+            elif field == 'kwargs':
+                # capture multiline kwargs until next timestamp
+                kwargs_str = val
                 i += 1
                 while i < len(lines) and not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+', lines[i]):
                     kwargs_str += '\n' + lines[i]
-                    i +=1
-                # Safely evaluate the kwargs string
+                    i += 1
                 try:
-                    kwargs = ast.literal_eval(kwargs_str)
-                except Exception as e:
-                    kwargs = {}
-                results[udf_signature][idx][field_name] = kwargs
+                    kwargs_val = ast.literal_eval(kwargs_str)
+                except Exception:
+                    kwargs_val = {}
+                results[sig][idx][field] = kwargs_val
                 continue
             else:
-                # For semantic_interpretation and other fields
-                results[udf_signature][idx][field_name] = value
-        elif debug_match:
-            timestamp, udf_signature, best_ckpt = debug_match.groups()
-            # Store the best_ckpt for the udf_signature; overwrite if multiple entries
-            gt_udf_name_to_best_ckpt[udf_signature_to_gt_udf_name[udf_signature]] = best_ckpt.strip()
+                results[sig][idx][field] = val
+                i += 1
+                continue
+
+        m_ckpt_old = old_ckpt_re.match(line)
+        if m_ckpt_old:
+            sig = m_ckpt_old.group('sig')
+            ckpt = m_ckpt_old.group('ckpt').strip()
+            if sig in udf_signature_to_gt_udf_name:
+                gt = udf_signature_to_gt_udf_name[sig]
+                gt_udf_name_to_best_ckpt[gt] = ckpt
+            i += 1
+            continue
+
+        # --- 2) New block format ---
+        # Look for the INFO header that introduces a block
+        if new_block_header_re.match(line):
+            # We expect the block to start within a few lines (skip blank lines)
+            i += 1
+            # Skip empty lines after header
+            while i < len(lines) and lines[i].strip() == '':
+                i += 1
+
+            if i >= len(lines):
+                break
+
+            # Parse "[<signature>] [id=<n>]"
+            m_sig = new_sig_id_re.match(lines[i])
+            if not m_sig:
+                # Not the UDF block we expected; move on.
+                # (This keeps the parser tolerant to unrelated INFO blocks.)
+                i += 1
+                continue
+
+            sig = m_sig.group('sig').strip()
+            idx = int(m_sig.group('idx'))
+            _init_slot(sig, idx)
+            i += 1
+
+            # Next expected lines inside the block (order is fixed per your example):
+            # 1) Semantic Interpretation: <text>
+            # (allow optional empty lines between sections)
+            while i < len(lines) and lines[i].strip() == '':
+                i += 1
+            if i < len(lines):
+                m_sem = new_semantic_re.match(lines[i])
+                if m_sem:
+                    results[sig][idx]['semantic_interpretation'] = m_sem.group('txt').strip()
+                    i += 1
+
+            # 2) Function Implementation: \n <code... until kwargs line or blank+timestamp>
+            while i < len(lines) and lines[i].strip() == '':
+                i += 1
+            func_body = None
+            if i < len(lines) and new_func_header_re.match(lines[i]):
+                i += 1  # move to first code line
+                func_lines = []
+                while i < len(lines):
+                    # Stop if we hit kwargs header, or a new timestamped log line, or a blank line
+                    if new_kwargs_inline_re.match(lines[i]):
+                        break
+                    if re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+', lines[i]):
+                        break
+                    # Allow empty lines within code
+                    if lines[i].strip() == '' and (i + 1 < len(lines) and lines[i+1].strip() == ''):
+                        # two consecutive blanks likely means block end; but keep one blank to be safe
+                        pass
+                    func_lines.append(lines[i])
+                    i += 1
+                func_body = '\n'.join(func_lines).rstrip('\n')
+                if func_body:
+                    results[sig][idx]['function_implementation'] = func_body
+
+            # 3) Numeric Hyperparameters (kwargs): {...}
+            if i < len(lines):
+                m_kwargs = new_kwargs_inline_re.match(lines[i])
+                if m_kwargs:
+                    kwargs_raw = m_kwargs.group('val').strip()
+                    # If kwargs spill to multiple lines (rare), capture until blank/timestamp
+                    if kwargs_raw == '':
+                        j = i + 1
+                        cont = []
+                        while j < len(lines):
+                            if lines[j].strip() == '':
+                                break
+                            if re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+', lines[j]):
+                                break
+                            cont.append(lines[j])
+                            j += 1
+                        kwargs_raw = '\n'.join(cont)
+                        i = j
+                    else:
+                        i += 1
+
+                    try:
+                        kwargs_val = ast.literal_eval(kwargs_raw) if kwargs_raw else {}
+                    except Exception:
+                        kwargs_val = {}
+                    results[sig][idx]['kwargs'] = kwargs_val
+
+            # Done with this block; continue loop
+            continue
+
+        # Otherwise, nothing matched—advance.
         i += 1
 
-    # Convert the results into the desired format: a dictionary of lists
+    # Convert collected results into the desired mapping keyed by GT UDF name
     gt_udf_name_to_implemented_udfs = {}
     for udf_signature, idx_dict in results.items():
-        # Convert idx_dict to a list sorted by idx
-        idx_items = [idx_dict[idx] for idx in sorted(idx_dict.keys())]
-        gt_udf_name_to_implemented_udfs[udf_signature_to_gt_udf_name[udf_signature]] = idx_items
+        # Skip signatures we don't have a GT mapping for
+        if udf_signature not in udf_signature_to_gt_udf_name:
+            continue
+        idx_items = [idx_dict[k] for k in sorted(idx_dict.keys())]
+        gt_name = udf_signature_to_gt_udf_name[udf_signature]
+        gt_udf_name_to_implemented_udfs[gt_name] = idx_items
 
     return gt_udf_name_to_implemented_udfs, gt_udf_name_to_best_ckpt
 
+
 async def main():
-    # clevrer: python run_udf_selection_active_learning_count.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
-    # cityflow: python run_udf_selection_active_learning_count.py --num_missing_udfs 2 --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
-    # charades: python run_udf_selection_active_learning_count.py --num_missing_udfs 2 --query_id 3 --run_id 0 --dataset "charades" --query_filename "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
+    # clevrer: python run_udf_selection_active_learning_count.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --llm_method "gpt" --is_async --openai_model_name "gpt-4o"
+    # cityflow: python run_udf_selection_active_learning_count.py --num_missing_udfs 2 --query_id 0 --run_id 0 --dataset "cityflow" --query_filename "unavailable_pred=1-unavailable_attr_pred=1-npred=1-nattr_pred=2-nvars=3-depth=3-max_duration=15-min_npos=74-max_npos=737" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --llm_method "gpt" --is_async --openai_model_name "gpt-4o"
+    # charades: python run_udf_selection_active_learning_count.py --num_missing_udfs 2 --query_id 3 --run_id 0 --dataset "charades" --query_filename "unavailable=2-npred=3-nobj_pred=1-nvars=2-depth=2" --budget 50 --num_interpretations 10 --allow_kwargs_in_udf  --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 500 --selection_strategy "both" --llm_method "gpt" --is_async --openai_model_name "gpt-4o"
     config = yaml.safe_load(
         open(os.path.join(project_root, "configs", "config.yaml"), "r")
     )
@@ -287,7 +410,6 @@ async def main():
         labeling_budget,
         llm_method,
     )
-    random_sampling_config_name = f"active_learning_count_{active_learning_config_name}"
 
     random.seed(run_id)
     np.random.seed(run_id)
@@ -295,22 +417,22 @@ async def main():
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
 
-    output_dir = os.path.join(
-        config["output_dir"],
-        base_dir
-    )
-    os.makedirs(output_dir, exist_ok=True)
-
     # Set up logging
     base_dir = os.path.join(
         "udf_generation",
         dataset,
         query_filename,
-        "num_missing_udfs={}".format(num_missing_udfs),
-        random_sampling_config_name,
+        f"num_missing_udfs={num_missing_udfs}",
+        f"active_learning_count_{active_learning_config_name}",
     )
     log_filename = "qid={}-run={}.log".format(query_id, run_id)
     setup_logging(config, base_dir, log_filename, logger)
+
+    output_dir = os.path.join(
+        config["output_dir"],
+        base_dir
+    )
+    os.makedirs(output_dir, exist_ok=True)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),
@@ -348,7 +470,6 @@ async def main():
     gt_udf_name_to_udf_signature = {}
     for i, line in enumerate(lines):
         if "Proposed functions:" in line:
-            # Extract the dictionary from "2024-10-07 04:00:48,823 - vocaludf.async_udf_proposer - INFO - Proposed functions: {'far_from(o0, o1)': 'Whether o0 is far from o1.', 'behind(o0, o1)': 'Whether o0 is behind o1.', 'material_metal(o0)': 'Whether the material of o0 is metal.'}"
             proposed_functions = ast.literal_eval(line.split("Proposed functions: ")[1])
             num_extracted_gt_udf_names = 0
             for j in range(i+1, len(lines)):

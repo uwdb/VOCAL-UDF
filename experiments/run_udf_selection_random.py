@@ -13,6 +13,7 @@ import numpy as np
 from vocaludf.query_parser import QueryParser
 from vocaludf.udf_selector import UDFSelector
 from vocaludf.query_executor import QueryExecutor
+from run_udf_selection_active_learning_count import extract_udf_candidates
 import duckdb
 import sys
 import resource
@@ -20,6 +21,7 @@ import asyncio
 import ast
 import re
 import copy
+from tqdm import tqdm
 
 # logging.basicConfig()
 logger = logging.getLogger("vocaludf")
@@ -32,25 +34,26 @@ def using(point=""):
     return '''%s: mem=%s GB'''%(point, usage/1024.0/1024.0 )
 
 class RandomUDFSelector(UDFSelector):
-    def _select(self, gt_udf_name, udf_candidate_list, df_with_img_column):
+    def _select(self, gt_udf_name, udf_candidate_list):
         if len(udf_candidate_list) == 0:
             return None
 
-        udf_signature = udf_candidate_list[0].udf_signature
-        udf_name, udf_vars = parse_signature(udf_signature)
+        self.udf_signature = udf_candidate_list[0].udf_signature
+        udf_name, udf_vars = parse_signature(self.udf_signature)
         n_obj = len(udf_vars)
         # Add a dummy UDF that always returns True
-        udf_description = udf_candidate_list[0].udf_description
-        dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': udf_signature, 'udf_description': udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
+        self.udf_description = udf_candidate_list[0].udf_description
+        dummy_udf = UDFCandidate(id='dummy', payload={'udf_name': udf_name, 'udf_signature': self.udf_signature, 'udf_description': self.udf_description, 'semantic_interpretation': 'dummy', 'function_implementation': f'def py_{udf_name}(*args, **kwargs):\n    return True\n'})
         udf_candidate_list.append(dummy_udf)
 
         # Construct training data and test data
-        df_train, df_test = self.construct_train_and_test_data(n_obj, self.n_train, self.n_test, df_with_img_column=df_with_img_column)
+        df_train, df_test = self.construct_train_and_test_data(n_obj, n_train=self.n_train_selection, n_test=self.n_test_selection, df_with_img_column=False)
 
         # Select new video segments to label
         # TODO: df_train and llm_positive_df may contain the same tuples
         labeled_index = []
-
+        labeled_df = pd.DataFrame()
+        y_true = []
         segment_selection_time = 0
         _start_segment_selection_time = time.time()
 
@@ -70,12 +73,15 @@ class RandomUDFSelector(UDFSelector):
             labeled_index += new_labeled_index
             new_labeled_df = df_train.iloc[new_labeled_index]
             logger.info(f"# labeled segments {len(set(labeled_index))}")
-            if n_obj == 1:
-                labeled_df = df_train.iloc[labeled_index]['o1_gt_anames']
-                y_true = labeled_df.apply(lambda anames: gt_udf_name in anames)
-            elif n_obj == 2:
-                labeled_df = df_train.iloc[labeled_index]['o1_o2_gt_rnames']
-                y_true = labeled_df.apply(lambda rnames: gt_udf_name in rnames)
+
+            # Request labels from either user or ground truth
+            label = self.request_label(new_labeled_df, n_obj, gt_udf_name)
+            y_true.append(label)
+            # Load frame if df_with_img_column is True
+            if self.df_with_img_column:
+                new_labeled_df = new_labeled_df.copy()
+                new_labeled_df["img"] = list(map(self.frame_processing_for_program, new_labeled_df["vid"], new_labeled_df["fid"]))
+            labeled_df = pd.concat([labeled_df, new_labeled_df])
             # log number of positive and negative samples
             logger.info(
                 "# positive: {}, # negative: {}".format(
@@ -86,15 +92,15 @@ class RandomUDFSelector(UDFSelector):
             # Update scores
             indices_to_remove = []
             for i in range(len(udf_candidate_list)):
-                labeled_df = df_train.iloc[labeled_index]
                 try:
                     score, loss_t = self.compute_udf_score(
-                        gt_udf_name,
                         udf_candidate_list[i],
                         udf_name,
                         n_obj,
                         labeled_df,
+                        y_true,
                         new_labeled_df,
+                        label,
                         add_one=True, # add one to avoid zero f1 score
                     )
                     udf_candidate_list[i].score = score
@@ -122,15 +128,22 @@ class RandomUDFSelector(UDFSelector):
         )
 
         # compute test F1 score
-        logger.info("compute test F1 score")
+        logger.info("Computing test F1 score")
+        if n_obj == 1:
+            y_true_test = [gt_udf_name in o1_gt_anames for o1_gt_anames in df_test['o1_gt_anames']]
+        elif n_obj == 2:
+            y_true_test = [gt_udf_name in o1_o2_gt_rnames for o1_o2_gt_rnames in df_test['o1_o2_gt_rnames']]
+        # Load frame if df_with_img_column is True
+        if self.df_with_img_column:
+            df_test["img"] = list(tqdm(self.executor.map(self.frame_processing_for_program, df_test["vid"], df_test["fid"]), total=len(df_test), file=sys.stdout, desc="Loading frames into memory"))
         for i in range(len(udf_candidate_list)):
             try:
                 udf_candidate_list[i].test_score = self.compute_udf_score(
-                    gt_udf_name,
                     udf_candidate_list[i],
                     udf_name,
                     n_obj,
                     df_test,
+                    y_true_test,
                 )
                 logger.info(str(udf_candidate_list[i]))
             except Exception as e:
@@ -138,7 +151,7 @@ class RandomUDFSelector(UDFSelector):
                 udf_candidate_list[i].test_score = -1
                 continue
 
-        logger.info("compute train F1 score")
+        logger.info("Computing train F1 score")
         # compute the F1 score of the best udf (median F1 scores if there are multiple udfs with the same best score on the training set) on the test dataset
         if sum(y_true) == 0:
             logger.info("No positive samples are labeled. Returning the dummy UDF.")
@@ -149,11 +162,11 @@ class RandomUDFSelector(UDFSelector):
                 labeled_df = df_train.iloc[labeled_index]
                 try:
                     udf_candidate_list[i].score = self.compute_udf_score(
-                        gt_udf_name,
                         udf_candidate_list[i],
                         udf_name,
                         n_obj,
                         labeled_df,
+                        y_true,
                     )
                 except Exception as e:
                     logger.exception(f"ERROR: failed to compute final f1 score of UDFCandidate(id={udf_candidate_list[i].id}): {e}")
@@ -183,68 +196,6 @@ class RandomUDFSelector(UDFSelector):
             )
         logger.info(f"[Selected]: {str(selected_udf_candidate)}")
         return selected_udf_candidate
-
-
-def extract_udf_candidates(lines, udf_signature_to_gt_udf_name):
-    results = {}
-    gt_udf_name_to_best_ckpt = {}
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        # Regular expression to match the log pattern
-        info_match = re.match(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) - .* - INFO - \[(.*?)\] \[(\d+)\] (\w+): (.*)$', line)
-        debug_match = re.match(
-            r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+) - .* - DEBUG - \[(.*?)\] Best model checkpoint: (.*)$',
-            line
-        )
-        if info_match:
-            timestamp, udf_signature, idx, field_name, value = info_match.groups()
-            idx = int(idx)
-            # Initialize data structures if necessary
-            if udf_signature not in results:
-                results[udf_signature] = {}
-            if idx not in results[udf_signature]:
-                results[udf_signature][idx] = {}
-            if field_name == 'function_implementation':
-                # Read the function implementation, including subsequent lines
-                function_implementation = value + '\n'
-                i += 1
-                while i < len(lines) and not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+', lines[i]):
-                    function_implementation += lines[i] + '\n'
-                    i +=1
-                results[udf_signature][idx][field_name] = function_implementation.rstrip('\n')
-                continue  # Skip incrementing i here because it's already done
-            elif field_name == 'kwargs':
-                # Read kwargs, possibly spanning multiple lines
-                kwargs_str = value
-                i += 1
-                while i < len(lines) and not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+', lines[i]):
-                    kwargs_str += '\n' + lines[i]
-                    i +=1
-                # Safely evaluate the kwargs string
-                try:
-                    kwargs = ast.literal_eval(kwargs_str)
-                except Exception as e:
-                    kwargs = {}
-                results[udf_signature][idx][field_name] = kwargs
-                continue
-            else:
-                # For semantic_interpretation and other fields
-                results[udf_signature][idx][field_name] = value
-        elif debug_match:
-            timestamp, udf_signature, best_ckpt = debug_match.groups()
-            # Store the best_ckpt for the udf_signature; overwrite if multiple entries
-            gt_udf_name_to_best_ckpt[udf_signature_to_gt_udf_name[udf_signature]] = best_ckpt.strip()
-        i += 1
-
-    # Convert the results into the desired format: a dictionary of lists
-    gt_udf_name_to_implemented_udfs = {}
-    for udf_signature, idx_dict in results.items():
-        # Convert idx_dict to a list sorted by idx
-        idx_items = [idx_dict[idx] for idx in sorted(idx_dict.keys())]
-        gt_udf_name_to_implemented_udfs[udf_signature_to_gt_udf_name[udf_signature]] = idx_items
-
-    return gt_udf_name_to_implemented_udfs, gt_udf_name_to_best_ckpt
 
 async def main():
     # clevrer: python run_udf_selection_random.py --num_missing_udfs 3 --query_id 2 --run_id 0 --dataset "clevrer" --query_filename "3_new_udfs_labels" --budget 20 --n_selection_samples 500 --num_interpretations 10 --allow_kwargs_in_udf --program_with_pixels --num_parameter_search 5  --generate --num_workers 8 --save_labeled_data --n_train_distill 100 --selection_strategy "both" --llm_method "gpt4v" --is_async --openai_model_name "gpt-4o"
@@ -324,12 +275,6 @@ async def main():
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
 
-    output_dir = os.path.join(
-        config["output_dir"],
-        base_dir
-    )
-    os.makedirs(output_dir, exist_ok=True)
-
     # Set up logging
     base_dir = os.path.join(
         "udf_generation",
@@ -340,6 +285,12 @@ async def main():
     )
     log_filename = "qid={}-run={}.log".format(query_id, run_id)
     setup_logging(config, base_dir, log_filename, logger)
+
+    output_dir = os.path.join(
+        config["output_dir"],
+        base_dir
+    )
+    os.makedirs(output_dir, exist_ok=True)
 
     prompt_config = yaml.load(
         open(os.path.join(config["prompt_dir"], "prompt.yaml"), "r"),

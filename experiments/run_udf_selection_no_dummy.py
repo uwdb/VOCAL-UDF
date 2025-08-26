@@ -50,7 +50,7 @@ def parse_kwargs_from_id(udf_id):
 
 def extract_udf_scores(lines):
     # Regular expressions to capture the different log lines
-    compute_f1_re = re.compile(r"compute test F1 score")
+    compute_f1_re = re.compile(r"test F1 score")
     udf_candidate_re = re.compile(r"udf_candidate: (.*?), score: ([0-9.]+)")
     predicted_pos_neg_re = re.compile(r"predicted positive: (\d+), predicted negative: (\d+)")
     positive_neg_re = re.compile(r"positive: (\d+), negative: (\d+)")
@@ -228,12 +228,6 @@ async def main():
     input_query_file = os.path.join(config["data_dir"], dataset, f"{query_filename}.json")
     input_query = json.load(open(input_query_file, "r"))["questions"][query_id]
 
-    output_dir = os.path.join(
-        config["output_dir"],
-        base_dir
-    )
-    os.makedirs(output_dir, exist_ok=True)
-
     # Set up logging
     base_dir = os.path.join(
         "udf_generation",
@@ -245,19 +239,18 @@ async def main():
     log_filename = "qid={}-run={}.log".format(query_id, run_id)
     setup_logging(config, base_dir, log_filename, logger)
 
+    output_dir = os.path.join(
+        config["output_dir"],
+        base_dir
+    )
+    os.makedirs(output_dir, exist_ok=True)
+
     registered_udfs_json = json.load(open(os.path.join(project_root, "vocaludf", "registered_udfs.json"), "r"))
-    if "single_semantic" in query_filename:
-        registered_functions = [{
-            "signature": "object(o0, name)",
-            "description": "Whether o0 is an object with the given name.",
-            "function_implementation": ""
-        }]
-    else:
-        registered_functions = registered_udfs_json[f"{dataset}_base"]
-        new_modules = input_query["new_modules"]
-        assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"
-        for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
-            registered_functions.append(registered_udfs_json[dataset][new_module])
+    registered_functions = registered_udfs_json[f"{dataset}_base"]
+    new_modules = input_query["new_modules"]
+    assert num_missing_udfs >= 0 and num_missing_udfs <= len(new_modules), "num_missing_udfs must be between 0 and len(new_modules)"
+    for new_module in new_modules[:(len(new_modules)-num_missing_udfs)]:
+        registered_functions.append(registered_udfs_json[dataset][new_module])
     logger.info("Registered functions: {}".format(registered_functions))
     object_domain, relationship_domain, attribute_domain = get_active_domain(config, dataset, registered_functions)
     logger.info("Active domains: object={}, relationship={}, attribute={}".format(object_domain, relationship_domain, attribute_domain))
