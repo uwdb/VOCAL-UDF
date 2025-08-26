@@ -4,7 +4,7 @@ declare -a TaskArray=("simplified_3_new_udfs_labels")
 
 for query_filename in "${TaskArray[@]}"; do
     for run in 0; do
-        for query_id in {0..2}; do
+        for query_id in {0..9}; do
             python \
                 $PROJECT_ROOT/experiments/gpt4o_clevrer_simplified.py \
                 --run_id $run \
