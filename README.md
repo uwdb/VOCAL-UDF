@@ -32,13 +32,14 @@ export OPENAI_API_KEY="your_api_key_here"
 export PROJECT_ROOT="$(pwd)"
 ```
 
-4. Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
+4. Modify the paths in `configs/config.yaml` to point to the correct directories on your machine.
+
+5. Download the CLIP model (optionally, the Llava model) from HuggingFace and save them to `data/models/` by running the following command:
 ```sh
 # Uncomment the corresponding lines in data/models/save_model.py to download the models you need
 python data/models/save_model.py
 ```
 
-5. Modify the paths in `configs/config.yaml` to point to the correct directories on your machine.
 
 ## Prepare Data
 
