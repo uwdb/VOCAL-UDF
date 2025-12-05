@@ -186,7 +186,7 @@ python experiments/run_query_executor.py \
 ```
 
 ## Reproduce Experiments
-The scripts to reproduce experiment results in our SIGMOD paper are located in the `scripts/reproduce` directory. See `experiments/README.md` for more details.
+The scripts to reproduce experiment results in our SIGMOD paper are located in the `scripts/reproduce` directory. We also provide all the cached [outputs](https://drive.google.com/file/d/1EP2h4889ZHbQnAxt1y8dIv6M62P-8zH6/view?usp=drive_link) and [logs](https://drive.google.com/file/d/1l44mU1aD4iJugqjvCaB9GZjU2Fp_eRYc/view?usp=drive_link) for the experiments. See `experiments/README.md` for more details.
 
 ## Work with Your Own Queries
 We provide a Command-Line Interface (CLI) to process your own queries over the CLEVRER, CityFlow-NL, and Charades datasets.
