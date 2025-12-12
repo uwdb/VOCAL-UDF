@@ -71,7 +71,16 @@ python extract_clevrer.py --method "relationship"
 ```
 
 ### CityFlow-NL
-1. Obtain the CityFlow-NL dataset from [here](https://docs.google.com/forms/d/e/1FAIpQLSdOVC33d-R23PCuBdSsmo08e-98HiDLykhIIAzryjzjYoilVQ/viewform) (i.e., [2023 Track 2](https://www.aicitychallenge.org/2023-track2-download/); For more information, see [here](https://www.aicitychallenge.org/)). Place the videos in `data/cityflow/`. Next, run `python extract_vdo_frms.py` to extract the frames from the videos. The file structure should look like this:
+1. Obtain the CityFlow-NL dataset from [here](https://docs.google.com/forms/d/e/1FAIpQLSdOVC33d-R23PCuBdSsmo08e-98HiDLykhIIAzryjzjYoilVQ/viewform) (i.e., [2023 Track 2](https://www.aicitychallenge.org/2023-track2-download/); For more information, see [here](https://www.aicitychallenge.org/)). Place the videos in `data/cityflow/`. Next, extract the frames from the videos by running the `extract_vdo_frms.py` script, which processes the following directories: `train/S01`, `train/S03`, `train/S04`, `validation/S02`, and `validation/S05`. Run:
+```sh
+cd data/cityflow/data
+python extract_vdo_frms.py --data_root train/S01
+python extract_vdo_frms.py --data_root train/S03
+python extract_vdo_frms.py --data_root train/S04
+python extract_vdo_frms.py --data_root validation/S02
+python extract_vdo_frms.py --data_root validation/S05
+```
+The file structure should look like this:
 ```
 data/cityflow/data/
 ├── extract_vdo_frms.py
@@ -217,6 +226,3 @@ python experiments/cli.py \
 3. Then, VOCAL-UDF will start to process the query and generate the missing UDFs when needed. You will see the progress in the terminal. During the UDF selection stage, you will be prompted to provide labels for system-selected frames.
 
 4. Once the query is processed, VOCAL-UDF will output all matching vids in the terminal. For CityFlow-NL and Charades datasets, to map the vid to the corresponding video file, please refer to the `duckdb_dir/{dataset}_metadata.csv` file.
-
-## Work with Your Own Data
-TODO
