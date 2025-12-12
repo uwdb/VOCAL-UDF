@@ -91,6 +91,8 @@ dependencies:
       - packaging==24.1
       - pandas==2.2.2
       - pillow
+      - matplotlib
+      - pyarrow
       - pkginfo==1.10.0
       - pyautogen==0.2.33
       - pyclipper==1.3.0.post5

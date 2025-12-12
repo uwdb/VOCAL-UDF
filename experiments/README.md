@@ -2,6 +2,8 @@
 
 Scripts to run experiments are located in the `scripts/reproduce` directory. Jupyter notebooks to visualize results are located in the `experiments/analysis` directory. Modify the `project_root` variable in each Jupyter notebook as necessary.
 
+We also provide all the cached [outputs](https://drive.google.com/file/d/1EP2h4889ZHbQnAxt1y8dIv6M62P-8zH6/view?usp=drive_link) and [logs](https://drive.google.com/file/d/1l44mU1aD4iJugqjvCaB9GZjU2Fp_eRYc/view?usp=drive_link) for the experiments, allowing you to directly visualize results without re-running the experiments. To do so, download the files and extract them under the `VOCAL-UDF` directory. Then, rename `outputs_sigmod` to `outputs` and `logs_sigmod` to `logs`.
+
 ## End-to-end evaluation (Figure 5, Figure 7)
 
 1. Run experiments
